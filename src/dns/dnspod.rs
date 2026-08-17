@@ -125,9 +125,16 @@ impl TencentCloudProvider {
 
         let full_resp: TcWrapperResponse<T> = serde_json::from_str(&body_text)?;
         if let Some(err) = full_resp.response.error {
+            let mut msg = err.message;
+            if err.code.contains("Expire")
+                || msg.to_ascii_lowercase().contains("expired")
+                || msg.to_ascii_lowercase().contains("timestamp")
+            {
+                msg.push_str(" (💡 提示: 当前服务器系统时钟与网络标准时间偏差过大，请检查并同步系统 NTP 时间)");
+            }
             return Err(DnsProviderError::ApiError {
                 code: err.code,
-                message: err.message,
+                message: msg,
             });
         }
 
