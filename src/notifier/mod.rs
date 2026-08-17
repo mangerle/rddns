@@ -9,10 +9,6 @@ pub mod feishu;
 #[allow(unused_imports)]
 pub mod mail;
 #[allow(unused_imports)]
-pub mod pushplus;
-#[allow(unused_imports)]
-pub mod serverchan;
-#[allow(unused_imports)]
 pub mod telegram;
 #[allow(unused_imports)]
 pub mod trait_def;

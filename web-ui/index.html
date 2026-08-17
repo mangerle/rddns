@@ -1325,6 +1325,231 @@
               </div>
             </div>
           </div>
+
+          <!-- 钉钉群机器人 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                  </svg>
+                </span>
+                <span>钉钉群机器人 (DingTalk Bot)</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('dingtalk')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="dingtalkEnable" class="toggle-switch" />
+                </label>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>AccessToken (或完整 Webhook URL)</label>
+                <input type="text" id="dingtalkAccessToken" placeholder="例如 e188b776... 或完整 Webhook 地址" />
+              </div>
+              <div class="form-group">
+                <label>加签安全密钥 Secret (可选)</label>
+                <input type="password" id="dingtalkSecret" placeholder="SEC...（机器人安全设置勾选加签时填写）" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 飞书群机器人 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+                  </svg>
+                </span>
+                <span>飞书群机器人 (Feishu / Lark Bot)</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('feishu')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="feishuEnable" class="toggle-switch" />
+                </label>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>飞书群机器人 Webhook URL</label>
+                <input type="text" id="feishuWebhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" />
+              </div>
+              <div class="form-group">
+                <label>签名校验 Secret (可选)</label>
+                <input type="password" id="feishuSecret" placeholder="机器人安全设置勾选签名校验时填写" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Telegram 机器人 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                  </svg>
+                </span>
+                <span>Telegram 机器人 (Bot 推送)</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('telegram')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="telegramEnable" class="toggle-switch" />
+                </label>
+              </div>
+            </div>
+            <div class="grid-3">
+              <div class="form-group">
+                <label>Bot Token</label>
+                <input type="text" id="telegramBotToken" placeholder="例如 123456789:AAHKX..." />
+              </div>
+              <div class="form-group">
+                <label>接收 Chat ID</label>
+                <input type="text" id="telegramChatId" placeholder="例如 12345678 或 -100123456" />
+              </div>
+              <div class="form-group">
+                <label>API 反向代理 URL (可选)</label>
+                <input type="text" id="telegramApiProxy" placeholder="例如 https://api.telegram-proxy.com" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Bark (iOS) -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+                    <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                  </svg>
+                </span>
+                <span>Bark (苹果 iOS 客户端实时通知)</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('bark')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="barkEnable" class="toggle-switch" />
+                </label>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>Bark 服务器地址 (支持自建)</label>
+                <input type="text" id="barkServerUrl" value="https://api.day.app" placeholder="https://api.day.app" />
+              </div>
+              <div class="form-group">
+                <label>设备 Key (Device Key)</label>
+                <input type="text" id="barkDeviceKey" placeholder="Bark App 中的设备 Key" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>消息分组 Group (可选)</label>
+                <input type="text" id="barkGroup" placeholder="rddns" />
+              </div>
+              <div class="form-group">
+                <label>提示音 Sound (可选)</label>
+                <input type="text" id="barkSound" placeholder="例如 bell / glass" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 通用自定义 Webhook -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="18" cy="5" r="3"></circle>
+                    <circle cx="6" cy="12" r="3"></circle>
+                    <circle cx="18" cy="19" r="3"></circle>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                  </svg>
+                </span>
+                <span>通用自定义 Webhook (HTTP 回调推送)</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('webhook')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="webhookEnable" class="toggle-switch" />
+                </label>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>Webhook URL (支持 #{status}, #{ipv4}, #{domains})</label>
+                <input type="text" id="webhookUrl" placeholder="https://api.example.com/notify?ip=#{ipv4}" />
+              </div>
+              <div class="form-group">
+                <label>HTTP 方法</label>
+                <select id="webhookMethod">
+                  <option value="POST">POST</option>
+                  <option value="GET">GET</option>
+                  <option value="PUT">PUT</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>自定义 Headers (JSON 格式，可选)</label>
+                <input type="text" id="webhookHeaders" placeholder='{"Authorization": "Bearer xxx"}' />
+              </div>
+              <div class="form-group">
+                <label>自定义 Body 内容 (可选，支持变量替换)</label>
+                <input type="text" id="webhookBody" placeholder='{"text": "IP变动: #{ipv4}", "domains": "#{domains}"}' />
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- ========================================== -->
@@ -1975,44 +2200,145 @@
           }
           document.getElementById('emailPreset').value = matchedPreset;
         }
+        if (notif.dingtalk) {
+          document.getElementById('dingtalkEnable').checked = notif.dingtalk.enabled;
+          document.getElementById('dingtalkAccessToken').value = notif.dingtalk.access_token || '';
+          document.getElementById('dingtalkSecret').value = notif.dingtalk.secret || '';
+        }
+        if (notif.feishu) {
+          document.getElementById('feishuEnable').checked = notif.feishu.enabled;
+          document.getElementById('feishuWebhookUrl').value = notif.feishu.webhook_url || '';
+          document.getElementById('feishuSecret').value = notif.feishu.secret || '';
+        }
+        if (notif.telegram) {
+          document.getElementById('telegramEnable').checked = notif.telegram.enabled;
+          document.getElementById('telegramBotToken').value = notif.telegram.bot_token || '';
+          document.getElementById('telegramChatId').value = notif.telegram.chat_id || '';
+          document.getElementById('telegramApiProxy').value = notif.telegram.api_proxy || '';
+        }
+        if (notif.bark) {
+          document.getElementById('barkEnable').checked = notif.bark.enabled;
+          document.getElementById('barkServerUrl').value = notif.bark.server_url || 'https://api.day.app';
+          document.getElementById('barkDeviceKey').value = notif.bark.device_key || '';
+          document.getElementById('barkGroup').value = notif.bark.group || '';
+          document.getElementById('barkSound').value = notif.bark.sound || '';
+        }
+        if (notif.webhook) {
+          document.getElementById('webhookEnable').checked = notif.webhook.enabled;
+          document.getElementById('webhookUrl').value = notif.webhook.url || '';
+          document.getElementById('webhookMethod').value = notif.webhook.method || 'POST';
+          document.getElementById('webhookHeaders').value = notif.webhook.headers ? JSON.stringify(notif.webhook.headers) : '';
+          document.getElementById('webhookBody').value = notif.webhook.body || '';
+        }
       }
     }
 
     // 收集通知配置
     function collectNotificationConfig() {
-      return {
+      const cfg = {
         on_ip_change_only: true,
         on_success: document.getElementById('notifyOnSuccess').checked,
-        on_failure: document.getElementById('notifyOnFailure').checked,
-        wechat_official: {
+        on_failure: document.getElementById('notifyOnFailure').checked
+      };
+
+      const wxAppId = document.getElementById('wxOfficialAppId').value.trim();
+      if (wxAppId) {
+        cfg.wechat_official = {
           enabled: document.getElementById('wxOfficialEnable').checked,
-          app_id: document.getElementById('wxOfficialAppId').value.trim(),
+          app_id: wxAppId,
           app_secret: document.getElementById('wxOfficialAppSecret').value.trim(),
           template_id: document.getElementById('wxOfficialTemplateId').value.trim(),
           to_user: document.getElementById('wxOfficialToUser').value.trim(),
           url: document.getElementById('wxOfficialUrl').value.trim() || null,
           template_data: document.getElementById('wxOfficialTmplData').value.trim() || null,
-        },
-        wecom: {
+        };
+      }
+
+      const wecomMode = document.getElementById('wecomMode').value;
+      const wecomHook = document.getElementById('wecomWebhookUrl')?.value.trim();
+      const wecomCorp = document.getElementById('wecomCorpId')?.value.trim();
+      if (wecomHook || wecomCorp) {
+        cfg.wecom = {
           enabled: document.getElementById('wecomEnable').checked,
-          mode: document.getElementById('wecomMode').value,
-          webhook_url: document.getElementById('wecomWebhookUrl')?.value || null,
-          corp_id: document.getElementById('wecomCorpId')?.value || null,
-          corp_secret: document.getElementById('wecomCorpSecret')?.value || null,
+          mode: wecomMode,
+          webhook_url: wecomHook || null,
+          corp_id: wecomCorp || null,
+          corp_secret: document.getElementById('wecomCorpSecret')?.value.trim() || null,
           agent_id: parseInt(document.getElementById('wecomAgentId')?.value) || null,
-          to_user: document.getElementById('wecomToUser')?.value || null
-        },
-        email: document.getElementById('emailSmtpServer').value.trim() ? {
+          to_user: document.getElementById('wecomToUser')?.value.trim() || null
+        };
+      }
+
+      const smtpServer = document.getElementById('emailSmtpServer').value.trim();
+      if (smtpServer) {
+        cfg.email = {
           enabled: document.getElementById('emailEnable').checked,
-          smtp_server: document.getElementById('emailSmtpServer').value.trim(),
+          smtp_server: smtpServer,
           smtp_port: parseInt(document.getElementById('emailSmtpPort').value) || 465,
           use_ssl: document.getElementById('emailUseSsl').checked,
           username: document.getElementById('emailUsername').value.trim(),
           password: document.getElementById('emailPassword').value.trim(),
           from_address: document.getElementById('emailFrom').value.trim(),
           to_addresses: (document.getElementById('emailTo').value || '').split(',').map(s => s.trim()).filter(Boolean)
-        } : null
-      };
+        };
+      }
+
+      const dtToken = document.getElementById('dingtalkAccessToken')?.value.trim();
+      if (dtToken) {
+        cfg.dingtalk = {
+          enabled: document.getElementById('dingtalkEnable').checked,
+          access_token: dtToken,
+          secret: document.getElementById('dingtalkSecret')?.value.trim() || null
+        };
+      }
+
+      const fsHook = document.getElementById('feishuWebhookUrl')?.value.trim();
+      if (fsHook) {
+        cfg.feishu = {
+          enabled: document.getElementById('feishuEnable').checked,
+          webhook_url: fsHook,
+          secret: document.getElementById('feishuSecret')?.value.trim() || null
+        };
+      }
+
+      const tgToken = document.getElementById('telegramBotToken')?.value.trim();
+      if (tgToken) {
+        cfg.telegram = {
+          enabled: document.getElementById('telegramEnable').checked,
+          bot_token: tgToken,
+          chat_id: document.getElementById('telegramChatId')?.value.trim() || '',
+          api_proxy: document.getElementById('telegramApiProxy')?.value.trim() || null
+        };
+      }
+
+      const barkKey = document.getElementById('barkDeviceKey')?.value.trim();
+      if (barkKey) {
+        cfg.bark = {
+          enabled: document.getElementById('barkEnable').checked,
+          server_url: document.getElementById('barkServerUrl')?.value.trim() || 'https://api.day.app',
+          device_key: barkKey,
+          group: document.getElementById('barkGroup')?.value.trim() || null,
+          sound: document.getElementById('barkSound')?.value.trim() || null
+        };
+      }
+
+      const whUrl = document.getElementById('webhookUrl')?.value.trim();
+      if (whUrl) {
+        let parsedHeaders = null;
+        try {
+          const hStr = document.getElementById('webhookHeaders')?.value.trim();
+          if (hStr) parsedHeaders = JSON.parse(hStr);
+        } catch (_) {}
+        cfg.webhook = {
+          enabled: document.getElementById('webhookEnable').checked,
+          url: whUrl,
+          method: document.getElementById('webhookMethod')?.value || 'POST',
+          headers: parsedHeaders,
+          body: document.getElementById('webhookBody')?.value.trim() || null
+        };
+      }
+
+      return cfg;
     }
 
     // 保存配置
@@ -2250,6 +2576,72 @@
           password,
           from_address: fromAddress,
           to_addresses: toAddresses
+        };
+      } else if (channelKey === 'dingtalk') {
+        const token = document.getElementById('dingtalkAccessToken').value.trim();
+        if (!token) {
+          showToast('请先填写钉钉机器人的 AccessToken 或 Webhook 地址！', 'error');
+          return;
+        }
+        notifPayload.dingtalk = {
+          enabled: true,
+          access_token: token,
+          secret: document.getElementById('dingtalkSecret').value.trim() || null
+        };
+      } else if (channelKey === 'feishu') {
+        const hook = document.getElementById('feishuWebhookUrl').value.trim();
+        if (!hook) {
+          showToast('请先填写飞书群机器人的 Webhook URL！', 'error');
+          return;
+        }
+        notifPayload.feishu = {
+          enabled: true,
+          webhook_url: hook,
+          secret: document.getElementById('feishuSecret').value.trim() || null
+        };
+      } else if (channelKey === 'telegram') {
+        const token = document.getElementById('telegramBotToken').value.trim();
+        const chatId = document.getElementById('telegramChatId').value.trim();
+        if (!token || !chatId) {
+          showToast('请先填写 Telegram Bot Token 与 Chat ID！', 'error');
+          return;
+        }
+        notifPayload.telegram = {
+          enabled: true,
+          bot_token: token,
+          chat_id: chatId,
+          api_proxy: document.getElementById('telegramApiProxy').value.trim() || null
+        };
+      } else if (channelKey === 'bark') {
+        const devKey = document.getElementById('barkDeviceKey').value.trim();
+        if (!devKey) {
+          showToast('请先填写 Bark 设备 Key！', 'error');
+          return;
+        }
+        notifPayload.bark = {
+          enabled: true,
+          server_url: document.getElementById('barkServerUrl').value.trim() || 'https://api.day.app',
+          device_key: devKey,
+          group: document.getElementById('barkGroup').value.trim() || null,
+          sound: document.getElementById('barkSound').value.trim() || null
+        };
+      } else if (channelKey === 'webhook') {
+        const whUrl = document.getElementById('webhookUrl').value.trim();
+        if (!whUrl) {
+          showToast('请先填写 Webhook URL 地址！', 'error');
+          return;
+        }
+        let parsedHeaders = null;
+        try {
+          const hStr = document.getElementById('webhookHeaders').value.trim();
+          if (hStr) parsedHeaders = JSON.parse(hStr);
+        } catch (_) {}
+        notifPayload.webhook = {
+          enabled: true,
+          url: whUrl,
+          method: document.getElementById('webhookMethod').value || 'POST',
+          headers: parsedHeaders,
+          body: document.getElementById('webhookBody').value.trim() || null
         };
       }
 

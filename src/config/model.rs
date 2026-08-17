@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub not_allow_wan_access: bool,
 
     /// Web 管理员登录凭证
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<UserAuthConfig>,
 
     /// DNS 解析任务列表
@@ -89,9 +90,11 @@ pub struct DnsTaskConfig {
     pub ipv6: IpFetchConfig,
 
     /// 自定义 TTL（秒），None 或 0 表示使用服务商默认或自动 (Auto)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl: Option<u32>,
 
     /// 发送 HTTP 请求时绑定的出站网卡名称（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub http_interface: Option<String>,
 }
 
@@ -175,12 +178,15 @@ pub struct IpFetchConfig {
     pub url_endpoints: Vec<String>,
 
     /// 网卡名称（当 source_type 为 net_interface 时生效）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub net_interface: Option<String>,
 
     /// 外部命令与参数（当 source_type 为 command 时生效）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cmd: Option<String>,
 
     /// 自定义正则表达式（用于从响应或网卡中筛选目标 IP）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
 
     /// 绑定的域名列表（如 "sub:example.com", "@:example.com", "*.example.com"）
@@ -213,10 +219,13 @@ pub enum ProviderConfig {
     /// Cloudflare 服务商
     Cloudflare {
         /// API Token（推荐，最安全）
+        #[serde(skip_serializing_if = "Option::is_none")]
         api_token: Option<String>,
         /// Global API Key（与 email 配合使用）
+        #[serde(skip_serializing_if = "Option::is_none")]
         api_key: Option<String>,
         /// 注册邮箱（配合 Global API Key 使用）
+        #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<String>,
     },
     /// 阿里云 (AliDNS / 阿里云 ESA)
@@ -224,6 +233,7 @@ pub enum ProviderConfig {
         access_key_id: String,
         access_key_secret: String,
         /// 自定义 API Endpoint（可选）
+        #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
     },
     /// 腾讯云 (DNSPod / Tencent Cloud API v3)
@@ -236,13 +246,17 @@ pub enum ProviderConfig {
         access_key_id: String,
         secret_access_key: String,
         region: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
     },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
         #[serde(default = "default_http_method")]
         method: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         headers: Option<HashMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         body: Option<String>,
     },
 }
@@ -309,33 +323,35 @@ pub struct NotificationConfig {
     pub on_failure: bool,
 
     /// 微信公众号原生模板消息配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wechat_official: Option<WechatOfficialConfig>,
 
     /// 企业微信配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wecom: Option<WeComConfig>,
 
-    /// PushPlus (推送加) 微信推送配置
-    pub pushplus: Option<PushPlusConfig>,
-
-    /// Server酱 Turbo 配置
-    pub serverchan: Option<ServerChanConfig>,
-
     /// Telegram 机器人配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub telegram: Option<TelegramConfig>,
 
     /// 钉钉机器人配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dingtalk: Option<DingTalkConfig>,
 
     /// 飞书机器人配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub feishu: Option<FeishuConfig>,
 
     /// Bark (iOS) 推送配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bark: Option<BarkConfig>,
 
     /// SMTP 邮件通知配置
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<EmailConfig>,
 
     /// 通用自定义 Webhook
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,
 }
 
@@ -352,8 +368,10 @@ pub struct WechatOfficialConfig {
     /// 接收用户的 OpenID
     pub to_user: String,
     /// 点击卡片跳转 URL (可选)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// 自定义模板字段 JSON 结构（可选，为空时使用标准通用格式）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub template_data: Option<String>,
 }
 
@@ -369,32 +387,21 @@ pub struct WeComConfig {
     #[serde(default = "default_wecom_mode")]
     pub mode: String,
     /// 群机器人 Webhook Key 或完整 URL
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     /// 自建应用参数
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub corp_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub corp_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub to_user: Option<String>,
 }
 
 fn default_wecom_mode() -> String {
     "bot".to_string()
-}
-
-/// PushPlus 推送加配置
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PushPlusConfig {
-    pub enabled: bool,
-    pub token: String,
-    pub channel: Option<String>,
-    pub template: Option<String>,
-}
-
-/// Server酱配置
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ServerChanConfig {
-    pub enabled: bool,
-    pub send_key: String,
 }
 
 /// Telegram 配置
@@ -403,6 +410,7 @@ pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: String,
     pub chat_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_proxy: Option<String>,
 }
 
@@ -412,6 +420,7 @@ pub struct DingTalkConfig {
     pub enabled: bool,
     pub access_token: String,
     /// 加签 Secret（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
 
@@ -421,6 +430,7 @@ pub struct FeishuConfig {
     pub enabled: bool,
     pub webhook_url: String,
     /// 签名校验 Secret（可选）
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
 }
 
@@ -430,7 +440,9 @@ pub struct BarkConfig {
     pub enabled: bool,
     pub server_url: String,
     pub device_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sound: Option<String>,
 }
 
@@ -454,6 +466,8 @@ pub struct WebhookConfig {
     pub url: String,
     #[serde(default = "default_http_method")]
     pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
 }

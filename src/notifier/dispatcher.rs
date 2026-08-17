@@ -3,8 +3,6 @@ use crate::notifier::bark::BarkNotifier;
 use crate::notifier::dingtalk::DingTalkNotifier;
 use crate::notifier::feishu::FeishuNotifier;
 use crate::notifier::mail::EmailNotifier;
-use crate::notifier::pushplus::PushPlusNotifier;
-use crate::notifier::serverchan::ServerChanNotifier;
 use crate::notifier::telegram::TelegramNotifier;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus, Notifier};
 use crate::notifier::webhook::CustomWebhookNotifier;
@@ -44,16 +42,6 @@ impl NotificationDispatcher {
             && wecom.enabled
         {
             notifiers.push(Arc::new(WeComNotifier::new(wecom.clone())));
-        }
-        if let Some(ref pushplus) = config.pushplus
-            && pushplus.enabled
-        {
-            notifiers.push(Arc::new(PushPlusNotifier::new(pushplus.clone())));
-        }
-        if let Some(ref serverchan) = config.serverchan
-            && serverchan.enabled
-        {
-            notifiers.push(Arc::new(ServerChanNotifier::new(serverchan.clone())));
         }
         if let Some(ref tg) = config.telegram
             && tg.enabled
