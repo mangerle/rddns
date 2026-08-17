@@ -968,6 +968,7 @@
                   <option value="tencent_cloud">腾讯云 (DNSPod - 纯 Rust TC3 签名)</option>
                   <option value="huawei_cloud">华为云 (Huawei Cloud - 纯 Rust SDK 签名)</option>
                   <option value="porkbun">Porkbun (API Key / Secret)</option>
+                  <option value="godaddy">GoDaddy (API Key / Secret)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2128,6 +2129,18 @@
               <input type="password" id="pbSecretKey" placeholder="sk1_..." />
             </div>
           </div>`;
+      } else if (type === 'godaddy') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>API Key</label>
+              <input type="text" id="gdApiKey" placeholder="GoDaddy API Key" />
+            </div>
+            <div class="form-group">
+              <label>API Secret</label>
+              <input type="password" id="gdApiSecret" placeholder="GoDaddy API Secret" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2229,6 +2242,9 @@
           } else if (task.provider.type === 'porkbun') {
             if (document.getElementById('pbApiKey')) document.getElementById('pbApiKey').value = task.provider.api_key || '';
             if (document.getElementById('pbSecretKey')) document.getElementById('pbSecretKey').value = task.provider.secret_key || '';
+          } else if (task.provider.type === 'godaddy') {
+            if (document.getElementById('gdApiKey')) document.getElementById('gdApiKey').value = task.provider.api_key || '';
+            if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
           }
         }
 
@@ -2468,6 +2484,9 @@
       } else if (pType === 'porkbun') {
         providerObj.api_key = document.getElementById('pbApiKey')?.value || '';
         providerObj.secret_key = document.getElementById('pbSecretKey')?.value || '';
+      } else if (pType === 'godaddy') {
+        providerObj.api_key = document.getElementById('gdApiKey')?.value || '';
+        providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

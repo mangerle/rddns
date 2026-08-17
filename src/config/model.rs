@@ -252,6 +252,8 @@ pub enum ProviderConfig {
     },
     /// Porkbun
     Porkbun { api_key: String, secret_key: String },
+    /// GoDaddy
+    GoDaddy { api_key: String, api_secret: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -305,6 +307,10 @@ impl ProviderConfig {
                 api_key,
                 secret_key,
             } => !api_key.trim().is_empty() && !secret_key.trim().is_empty(),
+            Self::GoDaddy {
+                api_key,
+                api_secret,
+            } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

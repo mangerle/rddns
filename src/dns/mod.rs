@@ -2,6 +2,7 @@ pub mod alidns;
 pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
+pub mod godaddy;
 pub mod huawei;
 pub mod porkbun;
 pub mod trait_def;
@@ -10,6 +11,7 @@ pub use alidns::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
+pub use godaddy::*;
 pub use huawei::*;
 pub use porkbun::*;
 pub use trait_def::*;
@@ -63,6 +65,13 @@ pub fn create_dns_provider(
         } => Ok(Arc::new(PorkbunProvider::new(
             api_key.clone(),
             secret_key.clone(),
+        ))),
+        ProviderConfig::GoDaddy {
+            api_key,
+            api_secret,
+        } => Ok(Arc::new(GoDaddyProvider::new(
+            api_key.clone(),
+            api_secret.clone(),
         ))),
         ProviderConfig::Callback {
             url,
