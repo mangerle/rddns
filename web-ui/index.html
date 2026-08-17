@@ -972,6 +972,7 @@
                   <option value="dynv6">Dynv6 (免费 IPv6 动态 DNS Token)</option>
                   <option value="baidu_cloud">百度智能云 (Baidu Cloud - 纯 Rust BCE 签名)</option>
                   <option value="traffic_route">火山引擎 (Volcengine TrafficRoute - 纯 Rust V4 签名)</option>
+                  <option value="namecheap">Namecheap (动态 DNS 专用密码)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2174,6 +2175,12 @@
               <input type="password" id="volcSecretAccessKey" placeholder="火山引擎 Secret Access Key" />
             </div>
           </div>`;
+      } else if (type === 'namecheap') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>动态 DNS 密码 (Dynamic DNS Password)</label>
+            <input type="password" id="ncPassword" placeholder="Namecheap Advanced DNS 动态解析密码" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2286,6 +2293,8 @@
           } else if (task.provider.type === 'traffic_route') {
             if (document.getElementById('volcAccessKeyId')) document.getElementById('volcAccessKeyId').value = task.provider.access_key_id || '';
             if (document.getElementById('volcSecretAccessKey')) document.getElementById('volcSecretAccessKey').value = task.provider.secret_access_key || '';
+          } else if (task.provider.type === 'namecheap') {
+            if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
           }
         }
 
@@ -2536,6 +2545,8 @@
       } else if (pType === 'traffic_route') {
         providerObj.access_key_id = document.getElementById('volcAccessKeyId')?.value || '';
         providerObj.secret_access_key = document.getElementById('volcSecretAccessKey')?.value || '';
+      } else if (pType === 'namecheap') {
+        providerObj.password = document.getElementById('ncPassword')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

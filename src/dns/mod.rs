@@ -6,6 +6,7 @@ pub mod dnspod;
 pub mod dynv6;
 pub mod godaddy;
 pub mod huawei;
+pub mod namecheap;
 pub mod porkbun;
 pub mod traffic_route;
 pub mod trait_def;
@@ -18,6 +19,7 @@ pub use dnspod::*;
 pub use dynv6::*;
 pub use godaddy::*;
 pub use huawei::*;
+pub use namecheap::*;
 pub use porkbun::*;
 pub use traffic_route::*;
 pub use trait_def::*;
@@ -94,6 +96,9 @@ pub fn create_dns_provider(
             access_key_id.clone(),
             secret_access_key.clone(),
         ))),
+        ProviderConfig::Namecheap { password } => {
+            Ok(Arc::new(NamecheapProvider::new(password.clone())))
+        }
         ProviderConfig::Callback {
             url,
             method,

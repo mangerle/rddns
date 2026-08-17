@@ -266,6 +266,8 @@ pub enum ProviderConfig {
         access_key_id: String,
         secret_access_key: String,
     },
+    /// Namecheap
+    Namecheap { password: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -332,6 +334,7 @@ impl ProviderConfig {
                 access_key_id,
                 secret_access_key,
             } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
+            Self::Namecheap { password } => !password.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
