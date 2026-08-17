@@ -297,6 +297,13 @@ pub enum ProviderConfig {
     NameCom { username: String, api_token: String },
     /// DNS.LA
     DnsLa { api_id: String, api_secret: String },
+    /// 阿里云 ESA (Edge Security Acceleration)
+    AliEsa {
+        access_key_id: String,
+        access_key_secret: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -384,6 +391,11 @@ impl ProviderConfig {
             Self::DnsLa { api_id, api_secret } => {
                 !api_id.trim().is_empty() && !api_secret.trim().is_empty()
             }
+            Self::AliEsa {
+                access_key_id,
+                access_key_secret,
+                ..
+            } => !access_key_id.trim().is_empty() && !access_key_secret.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

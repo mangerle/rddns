@@ -1,4 +1,5 @@
 pub mod alidns;
+pub mod aliesa;
 pub mod baidu;
 pub mod callback;
 pub mod cloudflare;
@@ -21,6 +22,7 @@ pub mod trait_def;
 pub mod vercel;
 
 pub use alidns::*;
+pub use aliesa::*;
 pub use baidu::*;
 pub use callback::*;
 pub use cloudflare::*;
@@ -157,6 +159,15 @@ pub fn create_dns_provider(
             api_id.clone(),
             api_secret.clone(),
         ))),
+        ProviderConfig::AliEsa {
+            access_key_id,
+            access_key_secret,
+            endpoint,
+        } => Ok(Arc::new(AliEsaProvider::new(
+            access_key_id.clone(),
+            access_key_secret.clone(),
+            endpoint.clone(),
+        )?)),
         ProviderConfig::Callback {
             url,
             method,

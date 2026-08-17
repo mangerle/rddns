@@ -982,6 +982,7 @@
                   <option value="gcore">Gcore DNS (Permanent API-Key)</option>
                   <option value="name_com">Name.com (Username / Token)</option>
                   <option value="dnsla">DNS.LA (API ID / Secret)</option>
+                  <option value="aliesa">阿里云 ESA 边缘安全加速 (AccessKey)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2280,6 +2281,22 @@
               <input type="password" id="dnslaApiSecret" placeholder="DNS.LA API 密钥" />
             </div>
           </div>`;
+      } else if (type === 'aliesa') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>AccessKey ID</label>
+              <input type="text" id="esaAccessKeyId" placeholder="阿里云 AccessKey ID" />
+            </div>
+            <div class="form-group">
+              <label>AccessKey Secret</label>
+              <input type="password" id="esaAccessKeySecret" placeholder="阿里云 AccessKey Secret" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>自定义 ESA Endpoint (选填)</label>
+            <input type="text" id="esaEndpoint" placeholder="默认: https://esa.cn-hangzhou.aliyuncs.com" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2418,6 +2435,10 @@
           } else if (task.provider.type === 'dnsla') {
             if (document.getElementById('dnslaApiId')) document.getElementById('dnslaApiId').value = task.provider.api_id || '';
             if (document.getElementById('dnslaApiSecret')) document.getElementById('dnslaApiSecret').value = task.provider.api_secret || '';
+          } else if (task.provider.type === 'aliesa') {
+            if (document.getElementById('esaAccessKeyId')) document.getElementById('esaAccessKeyId').value = task.provider.access_key_id || '';
+            if (document.getElementById('esaAccessKeySecret')) document.getElementById('esaAccessKeySecret').value = task.provider.secret_access_key || '';
+            if (document.getElementById('esaEndpoint')) document.getElementById('esaEndpoint').value = task.provider.endpoint || '';
           }
         }
 
@@ -2696,6 +2717,11 @@
       } else if (pType === 'dnsla') {
         providerObj.api_id = document.getElementById('dnslaApiId')?.value || '';
         providerObj.api_secret = document.getElementById('dnslaApiSecret')?.value || '';
+      } else if (pType === 'aliesa') {
+        providerObj.access_key_id = document.getElementById('esaAccessKeyId')?.value || '';
+        providerObj.access_key_secret = document.getElementById('esaAccessKeySecret')?.value || '';
+        const ep = document.getElementById('esaEndpoint')?.value?.trim();
+        if (ep) providerObj.endpoint = ep;
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
