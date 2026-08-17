@@ -225,6 +225,10 @@ impl DdnsEngine {
         if !sync_results.is_empty() {
             let has_success = sync_results.iter().any(|r| r.status != SyncStatus::Failed);
             let has_failed = sync_results.iter().any(|r| r.status == SyncStatus::Failed);
+            // 精准判断云端 DNS 记录是否发生了真实的创建或修改变动
+            let has_actual_updates = sync_results
+                .iter()
+                .any(|r| matches!(r.status, SyncStatus::Created | SyncStatus::Updated));
 
             let overall_status = if has_success && !has_failed {
                 NotificationOverallStatus::Success
@@ -240,7 +244,7 @@ impl DdnsEngine {
                 task_name: task.name.clone(),
                 ipv4: ipv4_opt,
                 ipv6: ipv6_opt,
-                ip_changed,
+                ip_changed: has_actual_updates,
                 results: sync_results,
                 timestamp: Local::now(),
             };

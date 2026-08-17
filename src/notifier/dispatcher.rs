@@ -87,9 +87,15 @@ impl NotificationDispatcher {
             return;
         }
 
-        // 策略过滤: 仅 IP 变动时通知
-        if self.config.on_ip_change_only && !event.ip_changed {
-            tracing::debug!("IP 未发生变动，且配置了仅在变动时通知，跳过发送");
+        // 策略过滤: 仅当记录发生实际增改时才发送成功通知（失败异常仍会触发告警）
+        if self.config.on_ip_change_only
+            && !event.ip_changed
+            && event.overall_status == NotificationOverallStatus::Success
+        {
+            tracing::info!(
+                "[{}] 域名解析记录未发生实际变动，静默跳过成功通知",
+                event.task_name
+            );
             return;
         }
 
