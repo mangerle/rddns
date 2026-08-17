@@ -3,6 +3,7 @@ pub mod baidu;
 pub mod callback;
 pub mod cloudflare;
 pub mod cloudns;
+pub mod dnsla;
 pub mod dnspod;
 pub mod dynadot;
 pub mod dynv6;
@@ -24,6 +25,7 @@ pub use baidu::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use cloudns::*;
+pub use dnsla::*;
 pub use dnspod::*;
 pub use dynadot::*;
 pub use dynv6::*;
@@ -150,6 +152,10 @@ pub fn create_dns_provider(
         } => Ok(Arc::new(NameComProvider::new(
             username.clone(),
             api_token.clone(),
+        ))),
+        ProviderConfig::DnsLa { api_id, api_secret } => Ok(Arc::new(DnsLaProvider::new(
+            api_id.clone(),
+            api_secret.clone(),
         ))),
         ProviderConfig::Callback {
             url,

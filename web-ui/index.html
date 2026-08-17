@@ -981,6 +981,7 @@
                   <option value="cloudns">ClouDNS (Auth-ID / Password)</option>
                   <option value="gcore">Gcore DNS (Permanent API-Key)</option>
                   <option value="name_com">Name.com (Username / Token)</option>
+                  <option value="dnsla">DNS.LA (API ID / Secret)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2267,6 +2268,18 @@
               <input type="password" id="ncApiToken" placeholder="Name.com API Token" />
             </div>
           </div>`;
+      } else if (type === 'dnsla') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>API ID</label>
+              <input type="text" id="dnslaApiId" placeholder="DNS.LA API ID" />
+            </div>
+            <div class="form-group">
+              <label>API 密钥 (API Secret)</label>
+              <input type="password" id="dnslaApiSecret" placeholder="DNS.LA API 密钥" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2402,6 +2415,9 @@
           } else if (task.provider.type === 'name_com') {
             if (document.getElementById('ncUsername')) document.getElementById('ncUsername').value = task.provider.username || '';
             if (document.getElementById('ncApiToken')) document.getElementById('ncApiToken').value = task.provider.api_token || '';
+          } else if (task.provider.type === 'dnsla') {
+            if (document.getElementById('dnslaApiId')) document.getElementById('dnslaApiId').value = task.provider.api_id || '';
+            if (document.getElementById('dnslaApiSecret')) document.getElementById('dnslaApiSecret').value = task.provider.api_secret || '';
           }
         }
 
@@ -2677,6 +2693,9 @@
       } else if (pType === 'name_com') {
         providerObj.username = document.getElementById('ncUsername')?.value || '';
         providerObj.api_token = document.getElementById('ncApiToken')?.value || '';
+      } else if (pType === 'dnsla') {
+        providerObj.api_id = document.getElementById('dnslaApiId')?.value || '';
+        providerObj.api_secret = document.getElementById('dnslaApiSecret')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
