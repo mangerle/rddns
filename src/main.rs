@@ -10,7 +10,7 @@ use clap::Parser;
 use config::model::UserAuthConfig;
 use config::storage::ConfigManager;
 use core::engine::DdnsEngine;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -65,8 +65,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("==========================================");
 
-    // 2. 加载或创建配置文件
-    let config_manager = Arc::new(ConfigManager::load_or_create(args.config.clone())?);
+    // 2. 解析配置文件路径（若为相对路径，自动锚定至可执行文件所在目录，防止作为系统服务启动时工作目录漂移）
+    let config_path = if args.config.is_relative() {
+        if let Ok(exe_path) = std::env::current_exe() {
+            exe_path.parent().unwrap_or_else(|| Path::new("")).join(&args.config)
+        } else {
+            args.config
+        }
+    } else {
+        args.config
+    };
+
+    let config_manager = Arc::new(ConfigManager::load_or_create(config_path)?);
 
     // 处理重置密码指令
     if let Some(new_pwd) = args.reset_password {
