@@ -1,5 +1,6 @@
 use crate::config::model::{AppConfig, IpFetchConfig, NotificationConfig, UserAuthConfig};
 use crate::config::storage::ConfigManager;
+use crate::core::domain::parse_domain;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
@@ -169,23 +170,100 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
     }
 }
 
-/// 测试通知发送
-pub async fn test_notify_handler(Json(config): Json<NotificationConfig>) -> impl IntoResponse {
+/// 测试通知发送（优先提取当前已配置的真实公网 IP 与真实域名数据）
+pub async fn test_notify_handler(
+    State(state): State<AppState>,
+    Json(config): Json<NotificationConfig>,
+) -> impl IntoResponse {
+    let app_config = state.config_manager.get_config();
     let dispatcher = NotificationDispatcher::new(config);
-    let sample_event = NotificationEvent {
-        overall_status: NotificationOverallStatus::Success,
-        title: "rddns 通知测试".to_string(),
-        task_name: "测试任务".to_string(),
-        ipv4: Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
-        ipv6: None,
-        ip_changed: true,
-        results: vec![SyncRecordResult {
+
+    // 尝试从当前任务中探测真实 IP 并生成真实测试数据
+    let task = app_config.dns_tasks.first();
+    let task_name = task
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| "默认任务".to_string());
+
+    let mut ipv4 = None;
+    let mut ipv6 = None;
+    let mut results = Vec::new();
+
+    if let Some(t) = task {
+        // 探测真实 IPv4
+        if let Some(fetcher) = if t.ipv4.enabled {
+            create_ip_fetcher(&t.ipv4)
+        } else {
+            None
+        } {
+            ipv4 = fetcher.fetch_ipv4().await.ok().flatten();
+        }
+        // 探测真实 IPv6
+        if let Some(fetcher) = if t.ipv6.enabled {
+            create_ip_fetcher(&t.ipv6)
+        } else {
+            None
+        } {
+            ipv6 = fetcher.fetch_ipv6().await.ok().flatten();
+        }
+
+        // 构建真实的域名结果列表
+        for d in &t.ipv4.domains {
+            if let Some(parsed) = parse_domain(d) {
+                let ip_str = ipv4
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_else(|| "127.0.0.1".to_string());
+                results.push(SyncRecordResult {
+                    domain: parsed.full_domain(),
+                    record_type: DnsRecordType::A,
+                    target_ip: ip_str,
+                    status: SyncStatus::Updated,
+                    message: "通知通道测试消息（真实 IPv4 数据）".to_string(),
+                });
+            }
+        }
+
+        for d in &t.ipv6.domains {
+            if let Some(parsed) = parse_domain(d) {
+                let ip_str = ipv6
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_else(|| "::1".to_string());
+                results.push(SyncRecordResult {
+                    domain: parsed.full_domain(),
+                    record_type: DnsRecordType::AAAA,
+                    target_ip: ip_str,
+                    status: SyncStatus::Updated,
+                    message: "通知通道测试消息（真实 IPv6 数据）".to_string(),
+                });
+            }
+        }
+    }
+
+    // 如果未配置任何域名，使用示例域名
+    if results.is_empty() {
+        results.push(SyncRecordResult {
             domain: "test.example.com".to_string(),
-            record_type: DnsRecordType::A,
-            target_ip: "127.0.0.1".to_string(),
+            record_type: if ipv6.is_some() && ipv4.is_none() {
+                DnsRecordType::AAAA
+            } else {
+                DnsRecordType::A
+            },
+            target_ip: ipv4
+                .map(|ip| ip.to_string())
+                .or_else(|| ipv6.map(|ip| ip.to_string()))
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
             status: SyncStatus::Updated,
             message: "这是一条测试消息，表明通知渠道工作正常！".to_string(),
-        }],
+        });
+    }
+
+    let sample_event = NotificationEvent {
+        overall_status: NotificationOverallStatus::Success,
+        title: "rddns 通知通道测试".to_string(),
+        task_name,
+        ipv4,
+        ipv6,
+        ip_changed: true,
+        results,
         timestamp: Local::now(),
     };
 
