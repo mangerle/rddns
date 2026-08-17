@@ -270,6 +270,8 @@ pub enum ProviderConfig {
     Namecheap { password: String },
     /// NameSilo
     NameSilo { api_key: String },
+    /// Spaceship
+    Spaceship { api_key: String, api_secret: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -338,6 +340,10 @@ impl ProviderConfig {
             } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
             Self::Namecheap { password } => !password.trim().is_empty(),
             Self::NameSilo { api_key } => !api_key.trim().is_empty(),
+            Self::Spaceship {
+                api_key,
+                api_secret,
+            } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

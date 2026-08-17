@@ -9,6 +9,7 @@ pub mod huawei;
 pub mod namecheap;
 pub mod namesilo;
 pub mod porkbun;
+pub mod spaceship;
 pub mod traffic_route;
 pub mod trait_def;
 
@@ -23,6 +24,7 @@ pub use huawei::*;
 pub use namecheap::*;
 pub use namesilo::*;
 pub use porkbun::*;
+pub use spaceship::*;
 pub use traffic_route::*;
 pub use trait_def::*;
 
@@ -104,6 +106,13 @@ pub fn create_dns_provider(
         ProviderConfig::NameSilo { api_key } => {
             Ok(Arc::new(NameSiloProvider::new(api_key.clone())))
         }
+        ProviderConfig::Spaceship {
+            api_key,
+            api_secret,
+        } => Ok(Arc::new(SpaceshipProvider::new(
+            api_key.clone(),
+            api_secret.clone(),
+        ))),
         ProviderConfig::Callback {
             url,
             method,

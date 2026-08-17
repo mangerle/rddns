@@ -974,6 +974,7 @@
                   <option value="traffic_route">火山引擎 (Volcengine TrafficRoute - 纯 Rust V4 签名)</option>
                   <option value="namecheap">Namecheap (动态 DNS 专用密码)</option>
                   <option value="namesilo">NameSilo (API Key)</option>
+                  <option value="spaceship">Spaceship (API Key / Secret)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2188,6 +2189,18 @@
             <label>API Key</label>
             <input type="password" id="nsApiKey" placeholder="NameSilo API 密钥" />
           </div>`;
+      } else if (type === 'spaceship') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>API Key (X-API-Key)</label>
+              <input type="text" id="spApiKey" placeholder="Spaceship API Key" />
+            </div>
+            <div class="form-group">
+              <label>API Secret (X-API-Secret)</label>
+              <input type="password" id="spApiSecret" placeholder="Spaceship API Secret" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2304,6 +2317,9 @@
             if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
           } else if (task.provider.type === 'namesilo') {
             if (document.getElementById('nsApiKey')) document.getElementById('nsApiKey').value = task.provider.api_key || '';
+          } else if (task.provider.type === 'spaceship') {
+            if (document.getElementById('spApiKey')) document.getElementById('spApiKey').value = task.provider.api_key || '';
+            if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
           }
         }
 
@@ -2558,6 +2574,9 @@
         providerObj.password = document.getElementById('ncPassword')?.value || '';
       } else if (pType === 'namesilo') {
         providerObj.api_key = document.getElementById('nsApiKey')?.value || '';
+      } else if (pType === 'spaceship') {
+        providerObj.api_key = document.getElementById('spApiKey')?.value || '';
+        providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
