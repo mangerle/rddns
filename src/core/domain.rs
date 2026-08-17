@@ -98,21 +98,27 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         });
     }
 
-    // 5. 统一转为 ASCII 小写并按点号自动拆分（域名不区分大小写）
-    let domain_lower = domain_raw.to_ascii_lowercase();
-    let parts: Vec<&str> = domain_lower.split('.').collect();
+    // 5. 若包含非 ASCII 字符（如中文域名），使用 IDNA Punycode 转码为 xn--... 形式
+    let domain_ascii = if !domain_raw.is_ascii() {
+        idna::domain_to_ascii(&domain_raw.to_ascii_lowercase())
+            .unwrap_or_else(|_| domain_raw.to_ascii_lowercase())
+    } else {
+        domain_raw.to_ascii_lowercase()
+    };
+
+    let parts: Vec<&str> = domain_ascii.split('.').collect();
     if parts.len() < 2 {
         // 单个单词无法作为有效公网域名
         return None;
     }
 
-    // 针对常见二级后缀 (如 .com.cn, .net.cn, .org.cn, .co.uk, .gov.cn)
+    // 针对常见二级后缀 (如 .com.cn, .net.cn, .org.cn, .co.uk, .gov.cn, .eu.org)
     let is_special_second_level =
         parts.len() >= 3 && is_compound_suffix(parts[parts.len() - 2], parts[parts.len() - 1]);
 
     let (sub_domain, root_domain) = if is_special_second_level {
         if parts.len() == 3 {
-            ("@".to_string(), domain_lower)
+            ("@".to_string(), domain_ascii)
         } else {
             let sub = parts[..parts.len() - 3].join(".");
             let root = parts[parts.len() - 3..].join(".");
@@ -120,7 +126,7 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         }
     } else {
         if parts.len() == 2 {
-            ("@".to_string(), domain_lower)
+            ("@".to_string(), domain_ascii)
         } else {
             let sub = parts[..parts.len() - 2].join(".");
             let root = parts[parts.len() - 2..].join(".");
@@ -150,6 +156,12 @@ fn is_compound_suffix(second_last: &str, last: &str) -> bool {
             | ("org", "uk")
             | ("co", "jp")
             | ("com", "hk")
+            | ("eu", "org")
+            | ("net", "ru")
+            | ("org", "ru")
+            | ("pp", "ru")
+            | ("com", "tw")
+            | ("org", "tw")
     )
 }
 
@@ -219,9 +231,26 @@ mod tests {
         assert_eq!(d.root_domain, "myhome.com.cn");
         assert_eq!(d.sub_domain, "nas");
 
+        let d_eu = parse_domain("nas.myhome.eu.org").unwrap();
+        assert_eq!(d_eu.root_domain, "myhome.eu.org");
+        assert_eq!(d_eu.sub_domain, "nas");
+
         let root_d = parse_domain("myhome.com.cn").unwrap();
         assert_eq!(root_d.root_domain, "myhome.com.cn");
         assert_eq!(root_d.sub_domain, "@");
+    }
+
+    #[test]
+    fn test_punycode_chinese_domain() {
+        // 中文根域名自动 Punycode 转码
+        let d_chinese = parse_domain("测试.com").unwrap();
+        assert_eq!(d_chinese.root_domain, "xn--0zwm56d.com");
+        assert_eq!(d_chinese.sub_domain, "@");
+
+        // 中文子域名自动 Punycode 转码 ("我的nas" -> "xn--nas-st5fr61g")
+        let d_sub_chinese = parse_domain("我的nas.example.com").unwrap();
+        assert_eq!(d_sub_chinese.root_domain, "example.com");
+        assert_eq!(d_sub_chinese.sub_domain, "xn--nas-st5fr61g");
     }
 
     #[test]

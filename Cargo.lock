@@ -1226,6 +1226,7 @@ dependencies = [
  "fastrand",
  "hex",
  "hmac",
+ "idna",
  "lettre",
  "mime_guess",
  "network-interface",
