@@ -17,6 +17,7 @@ pub mod namesilo;
 pub mod porkbun;
 pub mod rainyun;
 pub mod spaceship;
+pub mod tencent_eo;
 pub mod traffic_route;
 pub mod trait_def;
 pub mod vercel;
@@ -40,6 +41,7 @@ pub use namesilo::*;
 pub use porkbun::*;
 pub use rainyun::*;
 pub use spaceship::*;
+pub use tencent_eo::*;
 pub use traffic_route::*;
 pub use trait_def::*;
 pub use vercel::*;
@@ -167,6 +169,13 @@ pub fn create_dns_provider(
             access_key_id.clone(),
             access_key_secret.clone(),
             endpoint.clone(),
+        )?)),
+        ProviderConfig::EdgeOne {
+            secret_id,
+            secret_key,
+        } => Ok(Arc::new(TencentEoProvider::new(
+            secret_id.clone(),
+            secret_key.clone(),
         )?)),
         ProviderConfig::Callback {
             url,

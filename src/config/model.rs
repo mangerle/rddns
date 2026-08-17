@@ -304,6 +304,11 @@ pub enum ProviderConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
     },
+    /// 腾讯云 EdgeOne (EO)
+    EdgeOne {
+        secret_id: String,
+        secret_key: String,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -396,6 +401,10 @@ impl ProviderConfig {
                 access_key_secret,
                 ..
             } => !access_key_id.trim().is_empty() && !access_key_secret.trim().is_empty(),
+            Self::EdgeOne {
+                secret_id,
+                secret_key,
+            } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
