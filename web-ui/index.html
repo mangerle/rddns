@@ -969,6 +969,7 @@
                   <option value="huawei_cloud">华为云 (Huawei Cloud - 纯 Rust SDK 签名)</option>
                   <option value="porkbun">Porkbun (API Key / Secret)</option>
                   <option value="godaddy">GoDaddy (API Key / Secret)</option>
+                  <option value="dynv6">Dynv6 (免费 IPv6 动态 DNS Token)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2141,6 +2142,12 @@
               <input type="password" id="gdApiSecret" placeholder="GoDaddy API Secret" />
             </div>
           </div>`;
+      } else if (type === 'dynv6') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>HTTP Token</label>
+            <input type="password" id="dynv6Token" placeholder="Dynv6 API Token" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2245,6 +2252,8 @@
           } else if (task.provider.type === 'godaddy') {
             if (document.getElementById('gdApiKey')) document.getElementById('gdApiKey').value = task.provider.api_key || '';
             if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
+          } else if (task.provider.type === 'dynv6') {
+            if (document.getElementById('dynv6Token')) document.getElementById('dynv6Token').value = task.provider.token || '';
           }
         }
 
@@ -2487,6 +2496,8 @@
       } else if (pType === 'godaddy') {
         providerObj.api_key = document.getElementById('gdApiKey')?.value || '';
         providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
+      } else if (pType === 'dynv6') {
+        providerObj.token = document.getElementById('dynv6Token')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

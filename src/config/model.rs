@@ -254,6 +254,8 @@ pub enum ProviderConfig {
     Porkbun { api_key: String, secret_key: String },
     /// GoDaddy
     GoDaddy { api_key: String, api_secret: String },
+    /// Dynv6
+    Dynv6 { token: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -311,6 +313,7 @@ impl ProviderConfig {
                 api_key,
                 api_secret,
             } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
+            Self::Dynv6 { token } => !token.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

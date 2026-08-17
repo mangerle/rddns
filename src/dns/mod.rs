@@ -2,6 +2,7 @@ pub mod alidns;
 pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
+pub mod dynv6;
 pub mod godaddy;
 pub mod huawei;
 pub mod porkbun;
@@ -11,6 +12,7 @@ pub use alidns::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
+pub use dynv6::*;
 pub use godaddy::*;
 pub use huawei::*;
 pub use porkbun::*;
@@ -73,6 +75,7 @@ pub fn create_dns_provider(
             api_key.clone(),
             api_secret.clone(),
         ))),
+        ProviderConfig::Dynv6 { token } => Ok(Arc::new(Dynv6Provider::new(token.clone()))),
         ProviderConfig::Callback {
             url,
             method,
