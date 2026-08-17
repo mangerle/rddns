@@ -10,7 +10,7 @@ use clap::Parser;
 use config::model::UserAuthConfig;
 use config::storage::ConfigManager;
 use core::engine::DdnsEngine;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -71,15 +71,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. 解析配置文件路径（若为相对路径，自动锚定至可执行文件所在目录，防止作为系统服务启动时工作目录漂移）
+    // 1. 解析配置文件路径：
+    // 若为相对路径，按如下优先级智能判定：
+    // - 优先级 1：当前工作目录 (CWD) 下若已存在该文件，优先读取当前目录；
+    // - 优先级 2：可执行文件所在目录下若存在该文件，优先读取程序同级目录；
+    // - 优先级 3：若均不存在（首次运行），默认在当前工作目录下创建。
     let config_path = if args.config.is_relative() {
-        if let Ok(exe_path) = std::env::current_exe() {
-            exe_path
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .join(&args.config)
+        let cwd_path = std::env::current_dir()
+            .map(|d| d.join(&args.config))
+            .unwrap_or_else(|_| args.config.clone());
+        let exe_dir_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(&args.config)));
+
+        if cwd_path.exists() {
+            cwd_path
+        } else if let Some(ref exe_cfg) = exe_dir_path {
+            if exe_cfg.exists() {
+                exe_cfg.clone()
+            } else {
+                cwd_path
+            }
         } else {
-            args.config
+            cwd_path
         }
     } else {
         args.config
