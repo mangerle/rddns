@@ -776,6 +776,8 @@
                 <line x1="15" y1="10" x2="15" y2="10.01"></line>
                 <line x1="9" y1="14" x2="9" y2="14.01"></line>
                 <line x1="15" y1="14" x2="15" y2="14.01"></line>
+                <line x1="9" y1="18" x2="9" y2="18.01"></line>
+                <line x1="15" y1="18" x2="15" y2="18.01"></line>
               </svg>
             </span>
             <span>企业微信 (群机器人 / 自建应用推送)</span>
@@ -1024,9 +1026,12 @@
 
   <script>
     // ==========================================
-    // 主题与状态全局控制器
+    // 全局状态与数据字典
     // ==========================================
     let globalConfig = null;
+    let availableInterfaces = [];
+    let savedIpv4NetIf = '';
+    let savedIpv6NetIf = '';
 
     // 矢量 Sun / Moon 图标模板
     const SUN_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>`;
@@ -1132,6 +1137,53 @@
       document.getElementById('wecomAppFields').style.display = mode === 'app' ? 'block' : 'none';
     }
 
+    // 异步拉取系统物理与虚拟网卡列表
+    async function loadNetworkInterfaces() {
+      try {
+        const res = await fetch('/api/v1/network-interfaces');
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          availableInterfaces = json.data;
+          // 如果当前正好展示网卡字段，刷新其下拉框
+          if (document.getElementById('ipv4SourceType')?.value === 'net_interface') {
+            renderIpFields('ipv4');
+          }
+          if (document.getElementById('ipv6SourceType')?.value === 'net_interface') {
+            renderIpFields('ipv6');
+          }
+        }
+      } catch (e) {
+        console.warn('获取网卡列表失败:', e);
+      }
+    }
+
+    // 处理网卡下拉框选择变化
+    function handleNetIfSelect(vType) {
+      const selVal = document.getElementById(`${vType}NetIfSelect`)?.value;
+      const customInput = document.getElementById(`${vType}NetIfCustom`);
+      if (selVal === '__custom__') {
+        if (customInput) {
+          customInput.style.display = 'block';
+          customInput.focus();
+        }
+      } else {
+        if (customInput) {
+          customInput.style.display = 'none';
+          customInput.value = selVal || '';
+        }
+      }
+    }
+
+    // 获取选定网卡名称值
+    function getNetIfValue(vType) {
+      const selectEl = document.getElementById(`${vType}NetIfSelect`);
+      if (!selectEl) return null;
+      if (selectEl.value === '__custom__') {
+        return document.getElementById(`${vType}NetIfCustom`)?.value.trim() || null;
+      }
+      return selectEl.value.trim() || null;
+    }
+
     // 渲染 DNS 服务商动态凭据表单
     function renderProviderFields() {
       const type = document.getElementById('dnsProviderType').value;
@@ -1197,9 +1249,25 @@
           <label>探测 URL (多个接口用英文逗号分隔，失败自动回退)</label>
           <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
       } else if (sourceType === 'net_interface') {
+        const currentSaved = (vType === 'ipv4' ? savedIpv4NetIf : savedIpv6NetIf) || '';
+        let optionsHtml = `<option value="">-- 请选择网卡设备 --</option>`;
+        let matched = false;
+
+        availableInterfaces.forEach(iface => {
+          const isSelected = (iface.name === currentSaved);
+          if (isSelected) matched = true;
+          optionsHtml += `<option value="${iface.name}" ${isSelected ? 'selected' : ''}>${iface.display_name}</option>`;
+        });
+
+        const isCustomSelected = (!matched && currentSaved);
+        optionsHtml += `<option value="__custom__" ${isCustomSelected ? 'selected' : ''}>手动输入自定义网卡名称...</option>`;
+
         fieldContainer.innerHTML = `
-          <label>网卡设备名称 (例如 eth0, WLAN, 以太网)</label>
-          <input type="text" id="${vType}NetIf" placeholder="例如 eth0 或 WLAN" />`;
+          <label>选择网卡设备 (自动探测当前主机网卡)</label>
+          <select id="${vType}NetIfSelect" onchange="handleNetIfSelect('${vType}')">
+            ${optionsHtml}
+          </select>
+          <input type="text" id="${vType}NetIfCustom" placeholder="例如 eth0 或 以太网" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? currentSaved : ''}" />`;
       } else if (sourceType === 'command') {
         fieldContainer.innerHTML = `
           <label>执行命令 / 脚本</label>
@@ -1256,12 +1324,10 @@
         // IPv4
         document.getElementById('ipv4Enable').checked = task.ipv4.enabled;
         document.getElementById('ipv4SourceType').value = task.ipv4.source_type || 'url';
+        savedIpv4NetIf = task.ipv4.net_interface || '';
         renderIpFields('ipv4');
         if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
           document.getElementById('ipv4Urls').value = task.ipv4.url_endpoints.join(', ');
-        }
-        if (task.ipv4.net_interface && document.getElementById('ipv4NetIf')) {
-          document.getElementById('ipv4NetIf').value = task.ipv4.net_interface;
         }
         if (task.ipv4.cmd && document.getElementById('ipv4Cmd')) {
           document.getElementById('ipv4Cmd').value = task.ipv4.cmd;
@@ -1272,12 +1338,10 @@
         // IPv6
         document.getElementById('ipv6Enable').checked = task.ipv6.enabled;
         document.getElementById('ipv6SourceType').value = task.ipv6.source_type || 'url';
+        savedIpv6NetIf = task.ipv6.net_interface || '';
         renderIpFields('ipv6');
         if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
           document.getElementById('ipv6Urls').value = task.ipv6.url_endpoints.join(', ');
-        }
-        if (task.ipv6.net_interface && document.getElementById('ipv6NetIf')) {
-          document.getElementById('ipv6NetIf').value = task.ipv6.net_interface;
         }
         if (task.ipv6.cmd && document.getElementById('ipv6Cmd')) {
           document.getElementById('ipv6Cmd').value = task.ipv6.cmd;
@@ -1430,7 +1494,7 @@
           enabled: document.getElementById('ipv4Enable').checked,
           source_type: document.getElementById('ipv4SourceType').value,
           url_endpoints: ipv4Urls,
-          net_interface: document.getElementById('ipv4NetIf')?.value || null,
+          net_interface: getNetIfValue('ipv4'),
           cmd: document.getElementById('ipv4Cmd')?.value || null,
           regex: document.getElementById('ipv4Regex').value || null,
           domains: document.getElementById('ipv4Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
@@ -1439,7 +1503,7 @@
           enabled: document.getElementById('ipv6Enable').checked,
           source_type: document.getElementById('ipv6SourceType').value,
           url_endpoints: ipv6Urls,
-          net_interface: document.getElementById('ipv6NetIf')?.value || null,
+          net_interface: getNetIfValue('ipv6'),
           cmd: document.getElementById('ipv6Cmd')?.value || null,
           regex: document.getElementById('ipv6Regex').value || null,
           domains: document.getElementById('ipv6Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
@@ -1501,7 +1565,7 @@
         enabled: true,
         source_type: document.getElementById(`${type}SourceType`).value,
         url_endpoints: urls,
-        net_interface: document.getElementById(`${type}NetIf`)?.value || null,
+        net_interface: getNetIfValue(type),
         cmd: document.getElementById(`${type}Cmd`)?.value || null,
         regex: document.getElementById(`${type}Regex`).value || null,
         domains: []
@@ -1585,6 +1649,7 @@
       renderProviderFields();
       renderIpFields('ipv4');
       renderIpFields('ipv6');
+      loadNetworkInterfaces();
       loadConfig();
       initSSE();
     };

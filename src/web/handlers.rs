@@ -200,3 +200,9 @@ pub async fn get_logs_handler(State(state): State<AppState>) -> impl IntoRespons
     let logs: Vec<LogEntry> = state.log_buffer.get_recent();
     Json(ApiResponse::ok(logs))
 }
+
+/// 获取当前系统可用的网卡列表
+pub async fn get_network_interfaces_handler() -> impl IntoResponse {
+    let ifaces = crate::ip_fetcher::net_interface::list_system_interfaces();
+    Json(ApiResponse::ok(ifaces))
+}

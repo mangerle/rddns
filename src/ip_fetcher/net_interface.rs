@@ -76,3 +76,58 @@ impl IpFetcher for NetInterfaceIpFetcher {
         Ok(None)
     }
 }
+
+/// 网卡信息结构体
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InterfaceInfo {
+    pub name: String,
+    pub display_name: String,
+    pub ipv4s: Vec<String>,
+    pub ipv6s: Vec<String>,
+}
+
+/// 枚举当前系统上所有可用的物理与虚拟网卡
+pub fn list_system_interfaces() -> Vec<InterfaceInfo> {
+    let mut result = Vec::new();
+    if let Ok(interfaces) = NetworkInterface::show() {
+        for iface in interfaces {
+            let mut ipv4s = Vec::new();
+            let mut ipv6s = Vec::new();
+            for addr in iface.addr {
+                match addr {
+                    Addr::V4(v4) => {
+                        let ip = v4.ip;
+                        if !ip.is_loopback() {
+                            ipv4s.push(ip.to_string());
+                        }
+                    }
+                    Addr::V6(v6) => {
+                        let ip = v6.ip;
+                        if is_global_unicast_ipv6(&ip) || !ip.is_loopback() {
+                            ipv6s.push(ip.to_string());
+                        }
+                    }
+                }
+            }
+            let mut desc_parts = Vec::new();
+            if !ipv4s.is_empty() {
+                desc_parts.push(format!("IPv4: {}", ipv4s.join(", ")));
+            }
+            if !ipv6s.is_empty() {
+                desc_parts.push(format!("IPv6: {}", ipv6s.join(", ")));
+            }
+            let display_name = if desc_parts.is_empty() {
+                iface.name.clone()
+            } else {
+                format!("{} ({})", iface.name, desc_parts.join(" | "))
+            };
+            result.push(InterfaceInfo {
+                name: iface.name,
+                display_name,
+                ipv4s,
+                ipv6s,
+            });
+        }
+    }
+    result
+}

@@ -3,8 +3,8 @@ use crate::util::log_buffer::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{
-    AppState, get_config_handler, get_logs_handler, manual_sync_handler, save_config_handler,
-    test_ip_handler, test_notify_handler,
+    AppState, get_config_handler, get_logs_handler, get_network_interfaces_handler,
+    manual_sync_handler, save_config_handler, test_ip_handler, test_notify_handler,
 };
 use crate::web::sse::sse_log_handler;
 use axum::Router;
@@ -51,6 +51,7 @@ impl WebServer {
         // API 路由
         let api_routes = Router::new()
             .route("/config", get(get_config_handler).post(save_config_handler))
+            .route("/network-interfaces", get(get_network_interfaces_handler))
             .route("/sync", post(manual_sync_handler))
             .route("/test/ip", post(test_ip_handler))
             .route("/test/notify", post(test_notify_handler))
