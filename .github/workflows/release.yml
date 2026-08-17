@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: 创建 GitHub 发布版本 (Create Release)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出完整代码历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 基于 Commit 生成分类 Changelog
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_CHANGELOG.md
+
+      - name: 创建 Release 并发布 Changelog
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_CHANGELOG.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-assets:
+    name: Build (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows 64位
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Linux x86_64 纯静态 musl (兼容所有 Linux 发行版与 OpenWrt)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux ARM64 纯静态 musl (树莓派 4/5, ARM 软路由/NAS, 云服务器)
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux ARMv7 (老款树莓派, 32位 ARM 软路由)
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+          # macOS Intel 架构 (在 macos-latest 上直接交叉编译)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # macOS Apple Silicon (M1/M2/M3/M4) 架构
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 构建并发布二进制产物
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: rddns
+          target: ${{ matrix.target }}
+          tar: unix
+          zip: windows
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
