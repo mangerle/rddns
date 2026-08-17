@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// 应用全局配置结构
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
-    /// Web 服务监听地址，默认 "0.0.0.0:9876"
+    /// Web 服务监听地址，默认 "127.0.0.1:9876"
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
 
