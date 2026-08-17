@@ -113,7 +113,7 @@ mod tests {
 
         let manager = ConfigManager::load_or_create(config_file.clone()).unwrap();
         let initial_conf = manager.get_config();
-        assert_eq!(initial_conf.listen_addr, "0.0.0.0:9876");
+        assert_eq!(initial_conf.listen_addr, "127.0.0.1:9876");
 
         let mut updated = (*initial_conf).clone();
         updated.listen_addr = "127.0.0.1:8888".to_string();

@@ -33,7 +33,7 @@ pub struct AppConfig {
 }
 
 fn default_listen_addr() -> String {
-    "0.0.0.0:9876".to_string()
+    "127.0.0.1:9876".to_string()
 }
 
 fn default_interval_secs() -> u64 {

@@ -40,7 +40,7 @@ impl WebServer {
         let listen_addr_str = self.config_manager.get_config().listen_addr.clone();
         let addr: SocketAddr = listen_addr_str
             .parse()
-            .unwrap_or_else(|_| "0.0.0.0:9876".parse().unwrap());
+            .unwrap_or_else(|_| "127.0.0.1:9876".parse().unwrap());
 
         let state = AppState {
             config_manager: self.config_manager.clone(),

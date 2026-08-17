@@ -303,7 +303,7 @@
         <div class="grid-2">
           <div class="form-group">
             <label>Web 服务监听地址</label>
-            <input type="text" id="sysListenAddr" value="0.0.0.0:9876" />
+            <input type="text" id="sysListenAddr" value="127.0.0.1:9876" />
           </div>
           <div class="form-group">
             <label>全局同步间隔 (秒)</label>
@@ -455,7 +455,7 @@
     }
 
     function populateForm(conf) {
-      document.getElementById('sysListenAddr').value = conf.listen_addr || '0.0.0.0:9876';
+      document.getElementById('sysListenAddr').value = conf.listen_addr || '127.0.0.1:9876';
       document.getElementById('sysInterval').value = conf.interval_secs || 300;
       document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
       document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
