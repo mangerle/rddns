@@ -7,6 +7,7 @@ pub mod dynv6;
 pub mod godaddy;
 pub mod huawei;
 pub mod namecheap;
+pub mod namesilo;
 pub mod porkbun;
 pub mod traffic_route;
 pub mod trait_def;
@@ -20,6 +21,7 @@ pub use dynv6::*;
 pub use godaddy::*;
 pub use huawei::*;
 pub use namecheap::*;
+pub use namesilo::*;
 pub use porkbun::*;
 pub use traffic_route::*;
 pub use trait_def::*;
@@ -98,6 +100,9 @@ pub fn create_dns_provider(
         ))),
         ProviderConfig::Namecheap { password } => {
             Ok(Arc::new(NamecheapProvider::new(password.clone())))
+        }
+        ProviderConfig::NameSilo { api_key } => {
+            Ok(Arc::new(NameSiloProvider::new(api_key.clone())))
         }
         ProviderConfig::Callback {
             url,

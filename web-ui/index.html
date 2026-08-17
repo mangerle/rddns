@@ -973,6 +973,7 @@
                   <option value="baidu_cloud">百度智能云 (Baidu Cloud - 纯 Rust BCE 签名)</option>
                   <option value="traffic_route">火山引擎 (Volcengine TrafficRoute - 纯 Rust V4 签名)</option>
                   <option value="namecheap">Namecheap (动态 DNS 专用密码)</option>
+                  <option value="namesilo">NameSilo (API Key)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2181,6 +2182,12 @@
             <label>动态 DNS 密码 (Dynamic DNS Password)</label>
             <input type="password" id="ncPassword" placeholder="Namecheap Advanced DNS 动态解析密码" />
           </div>`;
+      } else if (type === 'namesilo') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>API Key</label>
+            <input type="password" id="nsApiKey" placeholder="NameSilo API 密钥" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2295,6 +2302,8 @@
             if (document.getElementById('volcSecretAccessKey')) document.getElementById('volcSecretAccessKey').value = task.provider.secret_access_key || '';
           } else if (task.provider.type === 'namecheap') {
             if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
+          } else if (task.provider.type === 'namesilo') {
+            if (document.getElementById('nsApiKey')) document.getElementById('nsApiKey').value = task.provider.api_key || '';
           }
         }
 
@@ -2547,6 +2556,8 @@
         providerObj.secret_access_key = document.getElementById('volcSecretAccessKey')?.value || '';
       } else if (pType === 'namecheap') {
         providerObj.password = document.getElementById('ncPassword')?.value || '';
+      } else if (pType === 'namesilo') {
+        providerObj.api_key = document.getElementById('nsApiKey')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
