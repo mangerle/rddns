@@ -2,6 +2,14 @@
 name = "rddns"
 version = "0.1.0"
 edition = "2024"
+description = "A high-performance, lightweight, and full-featured Dynamic DNS (DDNS) and notification service written in Rust"
+license = "MIT"
+readme = "README.md"
+authors = ["wangle"]
+repository = "https://github.com/mangerle/rddns"
+homepage = "https://github.com/mangerle/rddns"
+keywords = ["ddns", "dns", "cloudflare", "alidns", "dnspod"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 tokio = { version = "1.43", features = ["full"] }
