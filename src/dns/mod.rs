@@ -3,6 +3,7 @@ pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
 pub mod huawei;
+pub mod porkbun;
 pub mod trait_def;
 
 pub use alidns::*;
@@ -10,6 +11,7 @@ pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
 pub use huawei::*;
+pub use porkbun::*;
 pub use trait_def::*;
 
 use crate::config::model::ProviderConfig;
@@ -54,6 +56,13 @@ pub fn create_dns_provider(
             access_key_id.clone(),
             secret_access_key.clone(),
             endpoint.clone(),
+        ))),
+        ProviderConfig::Porkbun {
+            api_key,
+            secret_key,
+        } => Ok(Arc::new(PorkbunProvider::new(
+            api_key.clone(),
+            secret_key.clone(),
         ))),
         ProviderConfig::Callback {
             url,

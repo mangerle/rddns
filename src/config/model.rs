@@ -250,6 +250,8 @@ pub enum ProviderConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
     },
+    /// Porkbun
+    Porkbun { api_key: String, secret_key: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -299,6 +301,10 @@ impl ProviderConfig {
                 secret_access_key,
                 ..
             } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
+            Self::Porkbun {
+                api_key,
+                secret_key,
+            } => !api_key.trim().is_empty() && !secret_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
