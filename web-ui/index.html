@@ -2205,8 +2205,18 @@
       showToast('日志已清空', 'info');
     }
 
+    let activeEventSource = null;
+
     function initSSE() {
-      const es = new EventSource('/api/v1/logs/sse');
+      if (activeEventSource) {
+        try { activeEventSource.close(); } catch (_) {}
+        activeEventSource = null;
+      }
+      const auth = localStorage.getItem('rddns_auth');
+      const sseUrl = auth ? `/api/v1/logs/sse?auth=${encodeURIComponent(auth)}` : '/api/v1/logs/sse';
+      const es = new EventSource(sseUrl);
+      activeEventSource = es;
+
       es.onmessage = function(e) {
         try {
           const entry = JSON.parse(e.data);
@@ -2217,6 +2227,9 @@
       };
       es.onerror = function() {
         es.close();
+        if (activeEventSource === es) {
+          activeEventSource = null;
+        }
         setTimeout(initSSE, 3000);
       };
     }

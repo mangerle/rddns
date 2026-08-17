@@ -18,28 +18,46 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
 
     let auth_conf = config.auth.as_ref().unwrap();
 
-    // 提取 Authorization Header
+    // 1. 尝试从 Authorization Header 提取
+    let mut auth_raw = None;
     if let Some(auth_header) = req.headers().get(AUTHORIZATION)
         && let Ok(auth_str) = auth_header.to_str()
         && auth_str.starts_with("Basic ")
     {
-        let encoded = auth_str.trim_start_matches("Basic ");
-        if let Ok(decoded_bytes) = BASE64_STANDARD.decode(encoded)
-            && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
-            && let Some((user, pass)) = decoded_str.split_once(':')
-            && user == auth_conf.username
-        {
-            // 校验 bcrypt 密码哈希
-            if bcrypt::verify(pass, &auth_conf.password_hash).unwrap_or(false) {
-                return next.run(req).await;
+        auth_raw = Some(auth_str.trim_start_matches("Basic ").to_string());
+    }
+
+    // 2. 若 Header 不存在，尝试从 URL Query（例如 SSE 请求中的 ?auth=...）提取
+    if auth_raw.is_none()
+        && let Some(query) = req.uri().query()
+    {
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if k == "auth" {
+                auth_raw = Some(v.into_owned());
+                break;
             }
         }
     }
 
-    // 鉴权失败，返回 401 Unauthorized 并附带 WWW-Authenticate 头
+    // 3. 校验提取到的 Base64 编码凭据
+    if let Some(encoded) = auth_raw
+        && let Ok(decoded_bytes) = BASE64_STANDARD.decode(encoded.trim())
+        && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
+        && let Some((user, pass)) = decoded_str.split_once(':')
+        && user == auth_conf.username
+    {
+        // 校验 bcrypt 密码哈希
+        if bcrypt::verify(pass, &auth_conf.password_hash).unwrap_or(false) {
+            return next.run(req).await;
+        }
+    }
+
+    // 4. 鉴权失败：返回 401 JSON 响应（绝不附带 WWW-Authenticate 头，避免浏览器拦截弹出原生丑陋登录框）
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
-        .header("WWW-Authenticate", "Basic realm=\"rddns login\"")
-        .body(axum::body::Body::from("401 Unauthorized"))
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"success":false,"message":"未登录或登录凭据已过期，请重新登录"}"#,
+        ))
         .unwrap_or_else(|_| StatusCode::UNAUTHORIZED.into_response())
 }
