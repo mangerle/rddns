@@ -274,6 +274,12 @@ pub enum ProviderConfig {
     Spaceship { api_key: String, api_secret: String },
     /// Dynadot
     Dynadot { password: String },
+    /// Vercel DNS
+    Vercel {
+        token: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        team_id: Option<String>,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -347,6 +353,7 @@ impl ProviderConfig {
                 api_secret,
             } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
             Self::Dynadot { password } => !password.trim().is_empty(),
+            Self::Vercel { token, .. } => !token.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

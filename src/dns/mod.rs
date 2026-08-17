@@ -13,6 +13,7 @@ pub mod porkbun;
 pub mod spaceship;
 pub mod traffic_route;
 pub mod trait_def;
+pub mod vercel;
 
 pub use alidns::*;
 pub use baidu::*;
@@ -29,6 +30,7 @@ pub use porkbun::*;
 pub use spaceship::*;
 pub use traffic_route::*;
 pub use trait_def::*;
+pub use vercel::*;
 
 use crate::config::model::ProviderConfig;
 use std::sync::Arc;
@@ -118,6 +120,10 @@ pub fn create_dns_provider(
         ProviderConfig::Dynadot { password } => {
             Ok(Arc::new(DynadotProvider::new(password.clone())))
         }
+        ProviderConfig::Vercel { token, team_id } => Ok(Arc::new(VercelProvider::new(
+            token.clone(),
+            team_id.clone(),
+        ))),
         ProviderConfig::Callback {
             url,
             method,

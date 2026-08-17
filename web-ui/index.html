@@ -976,6 +976,7 @@
                   <option value="namesilo">NameSilo (API Key)</option>
                   <option value="spaceship">Spaceship (API Key / Secret)</option>
                   <option value="dynadot">Dynadot (动态 DNS 密码)</option>
+                  <option value="vercel">Vercel DNS (Access Token)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2208,6 +2209,18 @@
             <label>动态 DNS 密码 (Dynamic DNS Password)</label>
             <input type="password" id="ddPassword" placeholder="Dynadot 域名设置中的动态 DNS 密码" />
           </div>`;
+      } else if (type === 'vercel') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Vercel Token</label>
+              <input type="password" id="vcToken" placeholder="Vercel 个人 Access Token" />
+            </div>
+            <div class="form-group">
+              <label>Team ID (团队域名选填)</label>
+              <input type="text" id="vcTeamId" placeholder="team_xxxx (个人账户留空)" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2329,6 +2342,9 @@
             if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
           } else if (task.provider.type === 'dynadot') {
             if (document.getElementById('ddPassword')) document.getElementById('ddPassword').value = task.provider.password || '';
+          } else if (task.provider.type === 'vercel') {
+            if (document.getElementById('vcToken')) document.getElementById('vcToken').value = task.provider.token || '';
+            if (document.getElementById('vcTeamId')) document.getElementById('vcTeamId').value = task.provider.team_id || '';
           }
         }
 
@@ -2588,6 +2604,10 @@
         providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
       } else if (pType === 'dynadot') {
         providerObj.password = document.getElementById('ddPassword')?.value || '';
+      } else if (pType === 'vercel') {
+        providerObj.token = document.getElementById('vcToken')?.value || '';
+        const tid = document.getElementById('vcTeamId')?.value?.trim();
+        if (tid) providerObj.team_id = tid;
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
