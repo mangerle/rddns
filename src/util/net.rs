@@ -73,16 +73,9 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
 pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || !is_global_unicast_ipv6(v6)
-        }
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || !is_global_unicast_ipv6(v6),
     }
 }
 
@@ -236,15 +229,29 @@ mod tests {
 
     #[test]
     fn test_is_private_or_loopback() {
-        assert!(is_private_or_loopback(&IpAddr::from_str("127.0.0.1").unwrap()));
-        assert!(is_private_or_loopback(&IpAddr::from_str("192.168.1.100").unwrap()));
-        assert!(is_private_or_loopback(&IpAddr::from_str("10.0.0.1").unwrap()));
-        assert!(is_private_or_loopback(&IpAddr::from_str("172.16.0.1").unwrap()));
+        assert!(is_private_or_loopback(
+            &IpAddr::from_str("127.0.0.1").unwrap()
+        ));
+        assert!(is_private_or_loopback(
+            &IpAddr::from_str("192.168.1.100").unwrap()
+        ));
+        assert!(is_private_or_loopback(
+            &IpAddr::from_str("10.0.0.1").unwrap()
+        ));
+        assert!(is_private_or_loopback(
+            &IpAddr::from_str("172.16.0.1").unwrap()
+        ));
         assert!(is_private_or_loopback(&IpAddr::from_str("::1").unwrap()));
-        assert!(is_private_or_loopback(&IpAddr::from_str("fe80::1").unwrap()));
+        assert!(is_private_or_loopback(
+            &IpAddr::from_str("fe80::1").unwrap()
+        ));
 
         // 公网 IP
-        assert!(!is_private_or_loopback(&IpAddr::from_str("114.114.114.114").unwrap()));
-        assert!(!is_private_or_loopback(&IpAddr::from_str("240e:390:800:100::1").unwrap()));
+        assert!(!is_private_or_loopback(
+            &IpAddr::from_str("114.114.114.114").unwrap()
+        ));
+        assert!(!is_private_or_loopback(
+            &IpAddr::from_str("240e:390:800:100::1").unwrap()
+        ));
     }
 }

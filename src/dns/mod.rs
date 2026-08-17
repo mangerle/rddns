@@ -2,12 +2,14 @@ pub mod alidns;
 pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
+pub mod huawei;
 pub mod trait_def;
 
 pub use alidns::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
+pub use huawei::*;
 pub use trait_def::*;
 
 use crate::config::model::ProviderConfig;
@@ -43,9 +45,16 @@ pub fn create_dns_provider(
             secret_id.clone(),
             secret_key.clone(),
         )?)),
-        ProviderConfig::HuaweiCloud { .. } => Err(DnsProviderError::Other(
-            "华为云驱动将在后续扩展版本中支持".to_string(),
-        )),
+        ProviderConfig::HuaweiCloud {
+            access_key_id,
+            secret_access_key,
+            endpoint,
+            ..
+        } => Ok(Arc::new(HuaweiDnsProvider::new(
+            access_key_id.clone(),
+            secret_access_key.clone(),
+            endpoint.clone(),
+        ))),
         ProviderConfig::Callback {
             url,
             method,

@@ -245,7 +245,8 @@ pub enum ProviderConfig {
     HuaweiCloud {
         access_key_id: String,
         secret_access_key: String,
-        region: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
     },

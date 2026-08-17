@@ -38,14 +38,6 @@ impl ParsedDomain {
 /// 支持格式:
 /// - "example.com" -> sub: "@", root: "example.com"
 /// - "www.example.com" -> sub: "www", root: "example.com"
-/// - "sub:example.com" -> sub: "sub", root: "example.com"
-/// - "@:example.com" -> sub: "@", root: "example.com"
-/// - "sub.dev:example.com" -> sub: "sub.dev", root: "example.com"
-/// - "sub:example.com?line=telecom" -> 带自定义参数
-/// 解析用户配置的单个域名字符串
-/// 支持格式:
-/// - "example.com" -> sub: "@", root: "example.com"
-/// - "www.example.com" -> sub: "www", root: "example.com"
 /// - "*.example.com" -> sub: "*", root: "example.com"
 /// - "sub:example.com" -> sub: "sub", root: "example.com"
 /// - "https://www.example.com/" -> 自动清洗为 sub: "www", root: "example.com"
