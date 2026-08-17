@@ -7,8 +7,6 @@ pub mod dispatcher;
 #[allow(unused_imports)]
 pub mod feishu;
 #[allow(unused_imports)]
-pub mod ilink;
-#[allow(unused_imports)]
 pub mod mail;
 #[allow(unused_imports)]
 pub mod pushplus;

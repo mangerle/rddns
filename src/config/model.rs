@@ -308,9 +308,6 @@ pub struct NotificationConfig {
     #[serde(default = "default_true")]
     pub on_failure: bool,
 
-    /// 微信官方 iLink Bot 配置
-    pub ilink: Option<ILinkConfig>,
-
     /// 微信公众号原生模板消息配置
     pub wechat_official: Option<WechatOfficialConfig>,
 
@@ -362,15 +359,6 @@ pub struct WechatOfficialConfig {
 
 fn default_true() -> bool {
     true
-}
-
-/// 微信官方 iLink Bot 配置
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ILinkConfig {
-    pub enabled: bool,
-    pub endpoint: String,
-    pub bot_token: String,
-    pub to_user_id: String,
 }
 
 /// 企业微信配置

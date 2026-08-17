@@ -2,13 +2,13 @@ use crate::config::model::NotificationConfig;
 use crate::notifier::bark::BarkNotifier;
 use crate::notifier::dingtalk::DingTalkNotifier;
 use crate::notifier::feishu::FeishuNotifier;
-use crate::notifier::ilink::ILinkNotifier;
 use crate::notifier::mail::EmailNotifier;
 use crate::notifier::pushplus::PushPlusNotifier;
 use crate::notifier::serverchan::ServerChanNotifier;
 use crate::notifier::telegram::TelegramNotifier;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus, Notifier};
 use crate::notifier::webhook::CustomWebhookNotifier;
+use crate::notifier::wechat_official::WechatOfficialNotifier;
 use crate::notifier::wecom::WeComNotifier;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -35,17 +35,10 @@ impl NotificationDispatcher {
     pub fn new(config: NotificationConfig) -> Self {
         let mut notifiers: Vec<Arc<dyn Notifier>> = Vec::new();
 
-        if let Some(ref ilink) = config.ilink
-            && ilink.enabled
-        {
-            notifiers.push(Arc::new(ILinkNotifier::new(ilink.clone())));
-        }
         if let Some(ref wx) = config.wechat_official
             && wx.enabled
         {
-            notifiers.push(Arc::new(
-                crate::notifier::wechat_official::WechatOfficialNotifier::new(wx.clone()),
-            ));
+            notifiers.push(Arc::new(WechatOfficialNotifier::new(wx.clone())));
         }
         if let Some(ref wecom) = config.wecom
             && wecom.enabled

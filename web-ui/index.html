@@ -63,7 +63,7 @@
         <div class="logo-badge">rddns</div>
         <div>
           <h2>动态域名解析服务</h2>
-          <p style="font-size: 0.8rem; color: var(--text-muted);">高性能 Rust 实现 | 微信 iLink & 企微推送 | 多服务商支持</p>
+          <p style="font-size: 0.8rem; color: var(--text-muted);">高性能 Rust 实现 | 微信公众号 & 企微推送 | 多服务商支持</p>
         </div>
       </div>
       <div class="actions">
@@ -74,7 +74,7 @@
 
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('tab-dns')">DNS 服务商与解析</button>
-      <button class="tab-btn" onclick="switchTab('tab-notify')">通知与告警 (含微信 iLink)</button>
+      <button class="tab-btn" onclick="switchTab('tab-notify')">通知与告警 (含微信推送)</button>
       <button class="tab-btn" onclick="switchTab('tab-system')">系统与安全配置</button>
     </div>
 
@@ -190,27 +190,6 @@
         </div>
       </div>
 
-      <!-- 微信官方 iLink -->
-      <div class="card">
-        <div class="card-title">
-          <span>微信官方 iLink Bot (个人微信直达)</span>
-          <input type="checkbox" id="ilinkEnable" />
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>iLink 接入 Endpoint</label>
-            <input type="text" id="ilinkEndpoint" placeholder="https://ilinkai.weixin.qq.com" />
-          </div>
-          <div class="form-group">
-            <label>目标微信 User ID / OpenID</label>
-            <input type="text" id="ilinkToUser" placeholder="微信用户唯一标识" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Bot Token / 会话凭证</label>
-          <input type="password" id="ilinkToken" placeholder="iLink 授权 Token" />
-        </div>
-      </div>
 
       <!-- 微信公众号官方原生模板消息 -->
       <div class="card">
@@ -566,12 +545,6 @@
         document.getElementById('notifyOnSuccess').checked = notif.on_success;
         document.getElementById('notifyOnFailure').checked = notif.on_failure;
 
-        if (notif.ilink) {
-          document.getElementById('ilinkEnable').checked = notif.ilink.enabled;
-          document.getElementById('ilinkEndpoint').value = notif.ilink.endpoint || '';
-          document.getElementById('ilinkToUser').value = notif.ilink.to_user_id || '';
-          document.getElementById('ilinkToken').value = notif.ilink.bot_token || '';
-        }
         if (notif.wechat_official) {
           document.getElementById('wxOfficialEnable').checked = notif.wechat_official.enabled;
           document.getElementById('wxOfficialAppId').value = notif.wechat_official.app_id || '';
@@ -654,12 +627,6 @@
         on_ip_change_only: document.getElementById('notifyOnIpChangeOnly').checked,
         on_success: document.getElementById('notifyOnSuccess').checked,
         on_failure: document.getElementById('notifyOnFailure').checked,
-        ilink: {
-          enabled: document.getElementById('ilinkEnable').checked,
-          endpoint: document.getElementById('ilinkEndpoint').value || "https://ilinkai.weixin.qq.com",
-          to_user_id: document.getElementById('ilinkToUser').value,
-          bot_token: document.getElementById('ilinkToken').value
-        },
         wechat_official: {
           enabled: document.getElementById('wxOfficialEnable').checked,
           app_id: document.getElementById('wxOfficialAppId').value.trim(),
