@@ -75,65 +75,76 @@
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
+    html, body {
       background-color: var(--bg);
       color: var(--text);
       font-family: var(--font-sans);
       line-height: 1.5;
       transition: background-color 0.25s ease, color 0.25s ease;
-      min-height: 100vh;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
     }
 
     /* 整体分栏布局 */
     .app-layout {
       display: flex;
-      min-height: 100vh;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
     }
 
-    /* 左侧边栏 (Sidebar) */
+    /* 左侧边栏 (Sidebar - 固定全高) */
     .sidebar {
-      width: 260px;
+      width: 270px;
+      height: 100vh;
       background-color: var(--bg-sidebar);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 24px 16px;
+      padding: 20px 14px;
       flex-shrink: 0;
+      overflow-y: auto;
       transition: all 0.25s ease;
     }
 
     .sidebar-brand {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 0 8px 24px 8px;
+      gap: 10px;
+      padding: 0 4px 18px 4px;
       border-bottom: 1px solid var(--border);
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
     .brand-logo {
       background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
       color: #ffffff;
       font-weight: 800;
-      font-size: 1.15rem;
+      font-size: 1.05rem;
       letter-spacing: -0.5px;
-      padding: 7px 12px;
+      padding: 6px 10px;
       border-radius: var(--radius);
       box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
     }
     .brand-title {
-      font-size: 1.1rem;
+      font-size: 1.05rem;
       font-weight: 700;
       color: var(--text);
       letter-spacing: -0.3px;
+      white-space: nowrap;
+      line-height: 1.2;
     }
     .brand-desc {
       font-size: 0.72rem;
       color: var(--text-muted);
-      margin-top: 2px;
+      margin-top: 3px;
+      white-space: nowrap;
+      line-height: 1.2;
     }
 
     /* 侧边栏导航链接 */
@@ -181,15 +192,17 @@
       font-weight: 500;
     }
 
-    /* 右侧主内容区 */
+    /* 右侧主内容区 (固定全高并承载内联滚动) */
     .main-wrapper {
       flex: 1;
+      height: 100vh;
       display: flex;
       flex-direction: column;
       min-width: 0;
+      overflow: hidden;
     }
 
-    /* 顶部导航顶栏 */
+    /* 顶部导航顶栏 (固定在顶部) */
     .top-header {
       background-color: var(--bg-surface);
       border-bottom: 1px solid var(--border);
@@ -198,6 +211,8 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
+      flex-shrink: 0;
+      z-index: 10;
     }
     .page-title h2 {
       font-size: 1.15rem;
@@ -218,11 +233,29 @@
       gap: 10px;
     }
 
-    /* 内容承载容器 */
+    /* 内容承载容器 (独立纵向滚动) */
     .content-body {
+      flex: 1;
+      overflow-y: auto;
       padding: 28px 32px 48px 32px;
-      max-width: 1080px;
       width: 100%;
+      min-height: 0;
+    }
+
+    /* 现代极简内联滚动条美化 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-dim);
     }
 
     /* 矢量图标通用样式 */
@@ -728,7 +761,7 @@
       <header class="top-header">
         <div class="page-title">
           <h2 id="currentSectionTitle">DNS 服务商与解析</h2>
-          <p>配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标</p>
+          <p id="currentSectionDesc">配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标</p>
         </div>
         <div class="header-actions">
           <button class="btn-theme" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">
@@ -912,28 +945,24 @@
                 </span>
                 <span>全局通知触发策略</span>
               </div>
-              <button class="btn-primary btn-sm" onclick="testNotify()">
+              <button class="btn-primary btn-sm" onclick="testNotifyAll()">
                 <span class="icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="22" y1="2" x2="11" y2="13"></line>
                     <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                   </svg>
                 </span>
-                <span>发送测试通知</span>
+                <span>测试全部已启用渠道</span>
               </button>
             </div>
-            <div class="grid-3">
-              <label class="switch-wrapper">
-                <input type="checkbox" id="notifyOnIpChangeOnly" class="toggle-switch" checked />
-                <span class="switch-label">仅 IP 发生变动时通知</span>
-              </label>
+            <div class="grid-2">
               <label class="switch-wrapper">
                 <input type="checkbox" id="notifyOnSuccess" class="toggle-switch" checked />
-                <span class="switch-label">同步成功时通知</span>
+                <span class="switch-label">IP 变动并同步成功时通知</span>
               </label>
               <label class="switch-wrapper">
                 <input type="checkbox" id="notifyOnFailure" class="toggle-switch" checked />
-                <span class="switch-label">同步失败时告警</span>
+                <span class="switch-label">同步失败或异常时告警</span>
               </label>
             </div>
           </div>
@@ -949,9 +978,20 @@
                 </span>
                 <span>微信公众号 (官方原生模板消息直推)</span>
               </div>
-              <label class="switch-wrapper">
-                <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
-              </label>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('wechat_official')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
+                </label>
+              </div>
             </div>
             <div class="grid-2">
               <div class="form-group">
@@ -1007,9 +1047,20 @@
                 </span>
                 <span>企业微信 (群机器人 / 自建应用推送)</span>
               </div>
-              <label class="switch-wrapper">
-                <input type="checkbox" id="wecomEnable" class="toggle-switch" />
-              </label>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('wecom')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="wecomEnable" class="toggle-switch" />
+                </label>
+              </div>
             </div>
             <div class="grid-2">
               <div class="form-group">
@@ -1058,9 +1109,20 @@
                 </span>
                 <span>SMTP 邮件通知 (支持常用服务商一键配置)</span>
               </div>
-              <label class="switch-wrapper">
-                <input type="checkbox" id="emailEnable" class="toggle-switch" />
-              </label>
+              <div class="card-actions">
+                <button class="btn-outline btn-sm" onclick="testSingleNotify('email')">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>测试当前渠道</span>
+                </button>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="emailEnable" class="toggle-switch" />
+                </label>
+              </div>
             </div>
             <div class="grid-2">
               <div class="form-group">
@@ -1272,10 +1334,19 @@
     });
 
     // 侧边栏导航切换
-    const SECTION_TITLES = {
-      'tab-dns': 'DNS 服务商与解析',
-      'tab-notify': '通知与告警推送',
-      'tab-system': '系统与安全设置'
+    const SECTION_INFO = {
+      'tab-dns': {
+        title: 'DNS 服务商与解析',
+        desc: '配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标'
+      },
+      'tab-notify': {
+        title: '通知与告警推送',
+        desc: '配置微信公众号、企业微信、SMTP 邮件等通道与告警触发策略'
+      },
+      'tab-system': {
+        title: '系统与安全设置',
+        desc: '配置全局轮询间隔、安全访问控制与 Web 登录身份认证'
+      }
     };
 
     function switchNav(tabId) {
@@ -1289,9 +1360,15 @@
       if (navItem) navItem.classList.add('active');
       
       const titleEl = document.getElementById('currentSectionTitle');
-      if (titleEl && SECTION_TITLES[tabId]) {
-        titleEl.innerText = SECTION_TITLES[tabId];
+      const descEl = document.getElementById('currentSectionDesc');
+      if (SECTION_INFO[tabId]) {
+        if (titleEl) titleEl.innerText = SECTION_INFO[tabId].title;
+        if (descEl) descEl.innerText = SECTION_INFO[tabId].desc;
       }
+
+      // 切换标签页时将内容区滚动条重置回顶部
+      const contentBody = document.querySelector('.content-body');
+      if (contentBody) contentBody.scrollTop = 0;
     }
 
     // 常用邮箱预设数据字典
@@ -1545,9 +1622,8 @@
       // Notifications
       if (conf.notifications) {
         const notif = conf.notifications;
-        document.getElementById('notifyOnIpChangeOnly').checked = notif.on_ip_change_only;
-        document.getElementById('notifyOnSuccess').checked = notif.on_success;
-        document.getElementById('notifyOnFailure').checked = notif.on_failure;
+        document.getElementById('notifyOnSuccess').checked = notif.on_success !== false;
+        document.getElementById('notifyOnFailure').checked = notif.on_failure !== false;
 
         if (notif.wechat_official) {
           document.getElementById('wxOfficialEnable').checked = notif.wechat_official.enabled;
@@ -1593,7 +1669,7 @@
     // 收集通知配置
     function collectNotificationConfig() {
       return {
-        on_ip_change_only: document.getElementById('notifyOnIpChangeOnly').checked,
+        on_ip_change_only: true,
         on_success: document.getElementById('notifyOnSuccess').checked,
         on_failure: document.getElementById('notifyOnFailure').checked,
         wechat_official: {
@@ -1782,8 +1858,104 @@
       }
     }
 
-    // 发送测试通知
-    async function testNotify() {
+    // 发送单项渠道测试通知
+    async function testSingleNotify(channelKey) {
+      let notifPayload = {
+        on_ip_change_only: false,
+        on_success: true,
+        on_failure: true
+      };
+
+      if (channelKey === 'wechat_official') {
+        const appId = document.getElementById('wxOfficialAppId').value.trim();
+        const appSecret = document.getElementById('wxOfficialAppSecret').value.trim();
+        const templateId = document.getElementById('wxOfficialTemplateId').value.trim();
+        const toUser = document.getElementById('wxOfficialToUser').value.trim();
+        if (!appId || !appSecret || !templateId || !toUser) {
+          showToast('请先完整填写微信公众号 AppID、AppSecret、模板ID 与 接收者 OpenID！', 'error');
+          return;
+        }
+        notifPayload.wechat_official = {
+          enabled: true,
+          app_id: appId,
+          app_secret: appSecret,
+          template_id: templateId,
+          to_user: toUser,
+          url: document.getElementById('wxOfficialUrl').value.trim() || null,
+          template_data: document.getElementById('wxOfficialTmplData').value.trim() || null,
+        };
+      } else if (channelKey === 'wecom') {
+        const mode = document.getElementById('wecomMode').value;
+        if (mode === 'bot') {
+          const webhookUrl = document.getElementById('wecomWebhookUrl').value.trim();
+          if (!webhookUrl) {
+            showToast('请先填写企业微信群机器人 Webhook URL！', 'error');
+            return;
+          }
+          notifPayload.wecom = {
+            enabled: true,
+            mode: 'bot',
+            webhook_url: webhookUrl
+          };
+        } else {
+          const corpId = document.getElementById('wecomCorpId').value.trim();
+          const corpSecret = document.getElementById('wecomCorpSecret').value.trim();
+          const agentId = parseInt(document.getElementById('wecomAgentId').value);
+          if (!corpId || !corpSecret || !agentId) {
+            showToast('请先完整填写企业微信 CorpID、CorpSecret 与 AgentID！', 'error');
+            return;
+          }
+          notifPayload.wecom = {
+            enabled: true,
+            mode: 'app',
+            corp_id: corpId,
+            corp_secret: corpSecret,
+            agent_id: agentId,
+            to_user: document.getElementById('wecomToUser').value.trim() || '@all'
+          };
+        }
+      } else if (channelKey === 'email') {
+        const smtpServer = document.getElementById('emailSmtpServer').value.trim();
+        const username = document.getElementById('emailUsername').value.trim();
+        const password = document.getElementById('emailPassword').value.trim();
+        const fromAddress = document.getElementById('emailFrom').value.trim();
+        const toAddresses = (document.getElementById('emailTo').value || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!smtpServer || !username || !password || !fromAddress || toAddresses.length === 0) {
+          showToast('请先完整填写 SMTP 服务器、账号、密码/授权码、发件人及收件人邮箱！', 'error');
+          return;
+        }
+        notifPayload.email = {
+          enabled: true,
+          smtp_server: smtpServer,
+          smtp_port: parseInt(document.getElementById('emailSmtpPort').value) || 465,
+          use_ssl: document.getElementById('emailUseSsl').checked,
+          username,
+          password,
+          from_address: fromAddress,
+          to_addresses: toAddresses
+        };
+      }
+
+      showToast('正在发送测试通知...', 'info');
+      try {
+        const res = await fetch('/api/v1/test/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(notifPayload)
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast('测试消息已发出，请查看目标平台接收情况！', 'success');
+        } else {
+          showToast('发送失败: ' + json.message, 'error');
+        }
+      } catch (e) {
+        showToast('请求异常: ' + e, 'error');
+      }
+    }
+
+    // 发送全部已启用渠道的测试通知
+    async function testNotifyAll() {
       await saveConfig();
       const notifPayload = collectNotificationConfig();
       try {
@@ -1794,7 +1966,7 @@
         });
         const json = await res.json();
         if (json.success) {
-          showToast('测试通知已发出，请查看您的微信/邮件/机器人！', 'success');
+          showToast('已向全部已启用的通知渠道发送测试消息！', 'success');
         } else {
           showToast('发送失败: ' + json.message, 'error');
         }
