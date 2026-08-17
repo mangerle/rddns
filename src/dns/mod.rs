@@ -15,6 +15,7 @@ pub mod name_com;
 pub mod namecheap;
 pub mod namesilo;
 pub mod nowcn;
+pub mod nsone;
 pub mod porkbun;
 pub mod rainyun;
 pub mod spaceship;
@@ -40,6 +41,7 @@ pub use name_com::*;
 pub use namecheap::*;
 pub use namesilo::*;
 pub use nowcn::*;
+pub use nsone::*;
 pub use porkbun::*;
 pub use rainyun::*;
 pub use spaceship::*;
@@ -191,6 +193,7 @@ pub fn create_dns_provider(
             id.clone(),
             secret.clone(),
         )?)),
+        ProviderConfig::NsOne { api_key } => Ok(Arc::new(NsOneProvider::new(api_key.clone())?)),
         ProviderConfig::Callback {
             url,
             method,

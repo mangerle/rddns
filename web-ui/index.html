@@ -987,6 +987,7 @@
                   <option value="nowcn">时代互联 (NowCN AccessID / Key)</option>
                   <option value="eranet">时代互联国际版 (Eranet AccessID / Key)</option>
                   <option value="tnethk">TNetHK (AccessID / Key)</option>
+                  <option value="nsone">IBM NS1 Connect (API Key)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2349,6 +2350,12 @@
               <input type="password" id="tnetSecret" placeholder="TNetHK API 密钥" />
             </div>
           </div>`;
+      } else if (type === 'nsone') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>API Key (Secret)</label>
+            <input type="password" id="nsoneApiKey" placeholder="IBM NS1 Connect API Key" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2503,6 +2510,8 @@
           } else if (task.provider.type === 'tnethk') {
             if (document.getElementById('tnetId')) document.getElementById('tnetId').value = task.provider.id || '';
             if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
+          } else if (task.provider.type === 'nsone') {
+            if (document.getElementById('nsoneApiKey')) document.getElementById('nsoneApiKey').value = task.provider.api_key || '';
           }
         }
 
@@ -2798,6 +2807,8 @@
       } else if (pType === 'tnethk') {
         providerObj.id = document.getElementById('tnetId')?.value || '';
         providerObj.secret = document.getElementById('tnetSecret')?.value || '';
+      } else if (pType === 'nsone') {
+        providerObj.api_key = document.getElementById('nsoneApiKey')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

@@ -316,6 +316,8 @@ pub enum ProviderConfig {
     Eranet { id: String, secret: String },
     /// TNetHK
     TNetHk { id: String, secret: String },
+    /// IBM NS1 Connect
+    NsOne { api_key: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -415,6 +417,7 @@ impl ProviderConfig {
             Self::NowCn { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::Eranet { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::TNetHk { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
+            Self::NsOne { api_key } => !api_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
