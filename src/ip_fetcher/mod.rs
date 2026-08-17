@@ -24,12 +24,15 @@ pub fn create_ip_fetcher(config: &IpFetchConfig) -> Option<Arc<dyn IpFetcher>> {
         ))),
         IpSourceType::NetInterface => {
             if let Some(ref iface) = config.net_interface {
-                Some(Arc::new(NetInterfaceIpFetcher::new(
-                    iface.clone(),
-                    config.regex.clone(),
-                )))
+                if !iface.trim().is_empty() {
+                    Some(Arc::new(NetInterfaceIpFetcher::new(
+                        iface.trim().to_string(),
+                        config.regex.clone(),
+                    )))
+                } else {
+                    None
+                }
             } else {
-                tracing::warn!("配置为网卡获取但未指定网卡名称");
                 None
             }
         }

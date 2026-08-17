@@ -108,9 +108,9 @@ pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> 
         }
     }
 
-    // 默认按照空格/换行/逗号分词提取
-    for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == '\'') {
-        let cleaned = word.trim().trim_matches(|c| c == '[' || c == ']');
+    // 默认按照空格/换行/逗号/JSON括号分词提取
+    for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == '\'' || c == '{' || c == '}' || c == '<' || c == '>') {
+        let cleaned = word.trim().trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '{' || c == '}');
         if let Ok(ip) = cleaned.parse::<Ipv6Addr>() {
             return Some(ip);
         }

@@ -43,17 +43,17 @@ impl IpFetcher for UrlIpFetcher {
                             tracing::debug!("从接口 {} 成功获取到 IPv4: {}", endpoint, ip);
                             return Ok(Some(ip));
                         } else {
-                            tracing::warn!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
+                            tracing::debug!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
                             last_err = Some(FetchError::NoValidIp(body));
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("读取接口 {} 响应体失败: {}", endpoint, e);
+                        tracing::debug!("读取接口 {} 响应体失败: {}", endpoint, e);
                         last_err = Some(FetchError::Http(e));
                     }
                 },
                 Err(e) => {
-                    tracing::warn!("请求接口 {} 失败: {}", endpoint, e);
+                    tracing::debug!("请求接口 {} 失败: {}", endpoint, e);
                     last_err = Some(FetchError::Http(e));
                 }
             }
@@ -76,17 +76,17 @@ impl IpFetcher for UrlIpFetcher {
                             tracing::debug!("从接口 {} 成功获取到 IPv6: {}", endpoint, ip);
                             return Ok(Some(ip));
                         } else {
-                            tracing::warn!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
+                            tracing::debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
                             last_err = Some(FetchError::NoValidIp(body));
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("读取接口 {} 响应体失败: {}", endpoint, e);
+                        tracing::debug!("读取接口 {} 响应体失败: {}", endpoint, e);
                         last_err = Some(FetchError::Http(e));
                     }
                 },
                 Err(e) => {
-                    tracing::warn!("请求接口 {} 失败: {}", endpoint, e);
+                    tracing::debug!("请求接口 {} 失败: {}", endpoint, e);
                     last_err = Some(FetchError::Http(e));
                 }
             }

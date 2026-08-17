@@ -118,6 +118,14 @@ pub async fn manual_sync_handler(State(state): State<AppState>) -> impl IntoResp
     Json(ApiResponse::ok("已触发后台全量同步"))
 }
 
+/// 测试 IP 提取器配置请求体
+#[derive(Debug, Deserialize)]
+pub struct TestIpRequest {
+    pub ip_type: Option<String>,
+    #[serde(flatten)]
+    pub config: IpFetchConfig,
+}
+
 /// 测试 IP 提取器配置
 #[derive(Debug, Serialize)]
 pub struct TestIpResult {
@@ -126,14 +134,30 @@ pub struct TestIpResult {
 }
 
 pub async fn test_ip_handler(
-    Json(config): Json<IpFetchConfig>,
+    Json(payload): Json<TestIpRequest>,
 ) -> impl IntoResponse {
+    let config = payload.config;
     if let Some(fetcher) = create_ip_fetcher(&config) {
-        let ipv4 = fetcher.fetch_ipv4().await.ok().flatten().map(|ip| ip.to_string());
-        let ipv6 = fetcher.fetch_ipv6().await.ok().flatten().map(|ip| ip.to_string());
+        let is_v4_test = payload.ip_type.as_deref() == Some("ipv4");
+        let is_v6_test = payload.ip_type.as_deref() == Some("ipv6");
+
+        let ipv4 = if is_v6_test {
+            None
+        } else {
+            fetcher.fetch_ipv4().await.ok().flatten().map(|ip| ip.to_string())
+        };
+
+        let ipv6 = if is_v4_test {
+            None
+        } else {
+            fetcher.fetch_ipv6().await.ok().flatten().map(|ip| ip.to_string())
+        };
+
         Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 }))
     } else {
-        Json(ApiResponse::<TestIpResult>::err("无法创建 IP 提取器，请检查配置".to_string()))
+        Json(ApiResponse::<TestIpResult>::err(
+            "无法创建 IP 提取器，请检查是否填写了网卡名称或有效的 URL".to_string(),
+        ))
     }
 }
 

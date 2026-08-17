@@ -421,9 +421,12 @@
       const sourceType = document.getElementById(`${vType}SourceType`).value;
       const fieldContainer = document.getElementById(`${vType}DynamicField`);
       if (sourceType === 'url') {
+        const defaultUrls = vType === 'ipv4'
+          ? 'https://api.ipify.org, https://myip.ipip.net/ip, https://ddns.oray.com/checkip'
+          : 'https://api64.ipify.org, https://speed.neu6.edu.cn/getIP.php, https://6.ipw.cn';
         fieldContainer.innerHTML = `
           <label>查询 URL (多个用英文逗号分隔)</label>
-          <input type="text" id="${vType}Urls" value="${vType === 'ipv4' ? 'https://api.ipify.org, https://myip.ipip.net/ip' : 'https://api64.ipify.org, https://speed.neu6.edu.cn/getIP.php'}" />`;
+          <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
       } else if (sourceType === 'net_interface') {
         fieldContainer.innerHTML = `
           <label>网卡名称 (例如 eth0, WLAN)</label>
@@ -686,6 +689,7 @@
     async function testIp(type) {
       const urls = (document.getElementById(`${type}Urls`)?.value || '').split(',').map(s => s.trim()).filter(Boolean);
       const payload = {
+        ip_type: type,
         enabled: true,
         source_type: document.getElementById(`${type}SourceType`).value,
         url_endpoints: urls,
@@ -703,7 +707,11 @@
         const json = await res.json();
         if (json.success) {
           const val = type === 'ipv4' ? json.data.ipv4 : json.data.ipv6;
-          alert(`探测到当前 ${type.toUpperCase()} 为: ${val || '未检测到合法 IP'}`);
+          if (val) {
+            alert(`✅ 成功探测到当前 ${type.toUpperCase()} 地址为:\n${val}`);
+          } else {
+            alert(`⚠️ 未能从当前配置的接口中获取到有效的 ${type.toUpperCase()} 地址，请检查接口连通性或本机是否具备公网 ${type.toUpperCase()}`);
+          }
         } else {
           alert('测试失败: ' + json.message);
         }
