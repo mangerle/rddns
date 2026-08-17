@@ -6,6 +6,7 @@ pub mod cloudns;
 pub mod dnspod;
 pub mod dynadot;
 pub mod dynv6;
+pub mod gcore;
 pub mod godaddy;
 pub mod huawei;
 pub mod namecheap;
@@ -25,6 +26,7 @@ pub use cloudns::*;
 pub use dnspod::*;
 pub use dynadot::*;
 pub use dynv6::*;
+pub use gcore::*;
 pub use godaddy::*;
 pub use huawei::*;
 pub use namecheap::*;
@@ -139,6 +141,7 @@ pub fn create_dns_provider(
             auth_id.clone(),
             auth_password.clone(),
         ))),
+        ProviderConfig::Gcore { api_key } => Ok(Arc::new(GcoreProvider::new(api_key.clone()))),
         ProviderConfig::Callback {
             url,
             method,

@@ -979,6 +979,7 @@
                   <option value="vercel">Vercel DNS (Access Token)</option>
                   <option value="rainyun">雨云 (RainYun API-Key)</option>
                   <option value="cloudns">ClouDNS (Auth-ID / Password)</option>
+                  <option value="gcore">Gcore DNS (Permanent API-Key)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2247,6 +2248,12 @@
               <input type="password" id="cldAuthPassword" placeholder="ClouDNS API 密码" />
             </div>
           </div>`;
+      } else if (type === 'gcore') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>API Key (Permanent API-Key)</label>
+            <input type="password" id="gcApiKey" placeholder="Gcore 永久 API 令牌 (APIKey xxx)" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2377,6 +2384,8 @@
           } else if (task.provider.type === 'cloudns') {
             if (document.getElementById('cldAuthId')) document.getElementById('cldAuthId').value = task.provider.auth_id || '';
             if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
+          } else if (task.provider.type === 'gcore') {
+            if (document.getElementById('gcApiKey')) document.getElementById('gcApiKey').value = task.provider.api_key || '';
           }
         }
 
@@ -2647,6 +2656,8 @@
       } else if (pType === 'cloudns') {
         providerObj.auth_id = document.getElementById('cldAuthId')?.value || '';
         providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
+      } else if (pType === 'gcore') {
+        providerObj.api_key = document.getElementById('gcApiKey')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

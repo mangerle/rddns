@@ -291,6 +291,8 @@ pub enum ProviderConfig {
         auth_id: String,
         auth_password: String,
     },
+    /// Gcore DNS
+    Gcore { api_key: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -370,6 +372,7 @@ impl ProviderConfig {
                 auth_id,
                 auth_password,
             } => !auth_id.trim().is_empty() && !auth_password.trim().is_empty(),
+            Self::Gcore { api_key } => !api_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
