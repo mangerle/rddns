@@ -1750,7 +1750,7 @@
 
       const payload = {
         config: {
-          listen_addr: globalConfig?.listen_addr || "127.0.0.1:9876",
+          listen_port: globalConfig?.listen_port || 9876,
           interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
           cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
           not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,

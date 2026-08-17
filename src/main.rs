@@ -87,11 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 处理命令行参数覆盖
-    if args.listen.is_some() || args.frequency.is_some() {
+    if args.frequency.is_some() {
         let mut conf = (*config_manager.get_config()).clone();
-        if let Some(l) = args.listen {
-            conf.listen_addr = l;
-        }
         if let Some(f) = args.frequency {
             conf.interval_secs = f;
         }
@@ -109,7 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. 初始化 Web 管理服务器
     let web_handle = if !args.no_web {
-        let web_server = WebServer::new(config_manager.clone(), trigger_tx, log_buffer);
+        let web_server =
+            WebServer::new(config_manager.clone(), trigger_tx, log_buffer, args.listen);
         let web_token = cancel_token.clone();
         Some(tokio::spawn(async move {
             if let Err(e) = web_server.run(web_token).await {

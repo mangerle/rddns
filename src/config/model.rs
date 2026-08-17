@@ -4,9 +4,9 @@ use std::collections::HashMap;
 /// 应用全局配置结构
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
-    /// Web 服务监听地址，默认 "127.0.0.1:9876"
-    #[serde(default = "default_listen_addr")]
-    pub listen_addr: String,
+    /// Web 服务监听端口，默认 9876
+    #[serde(default = "default_listen_port")]
+    pub listen_port: u16,
 
     /// 全局同步检查间隔时间（秒），默认 300 秒（5分钟）
     #[serde(default = "default_interval_secs")]
@@ -32,8 +32,8 @@ pub struct AppConfig {
     pub notifications: NotificationConfig,
 }
 
-fn default_listen_addr() -> String {
-    "127.0.0.1:9876".to_string()
+fn default_listen_port() -> u16 {
+    9876
 }
 
 fn default_interval_secs() -> u64 {
@@ -51,7 +51,7 @@ fn default_not_allow_wan_access() -> bool {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            listen_addr: default_listen_addr(),
+            listen_port: default_listen_port(),
             interval_secs: default_interval_secs(),
             cache_times: default_cache_times(),
             not_allow_wan_access: default_not_allow_wan_access(),

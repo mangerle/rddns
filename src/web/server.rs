@@ -21,6 +21,7 @@ pub struct WebServer {
     config_manager: Arc<ConfigManager>,
     trigger_sender: mpsc::Sender<()>,
     log_buffer: LogBuffer,
+    cli_listen: Option<String>,
 }
 
 impl WebServer {
@@ -28,19 +29,40 @@ impl WebServer {
         config_manager: Arc<ConfigManager>,
         trigger_sender: mpsc::Sender<()>,
         log_buffer: LogBuffer,
+        cli_listen: Option<String>,
     ) -> Self {
         Self {
             config_manager,
             trigger_sender,
             log_buffer,
+            cli_listen,
         }
     }
 
+    /// 解析最终绑定的网络套接字地址（默认纯本地 127.0.0.1）
+    fn resolve_bind_addr(cli_listen: Option<&str>, default_port: u16) -> SocketAddr {
+        if let Some(s) = cli_listen {
+            let s = s.trim();
+            // 纯数字端口，如 "8888"
+            if let Ok(p) = s.parse::<u16>() {
+                return SocketAddr::from(([127, 0, 0, 1], p));
+            }
+            // 冒号端口，如 ":8888" -> 全网卡监听
+            if let Some(p) = s.strip_prefix(':').and_then(|ps| ps.parse::<u16>().ok()) {
+                return SocketAddr::from(([0, 0, 0, 0], p));
+            }
+            // 完整地址，如 "0.0.0.0:8888" 或 "127.0.0.1:8888"
+            if let Ok(addr) = s.parse::<SocketAddr>() {
+                return addr;
+            }
+            tracing::warn!("无法解析命令行传入的监听地址 [{}]，将回退至默认地址", s);
+        }
+        SocketAddr::from(([127, 0, 0, 1], default_port))
+    }
+
     pub async fn run(self, cancel_token: CancellationToken) -> Result<(), anyhow::Error> {
-        let listen_addr_str = self.config_manager.get_config().listen_addr.clone();
-        let addr: SocketAddr = listen_addr_str
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:9876".parse().unwrap());
+        let port = self.config_manager.get_config().listen_port;
+        let addr = Self::resolve_bind_addr(self.cli_listen.as_deref(), port);
 
         let state = AppState {
             config_manager: self.config_manager.clone(),
