@@ -1,0 +1,38 @@
+[package]
+name = "rddns"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = { version = "0.7" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+axum = { version = "0.8" }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4.5", features = ["derive"] }
+async-trait = "0.1"
+thiserror = "2.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.11"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+url = "2.5"
+fastrand = "2.3"
+network-interface = "2.0"
+parking_lot = "0.12"
+rust-embed = "8.5"
+tempfile = "3.16"
+bcrypt = "0.17"
+mime_guess = "2.0"
+tokio-stream = { version = "0.1", features = ["sync"] }
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }

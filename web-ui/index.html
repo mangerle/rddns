@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rddns - 动态域名解析系统</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); line-height: 1.5; padding-bottom: 40px; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    .logo-area { display: flex; align-items: center; gap: 12px; }
+    .logo-badge { background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; font-weight: bold; padding: 6px 12px; border-radius: 8px; font-size: 1.2rem; }
+    .actions { display: flex; gap: 10px; }
+    button { cursor: pointer; padding: 8px 16px; border-radius: 6px; font-weight: 500; border: none; transition: all 0.2s; font-size: 0.9rem; }
+    .btn-primary { background-color: var(--primary); color: white; }
+    .btn-primary:hover { background-color: var(--primary-hover); }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-outline:hover { background-color: rgba(255,255,255,0.05); }
+    .btn-success { background-color: var(--success); color: white; }
+    .card { background-color: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    .card-title { font-size: 1.15rem; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 6px; color: var(--text-muted); }
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      width: 100%; padding: 9px 12px; background: #0f172a; border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem; outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .switch-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+    .tag-tip { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+    .log-box { background: #020617; border: 1px solid var(--border); border-radius: 6px; padding: 12px; height: 280px; overflow-y: auto; font-family: "Cascadia Code", Consolas, Monaco, monospace; font-size: 0.82rem; }
+    .log-entry { margin-bottom: 4px; word-break: break-all; }
+    .log-time { color: #64748b; margin-right: 8px; }
+    .log-INFO { color: #38bdf8; }
+    .log-WARN { color: #f59e0b; }
+    .log-ERROR { color: #f87171; font-weight: bold; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .tab-btn { background: none; border: none; color: var(--text-muted); padding: 8px 16px; border-radius: 6px; font-weight: 500; }
+    .tab-btn.active { background: #334155; color: var(--text); }
+    .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; font-weight: 500; z-index: 1000; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+    .toast.success { background-color: var(--success); }
+    .toast.error { background-color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-area">
+        <div class="logo-badge">rddns</div>
+        <div>
+          <h2>动态域名解析服务</h2>
+          <p style="font-size: 0.8rem; color: var(--text-muted);">高性能 Rust 实现 | 微信 iLink & 企微推送 | 多服务商支持</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn-outline" onclick="triggerSync()">⚡ 立即全量同步</button>
+        <button class="btn-primary" onclick="saveConfig()">💾 保存配置</button>
+      </div>
+    </header>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('tab-dns')">DNS 服务商与解析</button>
+      <button class="tab-btn" onclick="switchTab('tab-notify')">通知与告警 (含微信 iLink)</button>
+      <button class="tab-btn" onclick="switchTab('tab-system')">系统与安全配置</button>
+    </div>
+
+    <!-- TAB 1: DNS 任务与 IP 获取 -->
+    <div id="tab-dns" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>DNS 服务商配置</span>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>DNS 服务商</label>
+            <select id="dnsProviderType" onchange="renderProviderFields()">
+              <option value="cloudflare">Cloudflare</option>
+              <option value="ali_dns">阿里云 (AliDNS)</option>
+              <option value="tencent_cloud">腾讯云 (DNSPod)</option>
+              <option value="callback">自定义 Callback (Webhook)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>TTL (秒)</label>
+            <input type="number" id="dnsTtl" placeholder="留空或0表示自动/默认" />
+            <p class="tag-tip">Cloudflare 自动为 1，阿里/腾讯通常为 600</p>
+          </div>
+        </div>
+
+        <div id="providerFields"></div>
+      </div>
+
+      <!-- IPv4 配置 -->
+      <div class="card">
+        <div class="card-title">
+          <span>IPv4 获取与域名绑定</span>
+          <button class="btn-outline" style="font-size:0.8rem;" onclick="testIp('ipv4')">🔍 测试 IPv4 获取</button>
+        </div>
+        <div class="form-group switch-row">
+          <input type="checkbox" id="ipv4Enable" checked />
+          <label for="ipv4Enable" style="margin-bottom:0; cursor:pointer;">启用 IPv4 动态解析</label>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>获取途径</label>
+            <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
+              <option value="url">远程 URL 接口获取 (推荐)</option>
+              <option value="net_interface">本地网卡设备读取</option>
+              <option value="command">外部命令/脚本提取</option>
+            </select>
+          </div>
+          <div class="form-group" id="ipv4DynamicField"></div>
+        </div>
+        <div class="form-group">
+          <label>自定义匹配正则 (可选)</label>
+          <input type="text" id="ipv4Regex" placeholder="从响应中匹配 IPv4 的正则表达式，留空使用内置解析器" />
+        </div>
+        <div class="form-group">
+          <label>解析的域名列表 (一行一个)</label>
+          <textarea id="ipv4Domains" rows="3" placeholder="例如:&#10;example.com&#10;www.example.com&#10;sub:example.com?line=telecom"></textarea>
+        </div>
+      </div>
+
+      <!-- IPv6 配置 -->
+      <div class="card">
+        <div class="card-title">
+          <span>IPv6 获取与域名绑定</span>
+          <button class="btn-outline" style="font-size:0.8rem;" onclick="testIp('ipv6')">🔍 测试 IPv6 获取</button>
+        </div>
+        <div class="form-group switch-row">
+          <input type="checkbox" id="ipv6Enable" />
+          <label for="ipv6Enable" style="margin-bottom:0; cursor:pointer;">启用 IPv6 动态解析</label>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>获取途径</label>
+            <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
+              <option value="url">远程 URL 接口获取 (推荐)</option>
+              <option value="net_interface">本地网卡设备读取 (自动过滤局域网与临时地址)</option>
+              <option value="command">外部命令/脚本提取</option>
+            </select>
+          </div>
+          <div class="form-group" id="ipv6DynamicField"></div>
+        </div>
+        <div class="form-group">
+          <label>自定义匹配正则 (可选)</label>
+          <input type="text" id="ipv6Regex" placeholder="如需从多条 IPv6 中提取指定前缀，在此输入正则表达式" />
+        </div>
+        <div class="form-group">
+          <label>解析的域名列表 (一行一个)</label>
+          <textarea id="ipv6Domains" rows="3" placeholder="例如:&#10;v6.example.com&#10;nas:example.com"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: 通知配置 -->
+    <div id="tab-notify" class="tab-content" style="display:none;">
+      <div class="card">
+        <div class="card-title">
+          <span>通知策略设置</span>
+          <button class="btn-outline" style="font-size:0.8rem;" onclick="testNotify()">📨 发送测试通知</button>
+        </div>
+        <div class="grid-2">
+          <div class="form-group switch-row">
+            <input type="checkbox" id="notifyOnIpChangeOnly" checked />
+            <label for="notifyOnIpChangeOnly" style="margin-bottom:0; cursor:pointer;">仅当 IP 发生变动时发送通知</label>
+          </div>
+          <div class="form-group switch-row">
+            <input type="checkbox" id="notifyOnSuccess" checked />
+            <label for="notifyOnSuccess" style="margin-bottom:0; cursor:pointer;">同步成功时发送通知</label>
+          </div>
+          <div class="form-group switch-row">
+            <input type="checkbox" id="notifyOnFailure" checked />
+            <label for="notifyOnFailure" style="margin-bottom:0; cursor:pointer;">同步失败时发送报警</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 微信官方 iLink -->
+      <div class="card">
+        <div class="card-title">
+          <span>微信官方 iLink Bot (个人微信直达)</span>
+          <input type="checkbox" id="ilinkEnable" />
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>iLink 接入 Endpoint</label>
+            <input type="text" id="ilinkEndpoint" placeholder="https://ilinkai.weixin.qq.com" />
+          </div>
+          <div class="form-group">
+            <label>目标微信 User ID / OpenID</label>
+            <input type="text" id="ilinkToUser" placeholder="微信用户唯一标识" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Bot Token / 会话凭证</label>
+          <input type="password" id="ilinkToken" placeholder="iLink 授权 Token" />
+        </div>
+      </div>
+
+      <!-- 企业微信 -->
+      <div class="card">
+        <div class="card-title">
+          <span>企业微信 (群机器人 / 自建应用推送)</span>
+          <input type="checkbox" id="wecomEnable" />
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>推送模式</label>
+            <select id="wecomMode" onchange="toggleWecomMode()">
+              <option value="bot">群机器人 Webhook</option>
+              <option value="app">自建应用推送 (可配合微信插件直接弹窗到个人微信)</option>
+            </select>
+          </div>
+          <div class="form-group" id="wecomBotField">
+            <label>群机器人 Webhook URL</label>
+            <input type="text" id="wecomWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+          </div>
+        </div>
+        <div id="wecomAppFields" style="display:none;">
+          <div class="grid-2">
+            <div class="form-group">
+              <label>企业 ID (CorpID)</label>
+              <input type="text" id="wecomCorpId" />
+            </div>
+            <div class="form-group">
+              <label>应用 Secret (CorpSecret)</label>
+              <input type="password" id="wecomCorpSecret" />
+            </div>
+            <div class="form-group">
+              <label>应用 AgentID</label>
+              <input type="number" id="wecomAgentId" />
+            </div>
+            <div class="form-group">
+              <label>接收成员 (默认 @all)</label>
+              <input type="text" id="wecomToUser" placeholder="@all 或 成员账号" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PushPlus / Server酱 -->
+      <div class="card">
+        <div class="card-title">
+          <span>微信公众号推送 (PushPlus / Server酱)</span>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>PushPlus Token (推送加)</label>
+            <input type="text" id="pushplusToken" placeholder="留空则不启用 PushPlus" />
+          </div>
+          <div class="form-group">
+            <label>Server酱 SendKey (Turbo 版)</label>
+            <input type="text" id="serverchanKey" placeholder="留空则不启用 Server酱" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Telegram & 钉钉 -->
+      <div class="card">
+        <div class="card-title">
+          <span>Telegram & 钉钉机器人</span>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>Telegram Bot Token</label>
+            <input type="password" id="tgToken" placeholder="例如: 123456:ABC-DEF..." />
+          </div>
+          <div class="form-group">
+            <label>Telegram Chat ID</label>
+            <input type="text" id="tgChatId" placeholder="例如: 12345678" />
+          </div>
+          <div class="form-group">
+            <label>钉钉 Access Token</label>
+            <input type="password" id="dingToken" placeholder="钉钉 Webhook 中的 access_token" />
+          </div>
+          <div class="form-group">
+            <label>钉钉加签 Secret (可选)</label>
+            <input type="password" id="dingSecret" placeholder="SECxxxx" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: 系统与安全 -->
+    <div id="tab-system" class="tab-content" style="display:none;">
+      <div class="card">
+        <div class="card-title"><span>运行与轮询设置</span></div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>Web 服务监听地址</label>
+            <input type="text" id="sysListenAddr" value="0.0.0.0:9876" />
+          </div>
+          <div class="form-group">
+            <label>全局同步间隔 (秒)</label>
+            <input type="number" id="sysInterval" value="300" />
+          </div>
+          <div class="form-group">
+            <label>CacheTimes (每 N 次比对一次服务商)</label>
+            <input type="number" id="sysCacheTimes" value="10" />
+            <p class="tag-tip">每 N 次本地检测执行一次与云端的强制真实对比，防止被限流</p>
+          </div>
+          <div class="form-group switch-row" style="margin-top:28px;">
+            <input type="checkbox" id="sysNotAllowWan" checked />
+            <label for="sysNotAllowWan" style="margin-bottom:0; cursor:pointer;">未设密码时禁止公网访问</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>Web 管理员密码</span></div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>登录用户名</label>
+            <input type="text" id="sysUsername" placeholder="admin" />
+          </div>
+          <div class="form-group">
+            <label>新登录密码 (留空则不修改)</label>
+            <input type="password" id="sysPassword" placeholder="输入新密码" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 日志区域 -->
+    <div class="card">
+      <div class="card-title">
+        <span>实时运行日志 (SSE 实时推流)</span>
+        <button class="btn-outline" style="font-size:0.8rem;" onclick="clearLogs()">清空显示</button>
+      </div>
+      <div class="log-box" id="logContainer"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    let globalConfig = null;
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById(tabId).style.display = 'block';
+      event.target.classList.add('active');
+    }
+
+    function showToast(msg, type = 'success') {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = `toast ${type} show`;
+      setTimeout(() => t.className = 'toast', 3000);
+    }
+
+    function renderProviderFields() {
+      const type = document.getElementById('dnsProviderType').value;
+      const container = document.getElementById('providerFields');
+      if (type === 'cloudflare') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>API Token (推荐)</label>
+              <input type="password" id="cfApiToken" placeholder="Cloudflare 区域 DNS 编辑 Token" />
+            </div>
+            <div class="form-group">
+              <label>Global API Key (可选)</label>
+              <input type="password" id="cfApiKey" placeholder="与邮箱配合使用" />
+            </div>
+            <div class="form-group">
+              <label>Cloudflare 账号邮箱</label>
+              <input type="text" id="cfEmail" placeholder="your@email.com" />
+            </div>
+          </div>`;
+      } else if (type === 'ali_dns') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>AccessKey ID</label>
+              <input type="text" id="aliAccessKeyId" placeholder="阿里云 AccessKeyId" />
+            </div>
+            <div class="form-group">
+              <label>AccessKey Secret</label>
+              <input type="password" id="aliAccessKeySecret" placeholder="阿里云 AccessKeySecret" />
+            </div>
+          </div>`;
+      } else if (type === 'tencent_cloud') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>SecretId</label>
+              <input type="text" id="tcSecretId" placeholder="腾讯云 SecretId" />
+            </div>
+            <div class="form-group">
+              <label>SecretKey</label>
+              <input type="password" id="tcSecretKey" placeholder="腾讯云 SecretKey" />
+            </div>
+          </div>`;
+      } else if (type === 'callback') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>Callback URL (支持 #{ip}, #{domain}, #{recordType})</label>
+            <input type="text" id="cbUrl" placeholder="https://api.myprovider.com/update?ip=#{ip}&domain=#{domain}" />
+          </div>`;
+      }
+    }
+
+    function renderIpFields(vType) {
+      const sourceType = document.getElementById(`${vType}SourceType`).value;
+      const fieldContainer = document.getElementById(`${vType}DynamicField`);
+      if (sourceType === 'url') {
+        fieldContainer.innerHTML = `
+          <label>查询 URL (多个用英文逗号分隔)</label>
+          <input type="text" id="${vType}Urls" value="${vType === 'ipv4' ? 'https://api.ipify.org, https://myip.ipip.net/ip' : 'https://api64.ipify.org, https://speed.neu6.edu.cn/getIP.php'}" />`;
+      } else if (sourceType === 'net_interface') {
+        fieldContainer.innerHTML = `
+          <label>网卡名称 (例如 eth0, WLAN)</label>
+          <input type="text" id="${vType}NetIf" placeholder="例如 eth0 或 以太网" />`;
+      } else if (sourceType === 'command') {
+        fieldContainer.innerHTML = `
+          <label>执行命令</label>
+          <input type="text" id="${vType}Cmd" placeholder="例如 curl -s http://ip.sb" />`;
+      }
+    }
+
+    function toggleWecomMode() {
+      const mode = document.getElementById('wecomMode').value;
+      document.getElementById('wecomBotField').style.display = mode === 'bot' ? 'block' : 'none';
+      document.getElementById('wecomAppFields').style.display = mode === 'app' ? 'block' : 'none';
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/v1/config');
+        const json = await res.json();
+        if (json.success) {
+          globalConfig = json.data;
+          populateForm(globalConfig);
+        }
+      } catch (e) {
+        console.error('加载配置失败:', e);
+      }
+    }
+
+    function populateForm(conf) {
+      document.getElementById('sysListenAddr').value = conf.listen_addr || '0.0.0.0:9876';
+      document.getElementById('sysInterval').value = conf.interval_secs || 300;
+      document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
+      document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
+
+      if (conf.auth) {
+        document.getElementById('sysUsername').value = conf.auth.username;
+      }
+
+      if (conf.dns_tasks && conf.dns_tasks.length > 0) {
+        const task = conf.dns_tasks[0];
+        document.getElementById('dnsTtl').value = task.ttl || '';
+
+        // Provider
+        if (task.provider.type) {
+          document.getElementById('dnsProviderType').value = task.provider.type;
+          renderProviderFields();
+          if (task.provider.type === 'cloudflare') {
+            if (document.getElementById('cfApiToken')) document.getElementById('cfApiToken').value = task.provider.api_token || '';
+            if (document.getElementById('cfApiKey')) document.getElementById('cfApiKey').value = task.provider.api_key || '';
+            if (document.getElementById('cfEmail')) document.getElementById('cfEmail').value = task.provider.email || '';
+          } else if (task.provider.type === 'ali_dns') {
+            if (document.getElementById('aliAccessKeyId')) document.getElementById('aliAccessKeyId').value = task.provider.access_key_id || '';
+            if (document.getElementById('aliAccessKeySecret')) document.getElementById('aliAccessKeySecret').value = task.provider.access_key_secret || '';
+          } else if (task.provider.type === 'tencent_cloud') {
+            if (document.getElementById('tcSecretId')) document.getElementById('tcSecretId').value = task.provider.secret_id || '';
+            if (document.getElementById('tcSecretKey')) document.getElementById('tcSecretKey').value = task.provider.secret_key || '';
+          }
+        }
+
+        // IPv4
+        document.getElementById('ipv4Enable').checked = task.ipv4.enabled;
+        document.getElementById('ipv4SourceType').value = task.ipv4.source_type || 'url';
+        renderIpFields('ipv4');
+        if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
+          document.getElementById('ipv4Urls').value = task.ipv4.url_endpoints.join(', ');
+        }
+        if (task.ipv4.net_interface && document.getElementById('ipv4NetIf')) {
+          document.getElementById('ipv4NetIf').value = task.ipv4.net_interface;
+        }
+        if (task.ipv4.cmd && document.getElementById('ipv4Cmd')) {
+          document.getElementById('ipv4Cmd').value = task.ipv4.cmd;
+        }
+        document.getElementById('ipv4Regex').value = task.ipv4.regex || '';
+        document.getElementById('ipv4Domains').value = (task.ipv4.domains || []).join('\n');
+
+        // IPv6
+        document.getElementById('ipv6Enable').checked = task.ipv6.enabled;
+        document.getElementById('ipv6SourceType').value = task.ipv6.source_type || 'url';
+        renderIpFields('ipv6');
+        if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
+          document.getElementById('ipv6Urls').value = task.ipv6.url_endpoints.join(', ');
+        }
+        if (task.ipv6.net_interface && document.getElementById('ipv6NetIf')) {
+          document.getElementById('ipv6NetIf').value = task.ipv6.net_interface;
+        }
+        if (task.ipv6.cmd && document.getElementById('ipv6Cmd')) {
+          document.getElementById('ipv6Cmd').value = task.ipv6.cmd;
+        }
+        document.getElementById('ipv6Regex').value = task.ipv6.regex || '';
+        document.getElementById('ipv6Domains').value = (task.ipv6.domains || []).join('\n');
+      }
+
+      // Notifications
+      if (conf.notifications) {
+        const notif = conf.notifications;
+        document.getElementById('notifyOnIpChangeOnly').checked = notif.on_ip_change_only;
+        document.getElementById('notifyOnSuccess').checked = notif.on_success;
+        document.getElementById('notifyOnFailure').checked = notif.on_failure;
+
+        if (notif.ilink) {
+          document.getElementById('ilinkEnable').checked = notif.ilink.enabled;
+          document.getElementById('ilinkEndpoint').value = notif.ilink.endpoint || '';
+          document.getElementById('ilinkToUser').value = notif.ilink.to_user_id || '';
+          document.getElementById('ilinkToken').value = notif.ilink.bot_token || '';
+        }
+        if (notif.wecom) {
+          document.getElementById('wecomEnable').checked = notif.wecom.enabled;
+          document.getElementById('wecomMode').value = notif.wecom.mode || 'bot';
+          toggleWecomMode();
+          document.getElementById('wecomWebhookUrl').value = notif.wecom.webhook_url || '';
+          document.getElementById('wecomCorpId').value = notif.wecom.corp_id || '';
+          document.getElementById('wecomCorpSecret').value = notif.wecom.corp_secret || '';
+          document.getElementById('wecomAgentId').value = notif.wecom.agent_id || '';
+          document.getElementById('wecomToUser').value = notif.wecom.to_user || '';
+        }
+        if (notif.pushplus) {
+          document.getElementById('pushplusToken').value = notif.pushplus.token || '';
+        }
+        if (notif.serverchan) {
+          document.getElementById('serverchanKey').value = notif.serverchan.send_key || '';
+        }
+        if (notif.telegram) {
+          document.getElementById('tgToken').value = notif.telegram.bot_token || '';
+          document.getElementById('tgChatId').value = notif.telegram.chat_id || '';
+        }
+        if (notif.dingtalk) {
+          document.getElementById('dingToken').value = notif.dingtalk.access_token || '';
+          document.getElementById('dingSecret').value = notif.dingtalk.secret || '';
+        }
+      }
+    }
+
+    async function saveConfig() {
+      const pType = document.getElementById('dnsProviderType').value;
+      let providerObj = { type: pType };
+      if (pType === 'cloudflare') {
+        providerObj.api_token = document.getElementById('cfApiToken')?.value || null;
+        providerObj.api_key = document.getElementById('cfApiKey')?.value || null;
+        providerObj.email = document.getElementById('cfEmail')?.value || null;
+      } else if (pType === 'ali_dns') {
+        providerObj.access_key_id = document.getElementById('aliAccessKeyId')?.value || '';
+        providerObj.access_key_secret = document.getElementById('aliAccessKeySecret')?.value || '';
+      } else if (pType === 'tencent_cloud') {
+        providerObj.secret_id = document.getElementById('tcSecretId')?.value || '';
+        providerObj.secret_key = document.getElementById('tcSecretKey')?.value || '';
+      }
+
+      const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+      const ipv6Urls = (document.getElementById('ipv6Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+
+      const task = {
+        name: "默认任务",
+        provider: providerObj,
+        ttl: parseInt(document.getElementById('dnsTtl').value) || null,
+        ipv4: {
+          enabled: document.getElementById('ipv4Enable').checked,
+          source_type: document.getElementById('ipv4SourceType').value,
+          url_endpoints: ipv4Urls,
+          net_interface: document.getElementById('ipv4NetIf')?.value || null,
+          cmd: document.getElementById('ipv4Cmd')?.value || null,
+          regex: document.getElementById('ipv4Regex').value || null,
+          domains: document.getElementById('ipv4Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
+        },
+        ipv6: {
+          enabled: document.getElementById('ipv6Enable').checked,
+          source_type: document.getElementById('ipv6SourceType').value,
+          url_endpoints: ipv6Urls,
+          net_interface: document.getElementById('ipv6NetIf')?.value || null,
+          cmd: document.getElementById('ipv6Cmd')?.value || null,
+          regex: document.getElementById('ipv6Regex').value || null,
+          domains: document.getElementById('ipv6Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
+        }
+      };
+
+      const notifications = {
+        on_ip_change_only: document.getElementById('notifyOnIpChangeOnly').checked,
+        on_success: document.getElementById('notifyOnSuccess').checked,
+        on_failure: document.getElementById('notifyOnFailure').checked,
+        ilink: {
+          enabled: document.getElementById('ilinkEnable').checked,
+          endpoint: document.getElementById('ilinkEndpoint').value || "https://ilinkai.weixin.qq.com",
+          to_user_id: document.getElementById('ilinkToUser').value,
+          bot_token: document.getElementById('ilinkToken').value
+        },
+        wecom: {
+          enabled: document.getElementById('wecomEnable').checked,
+          mode: document.getElementById('wecomMode').value,
+          webhook_url: document.getElementById('wecomWebhookUrl')?.value || null,
+          corp_id: document.getElementById('wecomCorpId')?.value || null,
+          corp_secret: document.getElementById('wecomCorpSecret')?.value || null,
+          agent_id: parseInt(document.getElementById('wecomAgentId')?.value) || null,
+          to_user: document.getElementById('wecomToUser')?.value || null
+        },
+        pushplus: document.getElementById('pushplusToken').value ? {
+          enabled: true,
+          token: document.getElementById('pushplusToken').value
+        } : null,
+        serverchan: document.getElementById('serverchanKey').value ? {
+          enabled: true,
+          send_key: document.getElementById('serverchanKey').value
+        } : null,
+        telegram: document.getElementById('tgToken').value ? {
+          enabled: true,
+          bot_token: document.getElementById('tgToken').value,
+          chat_id: document.getElementById('tgChatId').value
+        } : null,
+        dingtalk: document.getElementById('dingToken').value ? {
+          enabled: true,
+          access_token: document.getElementById('dingToken').value,
+          secret: document.getElementById('dingSecret').value || null
+        } : null
+      };
+
+      const payload = {
+        config: {
+          listen_addr: document.getElementById('sysListenAddr').value,
+          interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
+          cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
+          not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
+          auth: document.getElementById('sysUsername').value ? {
+            username: document.getElementById('sysUsername').value,
+            password_hash: "******"
+          } : null,
+          dns_tasks: [task],
+          notifications
+        },
+        new_password: document.getElementById('sysPassword').value || null
+      };
+
+      try {
+        const res = await fetch('/api/v1/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast('配置保存成功并已热更新生效！');
+          document.getElementById('sysPassword').value = '';
+        } else {
+          showToast('保存失败: ' + json.message, 'error');
+        }
+      } catch (e) {
+        showToast('请求异常: ' + e, 'error');
+      }
+    }
+
+    async function triggerSync() {
+      try {
+        const res = await fetch('/api/v1/sync', { method: 'POST' });
+        const json = await res.json();
+        showToast(json.message);
+      } catch (e) {
+        showToast('触发失败: ' + e, 'error');
+      }
+    }
+
+    async function testIp(type) {
+      const urls = (document.getElementById(`${type}Urls`)?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+      const payload = {
+        enabled: true,
+        source_type: document.getElementById(`${type}SourceType`).value,
+        url_endpoints: urls,
+        net_interface: document.getElementById(`${type}NetIf`)?.value || null,
+        cmd: document.getElementById(`${type}Cmd`)?.value || null,
+        regex: document.getElementById(`${type}Regex`).value || null,
+        domains: []
+      };
+      try {
+        const res = await fetch('/api/v1/test/ip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (json.success) {
+          const val = type === 'ipv4' ? json.data.ipv4 : json.data.ipv6;
+          alert(`探测到当前 ${type.toUpperCase()} 为: ${val || '未检测到合法 IP'}`);
+        } else {
+          alert('测试失败: ' + json.message);
+        }
+      } catch (e) {
+        alert('请求失败: ' + e);
+      }
+    }
+
+    async function testNotify() {
+      await saveConfig();
+      try {
+        const res = await fetch('/api/v1/test/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(globalConfig ? globalConfig.notifications : {})
+        });
+        const json = await res.json();
+        showToast(json.message);
+      } catch (e) {
+        showToast('测试异常: ' + e, 'error');
+      }
+    }
+
+    function appendLog(entry) {
+      const container = document.getElementById('logContainer');
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.innerHTML = `<span class="log-time">[${entry.timestamp}]</span> <span class="log-${entry.level}">[${entry.level}]</span> <span style="color:#a855f7;">[${entry.target}]</span> ${entry.message}`;
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logContainer').innerHTML = '';
+    }
+
+    // 初始化 SSE 实时日志连接
+    function initSSE() {
+      const es = new EventSource('/api/v1/logs/sse');
+      es.onmessage = function(e) {
+        try {
+          const entry = JSON.parse(e.data);
+          appendLog(entry);
+        } catch (err) {
+          console.error(err);
+        }
+      };
+      es.onerror = function() {
+        console.warn('SSE 连接断开，3秒后自动重连...');
+        es.close();
+        setTimeout(initSSE, 3000);
+      };
+    }
+
+    window.onload = function() {
+      renderProviderFields();
+      renderIpFields('ipv4');
+      renderIpFields('ipv6');
+      loadConfig();
+      initSSE();
+    };
+  </script>
+</body>
+</html>
