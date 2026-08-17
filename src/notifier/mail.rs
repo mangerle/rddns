@@ -33,16 +33,16 @@ impl EmailNotifier {
                 SyncStatus::Created => ("#ecfdf5", "#059669", "已新增"),
                 SyncStatus::Updated => ("#ecfdf5", "#059669", "已更新"),
                 SyncStatus::Unchanged => ("#f1f5f9", "#475569", "未变动"),
-                SyncStatus::Failed => ("#fef2f2", "#dc2626", "失败"),
+                SyncStatus::Failed => ("#fef2f2", "#dc2626", "同步失败"),
             };
 
             table_rows.push_str(&format!(
                 r#"<tr>
-                    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-weight:600;color:#1e293b;">{domain}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#64748b;"><span style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">{record_type}</span></td>
-                    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#334155;">{target_ip}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;"><span style="background:{status_badge_bg};color:{status_badge_color};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:600;">{status_text}</span></td>
-                    <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">{message}</td>
+                    <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-weight:600;color:#1e293b;font-size:12px;white-space:nowrap;">{domain}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;color:#475569;font-family:monospace;">{record_type}</span></td>
+                    <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#334155;font-size:11px;word-break:break-all;line-height:1.3;">{target_ip}</td>
+                    <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:{status_badge_bg};color:{status_badge_color};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:600;white-space:nowrap;display:inline-block;">{status_text}</span></td>
+                    <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.4;">{message}</td>
                 </tr>"#,
                 domain = r.domain,
                 record_type = r.record_type,
@@ -76,7 +76,7 @@ impl EmailNotifier {
   <table width="100%" border="0" cellspacing="0" cellpadding="0">
     <tr>
       <td align="center">
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
           <!-- 顶部渐变装饰条 -->
           <tr>
             <td height="4" style="background:linear-gradient(90deg,#6366f1 0%,#06b6d4 100%);"></td>
@@ -135,11 +135,11 @@ impl EmailNotifier {
               <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:8px;border-collapse:collapse;font-size:13px;text-align:left;">
                 <thead>
                   <tr style="background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;">
-                    <th style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">域名</th>
-                    <th style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">类型</th>
-                    <th style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">目标 IP</th>
-                    <th style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">状态</th>
-                    <th style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">详情</th>
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">域名</th>
+                    <th style="padding:10px 6px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">类型</th>
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">目标 IP</th>
+                    <th style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">状态</th>
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">详情</th>
                   </tr>
                 </thead>
                 <tbody>
