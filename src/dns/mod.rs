@@ -183,6 +183,10 @@ pub fn create_dns_provider(
             id.clone(),
             secret.clone(),
         )?)),
+        ProviderConfig::Eranet { id, secret } => Ok(Arc::new(NowcnProvider::new_eranet(
+            id.clone(),
+            secret.clone(),
+        )?)),
         ProviderConfig::Callback {
             url,
             method,

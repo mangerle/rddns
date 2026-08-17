@@ -311,6 +311,8 @@ pub enum ProviderConfig {
     },
     /// 时代互联 (NowCN)
     NowCn { id: String, secret: String },
+    /// 时代互联国际版 (Eranet)
+    Eranet { id: String, secret: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -408,6 +410,7 @@ impl ProviderConfig {
                 secret_key,
             } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
             Self::NowCn { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
+            Self::Eranet { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
