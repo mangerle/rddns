@@ -14,6 +14,7 @@ pub mod huawei;
 pub mod name_com;
 pub mod namecheap;
 pub mod namesilo;
+pub mod nowcn;
 pub mod porkbun;
 pub mod rainyun;
 pub mod spaceship;
@@ -38,6 +39,7 @@ pub use huawei::*;
 pub use name_com::*;
 pub use namecheap::*;
 pub use namesilo::*;
+pub use nowcn::*;
 pub use porkbun::*;
 pub use rainyun::*;
 pub use spaceship::*;
@@ -176,6 +178,10 @@ pub fn create_dns_provider(
         } => Ok(Arc::new(TencentEoProvider::new(
             secret_id.clone(),
             secret_key.clone(),
+        )?)),
+        ProviderConfig::NowCn { id, secret } => Ok(Arc::new(NowcnProvider::new_nowcn(
+            id.clone(),
+            secret.clone(),
         )?)),
         ProviderConfig::Callback {
             url,
