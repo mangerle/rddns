@@ -140,13 +140,12 @@ impl DnsProvider for AliDnsProvider {
         let root_domain = domain.root_domain.clone();
         let ttl_val = ttl.unwrap_or(600).max(1);
 
-        // 1. 查询现有解析记录列表
+        // 1. 查询现有解析记录列表 (使用 DescribeSubDomainRecords 精确检索，规避 20 条记录的分页截断)
         let list_resp: AliDescribeRecordsResponse = self
             .request_pop_api(
-                "DescribeDomainRecords",
+                "DescribeSubDomainRecords",
                 vec![
-                    ("DomainName", root_domain.clone()),
-                    ("RRKeyWord", rr.clone()),
+                    ("SubDomain", full_domain.clone()),
                     ("Type", record_type.to_string()),
                 ],
             )
