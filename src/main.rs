@@ -13,9 +13,9 @@ use core::engine::DdnsEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 use util::log_buffer::{BufferLogLayer, LogBuffer};
 use web::server::WebServer;
 
@@ -59,7 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     tracing::info!("==========================================");
-    tracing::info!("🚀 rddns 动态域名解析系统 v{} 正在启动", env!("CARGO_PKG_VERSION"));
+    tracing::info!(
+        "🚀 rddns 动态域名解析系统 v{} 正在启动",
+        env!("CARGO_PKG_VERSION")
+    );
     tracing::info!("==========================================");
 
     // 2. 加载或创建配置文件

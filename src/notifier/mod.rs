@@ -19,9 +19,6 @@ pub mod telegram;
 #[allow(unused_imports)]
 pub mod trait_def;
 #[allow(unused_imports)]
-pub mod wecom;
-#[allow(unused_imports)]
 pub mod webhook;
-
-pub use dispatcher::*;
-pub use trait_def::*;
+#[allow(unused_imports)]
+pub mod wecom;

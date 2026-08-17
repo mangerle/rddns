@@ -34,7 +34,11 @@ impl Notifier for TelegramNotifier {
             .filter(|p| !p.trim().is_empty())
             .unwrap_or("https://api.telegram.org");
 
-        let url = format!("{}/bot{}/sendMessage", base_url.trim_end_matches('/'), self.config.bot_token.trim());
+        let url = format!(
+            "{}/bot{}/sendMessage",
+            base_url.trim_end_matches('/'),
+            self.config.bot_token.trim()
+        );
 
         let text = format!(
             "🔔 *rddns 域名解析通知* [{}]\n\
@@ -46,8 +50,14 @@ impl Notifier for TelegramNotifier {
             *详情*:\n{}",
             event.overall_status.as_str(),
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
@@ -67,7 +77,10 @@ impl Notifier for TelegramNotifier {
             tracing::info!("[{}] 消息发送成功", self.channel_name());
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("Telegram 返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "Telegram 返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

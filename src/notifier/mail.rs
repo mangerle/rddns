@@ -22,7 +22,10 @@ impl Notifier for EmailNotifier {
     }
 
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
-        let subject = format!("🔔 [rddns] 动态域名解析通知 - {}", event.overall_status.as_str());
+        let subject = format!(
+            "🔔 [rddns] 动态域名解析通知 - {}",
+            event.overall_status.as_str()
+        );
         let body = format!(
             "<h3>🔔 rddns 动态域名解析通知</h3>\
             <p><strong>同步状态：</strong>{}</p>\
@@ -35,8 +38,14 @@ impl Notifier for EmailNotifier {
             <pre style=\"background:#f4f4f4;padding:10px;border-radius:4px;\">{}</pre>",
             event.overall_status.as_str(),
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
@@ -63,10 +72,7 @@ impl Notifier for EmailNotifier {
             .body(body)
             .map_err(|e| NotifyError::Email(format!("邮件构造失败: {}", e)))?;
 
-        let creds = Credentials::new(
-            self.config.username.clone(),
-            self.config.password.clone(),
-        );
+        let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
 
         let transport = if self.config.use_ssl {
             AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_server)

@@ -35,8 +35,14 @@ impl Notifier for BarkNotifier {
         let body = format!(
             "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S")
         );
@@ -62,7 +68,10 @@ impl Notifier for BarkNotifier {
             tracing::info!("[{}] Bark 消息推送成功", self.channel_name());
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("Bark 返回错误 [{}]: {}", status, resp_body)))
+            Err(NotifyError::Provider(format!(
+                "Bark 返回错误 [{}]: {}",
+                status, resp_body
+            )))
         }
     }
 }

@@ -256,9 +256,18 @@ impl ProviderConfig {
                 api_key,
                 email,
             } => {
-                let has_token = api_token.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false);
-                let has_key = api_key.as_ref().map(|k| !k.trim().is_empty()).unwrap_or(false);
-                let has_email = email.as_ref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+                let has_token = api_token
+                    .as_ref()
+                    .map(|t| !t.trim().is_empty())
+                    .unwrap_or(false);
+                let has_key = api_key
+                    .as_ref()
+                    .map(|k| !k.trim().is_empty())
+                    .unwrap_or(false);
+                let has_email = email
+                    .as_ref()
+                    .map(|e| !e.trim().is_empty())
+                    .unwrap_or(false);
                 has_token || (has_key && has_email)
             }
             Self::AliDns {

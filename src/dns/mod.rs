@@ -14,7 +14,9 @@ use crate::config::model::ProviderConfig;
 use std::sync::Arc;
 
 /// 根据配置创建 DNS 驱动实例
-pub fn create_dns_provider(config: &ProviderConfig) -> Result<Arc<dyn DnsProvider>, DnsProviderError> {
+pub fn create_dns_provider(
+    config: &ProviderConfig,
+) -> Result<Arc<dyn DnsProvider>, DnsProviderError> {
     match config {
         ProviderConfig::Cloudflare {
             api_token,

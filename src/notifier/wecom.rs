@@ -26,7 +26,9 @@ impl WeComNotifier {
             .webhook_url
             .as_ref()
             .filter(|u| !u.trim().is_empty())
-            .ok_or_else(|| NotifyError::Provider("企业微信群机器人模式未配置 webhook_url".to_string()))?;
+            .ok_or_else(|| {
+                NotifyError::Provider("企业微信群机器人模式未配置 webhook_url".to_string())
+            })?;
 
         // 拼接 Markdown 内容
         let markdown_content = format!(
@@ -44,8 +46,14 @@ impl WeComNotifier {
             },
             event.overall_status.as_str(),
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
@@ -66,20 +74,27 @@ impl WeComNotifier {
             tracing::info!("[{}] 机器人通知发送成功", self.channel_name());
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("企业微信机器人返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "企业微信机器人返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 
     async fn send_app(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
-        let corp_id = self.config.corp_id.as_ref().ok_or_else(|| {
-            NotifyError::Provider("企业微信自建应用缺少 corp_id".to_string())
-        })?;
-        let corp_secret = self.config.corp_secret.as_ref().ok_or_else(|| {
-            NotifyError::Provider("企业微信自建应用缺少 corp_secret".to_string())
-        })?;
-        let agent_id = self.config.agent_id.ok_or_else(|| {
-            NotifyError::Provider("企业微信自建应用缺少 agent_id".to_string())
-        })?;
+        let corp_id = self
+            .config
+            .corp_id
+            .as_ref()
+            .ok_or_else(|| NotifyError::Provider("企业微信自建应用缺少 corp_id".to_string()))?;
+        let corp_secret =
+            self.config.corp_secret.as_ref().ok_or_else(|| {
+                NotifyError::Provider("企业微信自建应用缺少 corp_secret".to_string())
+            })?;
+        let agent_id = self
+            .config
+            .agent_id
+            .ok_or_else(|| NotifyError::Provider("企业微信自建应用缺少 agent_id".to_string()))?;
         let to_user = self.config.to_user.as_deref().unwrap_or("@all");
 
         // 1. 获取 access_token
@@ -97,9 +112,9 @@ impl WeComNotifier {
             )));
         }
 
-        let access_token = token_data.access_token.ok_or_else(|| {
-            NotifyError::Provider("返回结果中未包含 access_token".to_string())
-        })?;
+        let access_token = token_data
+            .access_token
+            .ok_or_else(|| NotifyError::Provider("返回结果中未包含 access_token".to_string()))?;
 
         // 2. 发送应用消息 (文本卡片)
         let send_url = format!(
@@ -110,8 +125,14 @@ impl WeComNotifier {
         let description = format!(
             "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S")
         );
@@ -136,7 +157,10 @@ impl WeComNotifier {
             tracing::info!("[{}] 应用消息发送成功", self.channel_name());
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("企业微信应用消息返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "企业微信应用消息返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

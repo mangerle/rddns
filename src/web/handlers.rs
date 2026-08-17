@@ -5,10 +5,10 @@ use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use crate::util::log_buffer::{LogBuffer, LogEntry};
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -133,9 +133,7 @@ pub struct TestIpResult {
     pub ipv6: Option<String>,
 }
 
-pub async fn test_ip_handler(
-    Json(payload): Json<TestIpRequest>,
-) -> impl IntoResponse {
+pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoResponse {
     let config = payload.config;
     if let Some(fetcher) = create_ip_fetcher(&config) {
         let is_v4_test = payload.ip_type.as_deref() == Some("ipv4");
@@ -144,13 +142,23 @@ pub async fn test_ip_handler(
         let ipv4 = if is_v6_test {
             None
         } else {
-            fetcher.fetch_ipv4().await.ok().flatten().map(|ip| ip.to_string())
+            fetcher
+                .fetch_ipv4()
+                .await
+                .ok()
+                .flatten()
+                .map(|ip| ip.to_string())
         };
 
         let ipv6 = if is_v4_test {
             None
         } else {
-            fetcher.fetch_ipv6().await.ok().flatten().map(|ip| ip.to_string())
+            fetcher
+                .fetch_ipv6()
+                .await
+                .ok()
+                .flatten()
+                .map(|ip| ip.to_string())
         };
 
         Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 }))
@@ -162,9 +170,7 @@ pub async fn test_ip_handler(
 }
 
 /// 测试通知发送
-pub async fn test_notify_handler(
-    Json(config): Json<NotificationConfig>,
-) -> impl IntoResponse {
+pub async fn test_notify_handler(Json(config): Json<NotificationConfig>) -> impl IntoResponse {
     let dispatcher = NotificationDispatcher::new(config);
     let sample_event = NotificationEvent {
         overall_status: NotificationOverallStatus::Success,
@@ -184,7 +190,9 @@ pub async fn test_notify_handler(
     };
 
     dispatcher.dispatch(sample_event);
-    Json(ApiResponse::ok("测试通知已派发至已启用的渠道，请查看目标平台"))
+    Json(ApiResponse::ok(
+        "测试通知已派发至已启用的渠道，请查看目标平台",
+    ))
 }
 
 /// 获取最近操作日志快照

@@ -3,13 +3,13 @@ use crate::util::log_buffer::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{
-    get_config_handler, get_logs_handler, manual_sync_handler, save_config_handler,
-    test_ip_handler, test_notify_handler, AppState,
+    AppState, get_config_handler, get_logs_handler, manual_sync_handler, save_config_handler,
+    test_ip_handler, test_notify_handler,
 };
 use crate::web::sse::sse_log_handler;
+use axum::Router;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
-use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -56,10 +56,7 @@ impl WebServer {
             .route("/test/notify", post(test_notify_handler))
             .route("/logs", get(get_logs_handler))
             .route("/logs/sse", get(sse_log_handler))
-            .layer(from_fn_with_state(
-                state.clone(),
-                auth_middleware,
-            ));
+            .layer(from_fn_with_state(state.clone(), auth_middleware));
 
         let app = Router::new()
             .nest("/api/v1", api_routes)

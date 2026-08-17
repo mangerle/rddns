@@ -2,8 +2,8 @@ use crate::config::model::FeishuConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use crate::util::crypto::hmac_sha256;
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
 use reqwest::Client;
 use serde_json::json;
@@ -35,8 +35,14 @@ impl Notifier for FeishuNotifier {
         let text = format!(
             "任务名称：{}\nIPv4 地址：{}\nIPv6 地址：{}\n涉及域名：{}\n触发时间：{}\n\n明细：\n{}",
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
@@ -61,16 +67,16 @@ impl Notifier for FeishuNotifier {
             }
         });
 
-        if let Some(ref secret) = self.config.secret {
-            if !secret.trim().is_empty() {
-                let timestamp = Utc::now().timestamp();
-                let string_to_sign = format!("{}\n{}", timestamp, secret.trim());
-                let sign_bytes = hmac_sha256(string_to_sign.as_bytes(), b"");
-                let sign_base64 = BASE64_STANDARD.encode(sign_bytes);
+        if let Some(ref secret) = self.config.secret
+            && !secret.trim().is_empty()
+        {
+            let timestamp = Utc::now().timestamp();
+            let string_to_sign = format!("{}\n{}", timestamp, secret.trim());
+            let sign_bytes = hmac_sha256(string_to_sign.as_bytes(), b"");
+            let sign_base64 = BASE64_STANDARD.encode(sign_bytes);
 
-                payload["timestamp"] = json!(timestamp.to_string());
-                payload["sign"] = json!(sign_base64);
-            }
+            payload["timestamp"] = json!(timestamp.to_string());
+            payload["sign"] = json!(sign_base64);
         }
 
         let resp = self
@@ -87,7 +93,10 @@ impl Notifier for FeishuNotifier {
             tracing::info!("[{}] 飞书消息发送成功", self.channel_name());
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("飞书返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "飞书返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

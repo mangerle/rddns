@@ -6,6 +6,7 @@ use std::net::IpAddr;
 use thiserror::Error;
 
 /// DNS 记录类型
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DnsRecordType {
     A,

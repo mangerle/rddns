@@ -1,5 +1,7 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+};
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
@@ -23,9 +25,7 @@ impl CallbackProvider {
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
     ) -> Result<Self, DnsProviderError> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
 
         Ok(Self {
             client,
@@ -72,8 +72,7 @@ impl DnsProvider for CallbackProvider {
         let target_ip_str = ip.to_string();
 
         let rendered_url = Self::replace_variables(&self.url, domain, record_type, ip, ttl);
-        let http_method = Method::from_str(&self.method.to_uppercase())
-            .unwrap_or(Method::GET);
+        let http_method = Method::from_str(&self.method.to_uppercase()).unwrap_or(Method::GET);
 
         let mut req = self.client.request(http_method, &rendered_url);
 
@@ -81,7 +80,9 @@ impl DnsProvider for CallbackProvider {
             let mut header_map = HeaderMap::new();
             for (k, v) in hdrs {
                 let rendered_v = Self::replace_variables(v, domain, record_type, ip, ttl);
-                if let (Ok(hk), Ok(hv)) = (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v)) {
+                if let (Ok(hk), Ok(hv)) =
+                    (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v))
+                {
                     header_map.insert(hk, hv);
                 }
             }

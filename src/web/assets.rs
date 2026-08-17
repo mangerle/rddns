@@ -26,7 +26,10 @@ pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
             if let Ok(val) = HeaderValue::from_str(&mime_type) {
                 headers.insert(CONTENT_TYPE, val);
             }
-            if let Ok(etag) = HeaderValue::from_str(&format!("\"{}\"", hex::encode(content.metadata.sha256_hash()))) {
+            if let Ok(etag) = HeaderValue::from_str(&format!(
+                "\"{}\"",
+                hex::encode(content.metadata.sha256_hash())
+            )) {
                 headers.insert(ETAG, etag);
             }
 

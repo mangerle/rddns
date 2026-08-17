@@ -39,8 +39,14 @@ impl Notifier for PushPlusNotifier {
             #### 同步明细：\n{}",
             event.overall_status.as_str(),
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
@@ -71,7 +77,10 @@ impl Notifier for PushPlusNotifier {
             tracing::info!("[{}] 微信推送成功: {}", self.channel_name(), body);
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("PushPlus 返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "PushPlus 返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

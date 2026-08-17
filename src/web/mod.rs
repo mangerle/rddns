@@ -8,5 +8,3 @@ pub mod handlers;
 pub mod server;
 #[allow(unused_imports)]
 pub mod sse;
-
-pub use server::*;

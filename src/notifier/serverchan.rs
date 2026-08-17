@@ -39,14 +39,23 @@ impl Notifier for ServerChanNotifier {
             #### 结果明细：\n{}",
             event.overall_status.as_str(),
             event.task_name,
-            event.ipv4.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
-            event.ipv6.map(|ip| ip.to_string()).unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv4
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
+            event
+                .ipv6
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.format_details_text()
         );
 
-        let url = format!("https://sctapi.ftqq.com/{}.send", self.config.send_key.trim());
+        let url = format!(
+            "https://sctapi.ftqq.com/{}.send",
+            self.config.send_key.trim()
+        );
         let payload = json!({
             "title": title,
             "desp": desp
@@ -60,7 +69,10 @@ impl Notifier for ServerChanNotifier {
             tracing::info!("[{}] 微信推送成功: {}", self.channel_name(), body);
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("Server酱返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "Server酱返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

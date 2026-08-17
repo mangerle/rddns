@@ -59,7 +59,8 @@ impl IpFetcher for UrlIpFetcher {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| FetchError::Other("所有 IPv4 URL 接口均请求失败".to_string())))
+        Err(last_err
+            .unwrap_or_else(|| FetchError::Other("所有 IPv4 URL 接口均请求失败".to_string())))
     }
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
@@ -92,6 +93,7 @@ impl IpFetcher for UrlIpFetcher {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| FetchError::Other("所有 IPv6 URL 接口均请求失败".to_string())))
+        Err(last_err
+            .unwrap_or_else(|| FetchError::Other("所有 IPv6 URL 接口均请求失败".to_string())))
     }
 }

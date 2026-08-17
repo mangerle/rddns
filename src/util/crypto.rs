@@ -1,5 +1,5 @@
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -23,6 +23,7 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 /// 计算 HMAC-SHA256 并返回十六进制小写字符串
+#[allow(dead_code)]
 pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
     let bytes = hmac_sha256(key, data);
     hex::encode(bytes)

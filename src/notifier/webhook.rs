@@ -48,8 +48,8 @@ impl Notifier for CustomWebhookNotifier {
 
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
         let rendered_url = Self::replace_template(&self.config.url, event);
-        let http_method = Method::from_str(&self.config.method.to_uppercase())
-            .unwrap_or(Method::GET);
+        let http_method =
+            Method::from_str(&self.config.method.to_uppercase()).unwrap_or(Method::GET);
 
         let mut req = self.client.request(http_method, &rendered_url);
 
@@ -57,7 +57,9 @@ impl Notifier for CustomWebhookNotifier {
             let mut header_map = HeaderMap::new();
             for (k, v) in hdrs {
                 let rendered_v = Self::replace_template(v, event);
-                if let (Ok(hk), Ok(hv)) = (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v)) {
+                if let (Ok(hk), Ok(hv)) =
+                    (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v))
+                {
                     header_map.insert(hk, hv);
                 }
             }
@@ -77,7 +79,10 @@ impl Notifier for CustomWebhookNotifier {
             tracing::info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
             Ok(())
         } else {
-            Err(NotifyError::Provider(format!("Webhook 返回错误 [{}]: {}", status, body)))
+            Err(NotifyError::Provider(format!(
+                "Webhook 返回错误 [{}]: {}",
+                status, body
+            )))
         }
     }
 }

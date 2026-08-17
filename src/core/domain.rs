@@ -84,7 +84,8 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     }
 
     // 针对常见二级后缀 (如 .com.cn, .net.cn, .org.cn, .co.uk, .gov.cn)
-    let is_special_second_level = parts.len() >= 3 && is_compound_suffix(parts[parts.len() - 2], parts[parts.len() - 1]);
+    let is_special_second_level =
+        parts.len() >= 3 && is_compound_suffix(parts[parts.len() - 2], parts[parts.len() - 1]);
 
     let (sub_domain, root_domain) = if is_special_second_level {
         if parts.len() == 3 {

@@ -1,8 +1,10 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+};
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::Client;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
@@ -23,8 +25,14 @@ impl CloudflareProvider {
         api_key: Option<String>,
         email: Option<String>,
     ) -> Result<Self, DnsProviderError> {
-        let has_token = api_token.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false);
-        let has_key = api_key.as_ref().map(|k| !k.trim().is_empty()).unwrap_or(false);
+        let has_token = api_token
+            .as_ref()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+        let has_key = api_key
+            .as_ref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false);
 
         if !has_token && !has_key {
             return Err(DnsProviderError::MissingCredentials(
@@ -32,9 +40,7 @@ impl CloudflareProvider {
             ));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
 
         Ok(Self {
             client,
@@ -46,13 +52,12 @@ impl CloudflareProvider {
 
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        if let Some(ref token) = self.api_token {
-            if !token.trim().is_empty() {
-                if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token.trim())) {
-                    headers.insert(AUTHORIZATION, val);
-                    return headers;
-                }
-            }
+        if let Some(ref token) = self.api_token
+            && !token.trim().is_empty()
+            && let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token.trim()))
+        {
+            headers.insert(AUTHORIZATION, val);
+            return headers;
         }
 
         if let (Some(key), Some(email)) = (&self.api_key, &self.email) {
@@ -156,7 +161,9 @@ impl DnsProvider for CloudflareProvider {
         let zone_id = self.get_zone_id(&domain.root_domain).await?;
 
         // 2. 查询现有记录
-        let records = self.get_records(&zone_id, &full_domain, record_type).await?;
+        let records = self
+            .get_records(&zone_id, &full_domain, record_type)
+            .await?;
 
         if let Some(existing) = records.first() {
             if existing.content == target_ip_str {
@@ -176,7 +183,10 @@ impl DnsProvider for CloudflareProvider {
             }
 
             // 更新记录 (使用 PATCH 保持用户的 proxied 状态)
-            let update_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone_id, existing.id);
+            let update_url = format!(
+                "{}/zones/{}/dns_records/{}",
+                CF_API_BASE, zone_id, existing.id
+            );
             let body = json!({
                 "content": target_ip_str,
                 "ttl": ttl_val,

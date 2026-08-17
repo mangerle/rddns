@@ -79,9 +79,7 @@ impl ConfigManager {
     /// 原子保存配置到指定路径
     /// 步骤: 写临时文件 -> 刷盘 sync_all -> 原子重命名 rename
     fn atomic_save_to_path(target_path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
-        let parent_dir = target_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
+        let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent_dir)?;
 
         let yaml_str = serde_yaml::to_string(config)?;

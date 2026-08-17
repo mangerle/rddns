@@ -38,7 +38,8 @@ impl DdnsEngine {
         let dispatcher = NotificationDispatcher::new(config.notifications.clone());
 
         for task in &config.dns_tasks {
-            self.process_task(task, &config, &dispatcher, force_cloud_sync).await;
+            self.process_task(task, &config, &dispatcher, force_cloud_sync)
+                .await;
         }
     }
 
@@ -149,50 +150,60 @@ impl DdnsEngine {
         let mut sync_results: Vec<SyncRecordResult> = Vec::new();
 
         // 4. 同步 IPv4 域名
-        if task.ipv4.enabled {
-            if let Some(ipv4) = ipv4_opt {
-                let parsed_domains = parse_domain_list(&task.ipv4.domains);
-                for domain in parsed_domains {
-                    match dns_provider
-                        .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), task.ttl)
-                        .await
-                    {
-                        Ok(res) => sync_results.push(res),
-                        Err(e) => {
-                            tracing::error!("[{}] 同步域名 {} (A 记录) 失败: {}", task.name, domain.full_domain(), e);
-                            sync_results.push(SyncRecordResult {
-                                domain: domain.full_domain(),
-                                record_type: DnsRecordType::A,
-                                target_ip: ipv4.to_string(),
-                                status: SyncStatus::Failed,
-                                message: e.to_string(),
-                            });
-                        }
+        if task.ipv4.enabled
+            && let Some(ipv4) = ipv4_opt
+        {
+            let parsed_domains = parse_domain_list(&task.ipv4.domains);
+            for domain in parsed_domains {
+                match dns_provider
+                    .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), task.ttl)
+                    .await
+                {
+                    Ok(res) => sync_results.push(res),
+                    Err(e) => {
+                        tracing::error!(
+                            "[{}] 同步域名 {} (A 记录) 失败: {}",
+                            task.name,
+                            domain.full_domain(),
+                            e
+                        );
+                        sync_results.push(SyncRecordResult {
+                            domain: domain.full_domain(),
+                            record_type: DnsRecordType::A,
+                            target_ip: ipv4.to_string(),
+                            status: SyncStatus::Failed,
+                            message: e.to_string(),
+                        });
                     }
                 }
             }
         }
 
         // 5. 同步 IPv6 域名
-        if task.ipv6.enabled {
-            if let Some(ipv6) = ipv6_opt {
-                let parsed_domains = parse_domain_list(&task.ipv6.domains);
-                for domain in parsed_domains {
-                    match dns_provider
-                        .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), task.ttl)
-                        .await
-                    {
-                        Ok(res) => sync_results.push(res),
-                        Err(e) => {
-                            tracing::error!("[{}] 同步域名 {} (AAAA 记录) 失败: {}", task.name, domain.full_domain(), e);
-                            sync_results.push(SyncRecordResult {
-                                domain: domain.full_domain(),
-                                record_type: DnsRecordType::AAAA,
-                                target_ip: ipv6.to_string(),
-                                status: SyncStatus::Failed,
-                                message: e.to_string(),
-                            });
-                        }
+        if task.ipv6.enabled
+            && let Some(ipv6) = ipv6_opt
+        {
+            let parsed_domains = parse_domain_list(&task.ipv6.domains);
+            for domain in parsed_domains {
+                match dns_provider
+                    .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), task.ttl)
+                    .await
+                {
+                    Ok(res) => sync_results.push(res),
+                    Err(e) => {
+                        tracing::error!(
+                            "[{}] 同步域名 {} (AAAA 记录) 失败: {}",
+                            task.name,
+                            domain.full_domain(),
+                            e
+                        );
+                        sync_results.push(SyncRecordResult {
+                            domain: domain.full_domain(),
+                            record_type: DnsRecordType::AAAA,
+                            target_ip: ipv6.to_string(),
+                            status: SyncStatus::Failed,
+                            message: e.to_string(),
+                        });
                     }
                 }
             }

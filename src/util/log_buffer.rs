@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 
 /// 单条日志记录条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +100,8 @@ impl tracing::field::Visit for LogVisitor {
         } else if self.message.is_empty() {
             self.message = format!("{}: {:?}", field.name(), value);
         } else {
-            self.message.push_str(&format!(", {}: {:?}", field.name(), value));
+            self.message
+                .push_str(&format!(", {}: {:?}", field.name(), value));
         }
     }
 
@@ -110,7 +111,8 @@ impl tracing::field::Visit for LogVisitor {
         } else if self.message.is_empty() {
             self.message = format!("{}: {}", field.name(), value);
         } else {
-            self.message.push_str(&format!(", {}: {}", field.name(), value));
+            self.message
+                .push_str(&format!(", {}: {}", field.name(), value));
         }
     }
 }
@@ -124,11 +126,8 @@ impl<S: Subscriber> Layer<S> for BufferLogLayer {
         event.record(&mut visitor);
 
         if !visitor.message.is_empty() {
-            self.buffer.push(
-                *metadata.level(),
-                metadata.target(),
-                visitor.message,
-            );
+            self.buffer
+                .push(*metadata.level(), metadata.target(), visitor.message);
         }
     }
 }

@@ -1,5 +1,7 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+};
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -34,9 +36,7 @@ impl AliDnsProvider {
             .filter(|e| !e.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ALIDNS_ENDPOINT.to_string());
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
 
         Ok(Self {
             client,
@@ -151,9 +151,10 @@ impl DnsProvider for AliDnsProvider {
             .unwrap_or_default();
 
         // 找到 RR 与 Type 匹配的记录
-        let matched_record = records
-            .into_iter()
-            .find(|r| r.rr.eq_ignore_ascii_case(&rr) && r.record_type.eq_ignore_ascii_case(&record_type.to_string()));
+        let matched_record = records.into_iter().find(|r| {
+            r.rr.eq_ignore_ascii_case(&rr)
+                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+        });
 
         if let Some(existing) = matched_record {
             if existing.value == target_ip_str {

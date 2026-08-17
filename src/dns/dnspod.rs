@@ -1,10 +1,12 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+};
 use crate::util::crypto::{hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, HOST};
 use reqwest::Client;
+use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
@@ -29,9 +31,7 @@ impl TencentCloudProvider {
             ));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
 
         Ok(Self {
             client,
@@ -74,7 +74,10 @@ impl TencentCloudProvider {
         );
 
         // 3. 计算签名 Signature
-        let secret_date = hmac_sha256(format!("TC3{}", self.secret_key).as_bytes(), date.as_bytes());
+        let secret_date = hmac_sha256(
+            format!("TC3{}", self.secret_key).as_bytes(),
+            date.as_bytes(),
+        );
         let secret_service = hmac_sha256(&secret_date, TENCENT_SERVICE.as_bytes());
         let secret_signing = hmac_sha256(&secret_service, b"tc3_request");
         let signature = hex::encode(hmac_sha256(&secret_signing, string_to_sign.as_bytes()));
@@ -93,8 +96,14 @@ impl TencentCloudProvider {
         headers.insert(HOST, HeaderValue::from_static(TENCENT_HOST));
         headers.insert("X-TC-Action", HeaderValue::from_str(action).unwrap());
         headers.insert("X-TC-Version", HeaderValue::from_static(TENCENT_VERSION));
-        headers.insert("X-TC-Timestamp", HeaderValue::from_str(&timestamp.to_string()).unwrap());
-        headers.insert("Authorization", HeaderValue::from_str(&authorization).unwrap());
+        headers.insert(
+            "X-TC-Timestamp",
+            HeaderValue::from_str(&timestamp.to_string()).unwrap(),
+        );
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&authorization).unwrap(),
+        );
 
         let resp = self
             .client
@@ -198,9 +207,7 @@ impl DnsProvider for TencentCloudProvider {
                 "TTL": ttl_val,
             });
 
-            let _: serde_json::Value = self
-                .request_tc3_api("ModifyRecord", modify_payload)
-                .await?;
+            let _: serde_json::Value = self.request_tc3_api("ModifyRecord", modify_payload).await?;
 
             tracing::info!(
                 "[{}] 成功更新域名 {} -> {}",
@@ -226,9 +233,7 @@ impl DnsProvider for TencentCloudProvider {
                 "TTL": ttl_val,
             });
 
-            let _: serde_json::Value = self
-                .request_tc3_api("CreateRecord", create_payload)
-                .await?;
+            let _: serde_json::Value = self.request_tc3_api("CreateRecord", create_payload).await?;
 
             tracing::info!(
                 "[{}] 成功创建域名 {} -> {}",

@@ -8,8 +8,8 @@ use crate::notifier::pushplus::PushPlusNotifier;
 use crate::notifier::serverchan::ServerChanNotifier;
 use crate::notifier::telegram::TelegramNotifier;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus, Notifier};
-use crate::notifier::wecom::WeComNotifier;
 use crate::notifier::webhook::CustomWebhookNotifier;
+use crate::notifier::wecom::WeComNotifier;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,55 +35,55 @@ impl NotificationDispatcher {
     pub fn new(config: NotificationConfig) -> Self {
         let mut notifiers: Vec<Arc<dyn Notifier>> = Vec::new();
 
-        if let Some(ref ilink) = config.ilink {
-            if ilink.enabled {
-                notifiers.push(Arc::new(ILinkNotifier::new(ilink.clone())));
-            }
+        if let Some(ref ilink) = config.ilink
+            && ilink.enabled
+        {
+            notifiers.push(Arc::new(ILinkNotifier::new(ilink.clone())));
         }
-        if let Some(ref wecom) = config.wecom {
-            if wecom.enabled {
-                notifiers.push(Arc::new(WeComNotifier::new(wecom.clone())));
-            }
+        if let Some(ref wecom) = config.wecom
+            && wecom.enabled
+        {
+            notifiers.push(Arc::new(WeComNotifier::new(wecom.clone())));
         }
-        if let Some(ref pushplus) = config.pushplus {
-            if pushplus.enabled {
-                notifiers.push(Arc::new(PushPlusNotifier::new(pushplus.clone())));
-            }
+        if let Some(ref pushplus) = config.pushplus
+            && pushplus.enabled
+        {
+            notifiers.push(Arc::new(PushPlusNotifier::new(pushplus.clone())));
         }
-        if let Some(ref serverchan) = config.serverchan {
-            if serverchan.enabled {
-                notifiers.push(Arc::new(ServerChanNotifier::new(serverchan.clone())));
-            }
+        if let Some(ref serverchan) = config.serverchan
+            && serverchan.enabled
+        {
+            notifiers.push(Arc::new(ServerChanNotifier::new(serverchan.clone())));
         }
-        if let Some(ref tg) = config.telegram {
-            if tg.enabled {
-                notifiers.push(Arc::new(TelegramNotifier::new(tg.clone())));
-            }
+        if let Some(ref tg) = config.telegram
+            && tg.enabled
+        {
+            notifiers.push(Arc::new(TelegramNotifier::new(tg.clone())));
         }
-        if let Some(ref dt) = config.dingtalk {
-            if dt.enabled {
-                notifiers.push(Arc::new(DingTalkNotifier::new(dt.clone())));
-            }
+        if let Some(ref dt) = config.dingtalk
+            && dt.enabled
+        {
+            notifiers.push(Arc::new(DingTalkNotifier::new(dt.clone())));
         }
-        if let Some(ref fs) = config.feishu {
-            if fs.enabled {
-                notifiers.push(Arc::new(FeishuNotifier::new(fs.clone())));
-            }
+        if let Some(ref fs) = config.feishu
+            && fs.enabled
+        {
+            notifiers.push(Arc::new(FeishuNotifier::new(fs.clone())));
         }
-        if let Some(ref bark) = config.bark {
-            if bark.enabled {
-                notifiers.push(Arc::new(BarkNotifier::new(bark.clone())));
-            }
+        if let Some(ref bark) = config.bark
+            && bark.enabled
+        {
+            notifiers.push(Arc::new(BarkNotifier::new(bark.clone())));
         }
-        if let Some(ref email) = config.email {
-            if email.enabled {
-                notifiers.push(Arc::new(EmailNotifier::new(email.clone())));
-            }
+        if let Some(ref email) = config.email
+            && email.enabled
+        {
+            notifiers.push(Arc::new(EmailNotifier::new(email.clone())));
         }
-        if let Some(ref wh) = config.webhook {
-            if wh.enabled {
-                notifiers.push(Arc::new(CustomWebhookNotifier::new(wh.clone())));
-            }
+        if let Some(ref wh) = config.webhook
+            && wh.enabled
+        {
+            notifiers.push(Arc::new(CustomWebhookNotifier::new(wh.clone())));
         }
 
         Self {

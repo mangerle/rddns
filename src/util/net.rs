@@ -71,14 +71,14 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
 
 /// 从字符串文本中提取第一个合法的 IPv4 地址
 pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> {
-    if let Some(pattern) = custom_regex {
-        if let Ok(re) = Regex::new(pattern) {
-            for cap in re.captures_iter(text) {
-                if let Some(m) = cap.get(1).or_else(|| cap.get(0)) {
-                    if let Ok(ip) = m.as_str().trim().parse::<Ipv4Addr>() {
-                        return Some(ip);
-                    }
-                }
+    if let Some(pattern) = custom_regex
+        && let Ok(re) = Regex::new(pattern)
+    {
+        for cap in re.captures_iter(text) {
+            if let Some(m) = cap.get(1).or_else(|| cap.get(0))
+                && let Ok(ip) = m.as_str().trim().parse::<Ipv4Addr>()
+            {
+                return Some(ip);
             }
         }
     }
@@ -95,22 +95,33 @@ pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> 
 /// 从字符串文本中提取合法的 IPv6 地址
 /// 若指定了 custom_regex 则优先使用自定义正则表达式筛选目标 IPv6
 pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> {
-    if let Some(pattern) = custom_regex {
-        if let Ok(re) = Regex::new(pattern) {
-            for cap in re.captures_iter(text) {
-                if let Some(m) = cap.get(1).or_else(|| cap.get(0)) {
-                    let cleaned = m.as_str().trim().trim_matches(|c| c == '[' || c == ']');
-                    if let Ok(ip) = cleaned.parse::<Ipv6Addr>() {
-                        return Some(ip);
-                    }
+    if let Some(pattern) = custom_regex
+        && let Ok(re) = Regex::new(pattern)
+    {
+        for cap in re.captures_iter(text) {
+            if let Some(m) = cap.get(1).or_else(|| cap.get(0)) {
+                let cleaned = m.as_str().trim().trim_matches(|c| c == '[' || c == ']');
+                if let Ok(ip) = cleaned.parse::<Ipv6Addr>() {
+                    return Some(ip);
                 }
             }
         }
     }
 
     // 默认按照空格/换行/逗号/JSON括号分词提取
-    for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == '"' || c == '\'' || c == '{' || c == '}' || c == '<' || c == '>') {
-        let cleaned = word.trim().trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '{' || c == '}');
+    for word in text.split(|c: char| {
+        c.is_whitespace()
+            || c == ','
+            || c == '"'
+            || c == '\''
+            || c == '{'
+            || c == '}'
+            || c == '<'
+            || c == '>'
+    }) {
+        let cleaned = word
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']' || c == '(' || c == ')' || c == '{' || c == '}');
         if let Ok(ip) = cleaned.parse::<Ipv6Addr>() {
             return Some(ip);
         }
