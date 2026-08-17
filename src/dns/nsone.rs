@@ -52,8 +52,9 @@ impl NsOneProvider {
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let mut auth_val = HeaderValue::from_str(api_key.trim())
-            .map_err(|e| DnsProviderError::MissingCredentials(format!("无效的 NS1 API Key: {}", e)))?;
+        let mut auth_val = HeaderValue::from_str(api_key.trim()).map_err(|e| {
+            DnsProviderError::MissingCredentials(format!("无效的 NS1 API Key: {}", e))
+        })?;
         auth_val.set_sensitive(true);
         headers.insert("X-NSONE-Key", auth_val);
 

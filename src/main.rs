@@ -68,7 +68,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. 解析配置文件路径（若为相对路径，自动锚定至可执行文件所在目录，防止作为系统服务启动时工作目录漂移）
     let config_path = if args.config.is_relative() {
         if let Ok(exe_path) = std::env::current_exe() {
-            exe_path.parent().unwrap_or_else(|| Path::new("")).join(&args.config)
+            exe_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(&args.config)
         } else {
             args.config
         }
