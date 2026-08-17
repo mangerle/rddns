@@ -87,36 +87,33 @@
       overflow: hidden;
     }
 
-    /* 整体分栏布局 */
+    /* 整体分栏布局：方案 C (垂直流式，顶部全屏通栏 + 下方多栏并排) */
     .app-layout {
       display: flex;
+      flex-direction: column;
       height: 100vh;
       width: 100vw;
       overflow: hidden;
     }
 
-    /* 左侧边栏 (Sidebar - 固定全高) */
-    .sidebar {
-      width: 270px;
-      height: 100vh;
-      background-color: var(--bg-sidebar);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 20px 14px;
-      flex-shrink: 0;
-      overflow-y: auto;
-      transition: all 0.25s ease;
-    }
-
-    .sidebar-brand {
+    /* 顶部全局大通栏 (Global TopBar - 横跨全屏) */
+    .global-topbar {
+      height: 56px;
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 0 4px 18px 4px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 16px;
+      justify-content: space-between;
+      gap: 16px;
+      flex-shrink: 0;
+      z-index: 100;
+    }
+
+    .topbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
     .brand-logo {
       background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
@@ -124,16 +121,16 @@
       font-weight: 800;
       font-size: 1.05rem;
       letter-spacing: -0.5px;
-      padding: 6px 10px;
+      padding: 5px 10px;
       border-radius: var(--radius);
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+      box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3);
       display: flex;
       align-items: center;
       gap: 6px;
       flex-shrink: 0;
     }
     .brand-title {
-      font-size: 1.05rem;
+      font-size: 1.02rem;
       font-weight: 700;
       color: var(--text);
       letter-spacing: -0.3px;
@@ -143,9 +140,40 @@
     .brand-desc {
       font-size: 0.72rem;
       color: var(--text-muted);
-      margin-top: 3px;
+      margin-top: 2px;
       white-space: nowrap;
       line-height: 1.2;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    /* TopBar 下方的主体容器 (包含侧边栏与工作区) */
+    .app-body-container {
+      flex: 1;
+      display: flex;
+      height: calc(100vh - 56px);
+      width: 100vw;
+      overflow: hidden;
+    }
+
+    /* 第一栏：左侧一级导航侧边栏 (Sidebar) */
+    .sidebar {
+      width: 220px;
+      height: 100%;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px 12px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      transition: all 0.25s ease;
     }
 
     /* 侧边栏导航链接 */
@@ -159,10 +187,10 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 12px 16px;
+      padding: 10px 14px;
       border-radius: 8px;
       color: var(--text-muted);
-      font-size: 0.92rem;
+      font-size: 0.9rem;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid transparent;
@@ -181,7 +209,7 @@
 
     /* 侧边栏底部信息 */
     .sidebar-footer {
-      padding: 16px 8px 0 8px;
+      padding: 12px 4px 0 4px;
       border-top: 1px solid var(--border);
     }
     .status-badge {
@@ -191,55 +219,63 @@
       font-size: 0.78rem;
       color: var(--text-muted);
       font-weight: 500;
+      white-space: nowrap;
     }
 
-    /* 右侧主内容区 (固定全高并承载内联滚动) */
-    .main-wrapper {
+    /* 第三栏：右侧主工作台容器 (Main Workspace - 包含固定 Header 与滚动 Body) */
+    .main-workspace {
       flex: 1;
-      height: 100vh;
+      height: 100%;
       display: flex;
       flex-direction: column;
       min-width: 0;
       overflow: hidden;
     }
 
-    /* 顶部导航顶栏 (固定在顶部) */
-    .top-header {
-      background-color: var(--bg-surface);
+    /* 工作台固定顶栏 (与第二栏 Header 等高 52px 绝对水平对齐) */
+    .workspace-header {
+      height: 52px;
+      background-color: var(--bg-card);
       border-bottom: 1px solid var(--border);
-      padding: 16px 32px;
+      padding: 0 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
       flex-shrink: 0;
       z-index: 10;
     }
-    .page-title h2 {
-      font-size: 1.15rem;
-      font-weight: 700;
-      color: var(--text);
+
+    .workspace-header-dns {
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-    .page-title p {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      justify-content: space-between;
+      width: 100%;
+      gap: 16px;
     }
 
-    /* 内容承载容器 (独立纵向滚动) */
-    .content-body {
+    .workspace-header-standard {
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    .workspace-header-title {
+      font-size: 0.96rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.2;
+    }
+    .workspace-header-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+      line-height: 1.2;
+    }
+
+    /* 工作台可滚动主体内容区 */
+    .workspace-body {
       flex: 1;
       overflow-y: auto;
-      padding: 28px 32px 48px 32px;
-      width: 100%;
+      padding: 20px 28px 48px 28px;
       min-height: 0;
     }
 
@@ -280,14 +316,17 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: 8px;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 6px;
       font-weight: 600;
-      font-size: 0.875rem;
+      font-size: 0.85rem;
       border: 1px solid transparent;
       transition: all 0.2s ease;
       user-select: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+      height: 34px;
     }
     .btn-primary {
       background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
@@ -312,14 +351,17 @@
       background: var(--bg-surface);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 8px 12px;
+      padding: 6px 10px;
+      height: 34px;
     }
     .btn-theme:hover {
       background: var(--bg-hover);
     }
     .btn-sm {
-      padding: 6px 12px;
+      padding: 4px 10px;
       font-size: 0.8rem;
+      height: 30px;
+      gap: 4px;
     }
 
     /* 卡片体系 */
@@ -461,31 +503,35 @@
     .switch-wrapper {
       display: inline-flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       cursor: pointer;
       user-select: none;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .switch-label {
-      font-size: 0.875rem;
+      font-size: 0.85rem;
       font-weight: 600;
       color: var(--text);
+      white-space: nowrap;
     }
     input[type="checkbox"].toggle-switch {
       appearance: none;
-      width: 44px;
-      height: 24px;
+      width: 40px;
+      height: 22px;
       background: var(--border);
-      border-radius: 12px;
+      border-radius: 11px;
       position: relative;
       cursor: pointer;
       outline: none;
       transition: background 0.2s ease;
+      flex-shrink: 0;
     }
     input[type="checkbox"].toggle-switch::before {
       content: "";
       position: absolute;
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       border-radius: 50%;
       top: 3px;
       left: 3px;
@@ -497,7 +543,7 @@
       background: var(--success);
     }
     input[type="checkbox"].toggle-switch:checked::before {
-      transform: translateX(20px);
+      transform: translateX(18px);
     }
 
     .form-tip {
@@ -709,14 +755,258 @@
       right: 24px;
     }
 
-    @media (max-width: 860px) {
+    /* ========================================== */
+    /* 核心多栏架构：第二栏任务子侧边栏 (Sub-Sidebar) */
+    /* ========================================== */
+    .dns-sub-sidebar {
+      width: 250px;
+      height: 100%;
+      background-color: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+      transition: all 0.25s ease;
+    }
+
+    .sub-sidebar-header {
+      height: 52px;
+      padding: 0 14px;
+      background-color: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .sub-sidebar-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .sub-sidebar-badge {
+      font-size: 0.72rem;
+      background: var(--primary-light);
+      color: var(--primary);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .btn-add-task {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 0.76rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s ease;
+      height: 28px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn-add-task:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .sub-sidebar-list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .task-item-card {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      background: transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .task-item-card:hover {
+      background: var(--bg-hover);
+    }
+    .task-item-card.active {
+      background: var(--primary-light);
+      border-color: var(--border-focus);
+    }
+
+    .task-item-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .task-item-name {
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 140px;
+    }
+
+    .task-item-provider-tag {
+      font-size: 0.7rem;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .task-item-card.active .task-item-provider-tag {
+      background: rgba(99, 102, 241, 0.25);
+      color: #fff;
+    }
+
+    .task-item-domain {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-left: 14px;
+    }
+
+    /* 通用页面模块标题卡片 (通知与系统设置顶部) */
+    .tab-page-header-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 20px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .tab-page-header-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tab-page-header-desc {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* 任务专属操作栏卡片 (下移置于表单顶部) */
+    .task-toolbar-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
+      flex-wrap: wrap;
+    }
+
+    .task-name-edit-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 220px;
+    }
+    .task-name-edit-wrap label {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .task-name-edit-wrap input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.86rem;
+      font-weight: 600;
+      outline: none;
+      width: 180px;
+      height: 34px;
+      transition: border-color 0.2s ease;
+    }
+    .task-name-edit-wrap input:focus {
+      border-color: var(--border-focus);
+    }
+
+    .task-toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .btn-del-hover:hover {
+      color: var(--danger) !important;
+      border-color: rgba(239, 68, 68, 0.4) !important;
+    }
+
+    @media (max-width: 1080px) {
+      .dns-master-detail-layout {
+        flex-direction: column;
+      }
+      .task-master-col {
+        width: 100%;
+        position: static;
+        height: auto;
+        max-height: 240px;
+      }
+      .task-master-list {
+        max-height: 180px;
+      }
+    }
+
+    .btn-del-hover:hover {
+      color: var(--danger) !important;
+      border-color: rgba(239, 68, 68, 0.4) !important;
+    }
+
+    @media (max-width: 960px) {
       .app-layout { flex-direction: column; }
-      .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+      .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 12px 16px; }
       .nav-list { flex-direction: row; overflow-x: auto; }
       .sidebar-footer { display: none; }
+      .sub-sidebar { width: 100%; height: auto; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
       .content-body { padding: 20px 16px; }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
-      .top-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .top-header { flex-direction: column; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+      .header-task-toolbar { width: 100%; flex-wrap: wrap; }
+      .task-name-input-box input { width: 160px; }
       .header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
     }
   </style>
@@ -828,26 +1118,79 @@
     </div>
   </div>
 
-  <!-- 主控制台界面 (登录后可见) -->
+  <!-- 主控制台界面 (登录后可见 - 方案 C 全屏大通栏架构) -->
   <div class="app-layout" id="mainApp" style="display:none;">
-    <!-- 左侧导航侧边栏 -->
-    <aside class="sidebar">
-      <div>
-        <div class="sidebar-brand">
-          <div class="brand-logo">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-              </svg>
-            </span>
-            <span>rddns</span>
-          </div>
-          <div>
-            <div class="brand-title">动态域名解析</div>
-            <div class="brand-desc">高性能 Rust 驱动</div>
-          </div>
+    <!-- 顶部全局大通栏 (Global TopBar - 横跨全屏) -->
+    <header class="global-topbar">
+      <div class="topbar-brand">
+        <div class="brand-logo">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </span>
+          <span>rddns</span>
         </div>
+        <div>
+          <div class="brand-title">动态域名解析</div>
+          <div class="brand-desc">高性能 Rust 驱动</div>
+        </div>
+      </div>
 
+      <div class="topbar-actions">
+        <div class="status-badge" id="versionBadge" onclick="checkAppVersion(true)" style="cursor:pointer;" title="点击检查更新">
+          <span class="live-dot"></span>
+          <span id="versionText">v0.2.0 已连接</span>
+        </div>
+        <div id="updateNotice" style="display:none; font-size:12px; color:var(--primary); cursor:pointer;" onclick="triggerWebUpgrade()">
+          <span>🎉 发现新版本，点击自动升级</span>
+        </div>
+        <button class="btn-theme" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">
+          <span class="icon" id="themeIcon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path>
+            </svg>
+          </span>
+        </button>
+        <button class="btn-outline" onclick="openLogModal()" id="logBtn" title="查看实时运行日志">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </span>
+          <span>运行日志</span>
+        </button>
+        <button class="btn-outline" onclick="triggerSync()" id="syncBtn">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+          </span>
+          <span>立即全量同步</span>
+        </button>
+        <button class="btn-primary" onclick="saveConfig()" id="saveBtn">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+          </span>
+          <span>保存配置</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- TopBar 下方主体区域 (包含三栏) -->
+    <div class="app-body-container">
+      <!-- 第一栏：左侧一级导航侧边栏 -->
+      <aside class="sidebar">
         <ul class="nav-list">
           <li class="nav-item active" id="nav-tab-dns" onclick="switchNav('tab-dns')">
             <span class="icon">
@@ -878,232 +1221,232 @@
             <span>系统与安全设置</span>
           </li>
         </ul>
-      </div>
 
-      <div class="sidebar-footer" style="display:flex; flex-direction:column; gap:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div class="status-badge" id="versionBadge" onclick="checkAppVersion(true)" style="cursor:pointer;" title="点击检查更新">
-            <span class="live-dot"></span>
-            <span id="versionText">v0.2.0 已连接</span>
+        <div class="sidebar-footer">
+          <button class="btn-outline btn-sm" onclick="logout()" title="退出登录" id="logoutBtn" style="width:100%; justify-content:center; display:none; padding:6px 10px;">
+            <span>退出登录</span>
+          </button>
+        </div>
+      </aside>
+
+      <!-- 第二栏：DNS 解析任务专属子侧边栏 (全高贯通) -->
+      <aside class="dns-sub-sidebar" id="dnsSubSidebar">
+        <div class="sub-sidebar-header">
+          <div class="sub-sidebar-title">
+            <span>📑 解析任务列表</span>
+            <span class="sub-sidebar-badge" id="taskCountBadge">1</span>
           </div>
-          <button class="btn-outline btn-sm" onclick="logout()" title="退出登录" id="logoutBtn" style="padding:4px 8px; font-size:12px; display:none;">
-            <span>退出</span>
+          <button class="btn-add-task" onclick="addNewTask()" title="添加新解析任务">
+            <span>＋ 新建</span>
           </button>
         </div>
-        <div id="updateNotice" style="display:none; font-size:12px; color:var(--primary-color); cursor:pointer;" onclick="triggerWebUpgrade()">
-          <span>🎉 发现新版本，点击自动升级</span>
+        <div class="sub-sidebar-list" id="taskMasterList">
+          <!-- 动态渲染任务列表项 -->
         </div>
-      </div>
-    </aside>
+      </aside>
 
-    <!-- 右侧主体内容 -->
-    <main class="main-wrapper">
-      <header class="top-header">
-        <div class="page-title">
-          <h2 id="currentSectionTitle">DNS 服务商与解析</h2>
-          <p id="currentSectionDesc">配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标</p>
-        </div>
-        <div class="header-actions">
-          <button class="btn-theme" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">
-            <span class="icon" id="themeIcon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path>
-              </svg>
-            </span>
-          </button>
-          <button class="btn-outline" onclick="openLogModal()" id="logBtn" title="查看实时运行日志">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
-              </svg>
-            </span>
-            <span>运行日志</span>
-          </button>
-          <button class="btn-outline" onclick="triggerSync()" id="syncBtn">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <polyline points="1 20 1 14 7 14"></polyline>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-              </svg>
-            </span>
-            <span>立即全量同步</span>
-          </button>
-          <button class="btn-primary" onclick="saveConfig()" id="saveBtn">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                <polyline points="7 3 7 8 15 8"></polyline>
-              </svg>
-            </span>
-            <span>保存配置</span>
-          </button>
-        </div>
-      </header>
-
-      <div class="content-body">
-        <!-- ========================================== -->
-        <!-- TAB 1: DNS 服务商与任务配置 -->
-        <!-- ========================================== -->
-        <div id="tab-dns" class="tab-content">
-          <!-- 服务商选择 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
+      <!-- 第三栏：右侧主工作台 -->
+      <main class="main-workspace">
+        <!-- 固定工作台顶栏 (与第二栏 Header 等高 52px 绝对水平对齐) -->
+        <header class="workspace-header">
+          <!-- DNS 任务操作工具栏 (DNS 模式可见) -->
+          <div class="workspace-header-dns" id="headerDnsTaskBar">
+            <div class="task-name-edit-wrap">
+              <label for="currentTaskNameInput">任务名称</label>
+              <input type="text" id="currentTaskNameInput" placeholder="输入任务名称" oninput="onTaskNameChange(this.value)" />
+            </div>
+            <div class="task-toolbar-actions">
+              <label class="switch-wrapper">
+                <input type="checkbox" id="currentTaskEnabled" class="toggle-switch" checked onchange="onTaskEnabledChange(this.checked)" />
+                <span class="switch-label">启用此任务</span>
+              </label>
+              <button class="btn-outline btn-sm" onclick="cloneCurrentTask()" title="复制当前任务配置">
                 <span class="icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                   </svg>
                 </span>
-                <span>DNS 服务商配置</span>
-              </div>
-              <span class="card-badge active">原生签名驱动</span>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>选择 DNS 服务商</label>
-                <select id="dnsProviderType" onchange="renderProviderFields()">
-                  <option value="cloudflare">Cloudflare (支持小黄云保持与 API Token)</option>
-                  <option value="ali_dns">阿里云 (AliDNS - 纯 Rust POP 签名)</option>
-                  <option value="tencent_cloud">腾讯云 (DNSPod - 纯 Rust TC3 签名)</option>
-                  <option value="huawei_cloud">华为云 (Huawei Cloud - 纯 Rust SDK 签名)</option>
-                  <option value="porkbun">Porkbun (API Key / Secret)</option>
-                  <option value="godaddy">GoDaddy (API Key / Secret)</option>
-                  <option value="dynv6">Dynv6 (免费 IPv6 动态 DNS Token)</option>
-                  <option value="baidu_cloud">百度智能云 (Baidu Cloud - 纯 Rust BCE 签名)</option>
-                  <option value="traffic_route">火山引擎 (Volcengine TrafficRoute - 纯 Rust V4 签名)</option>
-                  <option value="namecheap">Namecheap (动态 DNS 专用密码)</option>
-                  <option value="namesilo">NameSilo (API Key)</option>
-                  <option value="spaceship">Spaceship (API Key / Secret)</option>
-                  <option value="dynadot">Dynadot (动态 DNS 密码)</option>
-                  <option value="vercel">Vercel DNS (Access Token)</option>
-                  <option value="rainyun">雨云 (RainYun API-Key)</option>
-                  <option value="cloudns">ClouDNS (Auth-ID / Password)</option>
-                  <option value="gcore">Gcore DNS (Permanent API-Key)</option>
-                  <option value="name_com">Name.com (Username / Token)</option>
-                  <option value="dnsla">DNS.LA (API ID / Secret)</option>
-                  <option value="aliesa">阿里云 ESA 边缘安全加速 (AccessKey)</option>
-                  <option value="edgeone">腾讯云 EdgeOne (SecretId / SecretKey)</option>
-                  <option value="nowcn">时代互联 (NowCN AccessID / Key)</option>
-                  <option value="eranet">时代互联国际版 (Eranet AccessID / Key)</option>
-                  <option value="tnethk">TNetHK (AccessID / Key)</option>
-                  <option value="nsone">IBM NS1 Connect (API Key)</option>
-                  <option value="hipm_dnsmgr">HiPM DNSMgr (自建/托管 DNS 管理平台)</option>
-                  <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>TTL 缓存时间<span class="label-hint">记录解析生效与缓存周期</span></label>
-                <select id="dnsTtlSelect" onchange="handleTtlSelect()">
-                  <option value="">自动默认 (留空 / 推荐)</option>
-                  <option value="1">1 秒 (Cloudflare Auto / 尊享版)</option>
-                  <option value="60">1 分钟 (60 秒)</option>
-                  <option value="120">2 分钟 (120 秒 - 腾讯云基础版)</option>
-                  <option value="300">5 分钟 (300 秒)</option>
-                  <option value="600">10 分钟 (600 秒 - 阿里/腾讯免费版)</option>
-                  <option value="1800">30 分钟 (1800 秒)</option>
-                  <option value="3600">1 小时 (3600 秒)</option>
-                  <option value="43200">12 小时 (43200 秒)</option>
-                  <option value="86400">1 天 (86400 秒)</option>
-                  <option value="__custom__">自定义输入秒数...</option>
-                </select>
-                <input type="number" id="dnsTtlCustom" placeholder="请输入自定义 TTL 秒数（如 600）" style="margin-top:8px; display:none;" min="1" />
-              </div>
-            </div>
-            <div id="providerDynamicFields"></div>
-          </div>
-
-          <!-- IPv4 配置 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked />
-                  <span class="switch-label">启用 IPv4 解析</span>
-                </label>
-              </div>
-              <div class="card-actions">
-                <div id="ipv4ProbeResult" class="ip-probe-badge" style="display:none;"></div>
-                <button class="btn-outline btn-sm" onclick="testIp('ipv4')" id="ipv4TestBtn">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    </svg>
-                  </span>
-                  <span>立即探测 IPv4</span>
-                </button>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>IPv4 获取途径</label>
-                <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
-                  <option value="url">远程 URL 接口获取 (智能多接口回退)</option>
-                  <option value="net_interface">本地网卡设备直读 (自动剔除私网与链路地址)</option>
-                  <option value="command">外部命令 / Shell 脚本提取</option>
-                </select>
-              </div>
-              <div class="form-group" id="ipv4DynamicField"></div>
-            </div>
-            <div class="form-group">
-              <label>提取正则表达式 (可选)<span class="label-hint">如需从多条输出中提取指定前缀时填写</span></label>
-              <input type="text" id="ipv4Regex" placeholder="例如: \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b" />
-            </div>
-            <div class="form-group">
-              <label>解析的 IPv4 域名列表 (一行一个)<span class="label-hint">支持 @ 或子域名，支持冒号语法 如 home:example.com</span></label>
-              <textarea id="ipv4Domains" rows="3" placeholder="example.com&#10;nas.example.com&#10;vpn:example.com"></textarea>
+                <span>复制</span>
+              </button>
+              <button class="btn-outline btn-sm btn-del-hover" onclick="deleteCurrentTask()" title="删除当前任务">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </span>
+                <span>删除</span>
+              </button>
             </div>
           </div>
 
-          <!-- IPv6 配置 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="ipv6Enable" class="toggle-switch" checked />
-                  <span class="switch-label">启用 IPv6 解析</span>
-                </label>
-              </div>
-              <div class="card-actions">
-                <div id="ipv6ProbeResult" class="ip-probe-badge" style="display:none;"></div>
-                <button class="btn-outline btn-sm" onclick="testIp('ipv6')" id="ipv6TestBtn">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    </svg>
-                  </span>
-                  <span>立即探测 IPv6</span>
-                </button>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>IPv6 获取途径</label>
-                <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
-                  <option value="url">远程 URL 接口获取 (推荐)</option>
-                  <option value="net_interface">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
-                  <option value="command">外部命令 / Shell 脚本提取</option>
-                </select>
-              </div>
-              <div class="form-group" id="ipv6DynamicField"></div>
-            </div>
-            <div class="form-group">
-              <label>提取正则表达式 (可选)</label>
-              <input type="text" id="ipv6Regex" placeholder="例如从多 IP 中匹配固定前缀" />
-            </div>
-            <div class="form-group">
-              <label>解析的 IPv6 域名列表 (一行一个)</label>
-              <textarea id="ipv6Domains" rows="3" placeholder="v6.example.com&#10;nas:example.com"></textarea>
+          <!-- 通用模块标题栏 (通知与系统设置模式可见) -->
+          <div class="workspace-header-standard" id="headerStandardBar" style="display:none;">
+            <div>
+              <div class="workspace-header-title" id="currentSectionTitle">通知与告警推送</div>
+              <div class="workspace-header-desc" id="currentSectionDesc">配置微信公众号、企业微信、SMTP 邮件等通道与告警触发策略</div>
             </div>
           </div>
-        </div>
+        </header>
+
+        <!-- 工作台可滚动主体内容区 -->
+        <div class="workspace-body">
+          <!-- ========================================== -->
+          <!-- TAB 1: DNS 服务商与任务配置 -->
+          <!-- ========================================== -->
+          <div id="tab-dns" class="tab-content">
+            <!-- 服务商选择 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                    </svg>
+                  </span>
+                  <span>DNS 服务商配置</span>
+                </div>
+                <span class="card-badge active">原生签名驱动</span>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>选择 DNS 服务商</label>
+                  <select id="dnsProviderType" onchange="renderProviderFields()">
+                    <option value="cloudflare">Cloudflare (支持小黄云保持与 API Token)</option>
+                    <option value="ali_dns">阿里云 (AliDNS - 纯 Rust POP 签名)</option>
+                    <option value="tencent_cloud">腾讯云 (DNSPod - 纯 Rust TC3 签名)</option>
+                    <option value="huawei_cloud">华为云 (Huawei Cloud - 纯 Rust SDK 签名)</option>
+                    <option value="porkbun">Porkbun (API Key / Secret)</option>
+                    <option value="godaddy">GoDaddy (API Key / Secret)</option>
+                    <option value="dynv6">Dynv6 (免费 IPv6 动态 DNS Token)</option>
+                    <option value="baidu_cloud">百度智能云 (Baidu Cloud - 纯 Rust BCE 签名)</option>
+                    <option value="traffic_route">火山引擎 (ByteDance TrafficRoute - 纯 Rust TOP 签名)</option>
+                    <option value="namecheap">Namecheap (全局动态 DNS 密码)</option>
+                    <option value="namesilo">NameSilo (官方 API Key)</option>
+                    <option value="spaceship">Spaceship (API Key / Secret)</option>
+                    <option value="dynadot">Dynadot (API Secret Key)</option>
+                    <option value="vercel">Vercel (Bearer Token)</option>
+                    <option value="rainyun">雨云 (RainYun API Key)</option>
+                    <option value="cloudns">ClouDNS (Auth-ID / Sub-Auth-ID)</option>
+                    <option value="gcore">Gcore (Permanent API Token)</option>
+                    <option value="name_com">Name.com (Username / Token)</option>
+                    <option value="dnsla">DNS.LA (API ID / Secret)</option>
+                    <option value="aliesa">阿里云 ESA (边缘安全加速 ESA)</option>
+                    <option value="edgeone">腾讯云 EdgeOne (边缘安全加速)</option>
+                    <option value="nowcn">时代互联 (Now.cn / DNS 密码)</option>
+                    <option value="eranet">时代互联国际版 (Eranet Global)</option>
+                    <option value="tnethk">TNetHK (时代互联香港)</option>
+                    <option value="nsone">IBM NS1 Connect (API Key)</option>
+                    <option value="hipm_dnsmgr">HiPM DNSMgr (自建 DNS 管理系统)</option>
+                    <option value="callback">自定义 Webhook Callback (通用 HTTP 回调)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>TTL 缓存时间 <span style="font-size:0.75rem;color:var(--text-muted);">(记录解析生效与缓存周期)</span></label>
+                  <select id="dnsTtlSelect" onchange="handleTtlSelect()">
+                    <option value="">自动默认 (留空 / 推荐)</option>
+                    <option value="1">1 秒 (极致秒级生效)</option>
+                    <option value="60">1 分钟 (60秒)</option>
+                    <option value="120">2 分钟 (120秒)</option>
+                    <option value="600">10 分钟 (600秒)</option>
+                    <option value="1800">30 分钟 (1800秒)</option>
+                    <option value="3600">1 小时 (3600秒)</option>
+                    <option value="86400">1 天 (86400秒)</option>
+                    <option value="__custom__">手动指定自定义 TTL 秒数...</option>
+                  </select>
+                  <input type="number" id="dnsTtlCustom" placeholder="请输入正整数 TTL (单位: 秒)" style="margin-top:8px; display:none;" min="1" />
+                </div>
+              </div>
+              <div id="providerDynamicFields" style="margin-top:16px;"></div>
+            </div>
+
+            <!-- IPv4 配置 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked onchange="toggleIpSection('ipv4')" />
+                    <span class="switch-label">启用 IPv4 解析</span>
+                  </label>
+                </div>
+                <div class="header-actions">
+                  <span class="card-badge" id="ipv4ProbeResult" style="display:none;"></span>
+                  <button class="btn-outline btn-sm" onclick="testIp('ipv4')" id="ipv4TestBtn">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      </svg>
+                    </span>
+                    <span>立即探测 IPv4</span>
+                  </button>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>IPv4 获取途径</label>
+                  <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
+                    <option value="url">远程 URL 接口获取 (智能多接口回退)</option>
+                    <option value="net_interface">本地网卡设备直读 (支持自动枚举物理/虚拟网卡)</option>
+                    <option value="command">外部命令 / Shell 脚本提取</option>
+                  </select>
+                </div>
+                <div class="form-group" id="ipv4DynamicField"></div>
+              </div>
+              <div class="form-group">
+                <label>提取正则表达式 (可选) <span style="font-size:0.75rem;color:var(--text-muted);">(如需从多条输出中提取指定前缀时填写)</span></label>
+                <input type="text" id="ipv4Regex" placeholder="例如: \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b" />
+              </div>
+              <div class="form-group">
+                <label>解析的 IPv4 域名列表 (一行一个) <span style="font-size:0.75rem;color:var(--text-muted);">(支持 @ 或子域名，支持冒号语法 如 home:example.com)</span></label>
+                <textarea id="ipv4Domains" rows="3" placeholder="home.example.com&#10;test.example.com"></textarea>
+              </div>
+            </div>
+
+            <!-- IPv6 配置 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="ipv6Enable" class="toggle-switch" onchange="toggleIpSection('ipv6')" />
+                    <span class="switch-label">启用 IPv6 解析</span>
+                  </label>
+                </div>
+                <div class="header-actions">
+                  <span class="card-badge" id="ipv6ProbeResult" style="display:none;"></span>
+                  <button class="btn-outline btn-sm" onclick="testIp('ipv6')" id="ipv6TestBtn">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      </svg>
+                    </span>
+                    <span>立即探测 IPv6</span>
+                  </button>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>IPv6 获取途径</label>
+                  <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
+                    <option value="url">远程 URL 接口获取 (推荐)</option>
+                    <option value="net_interface">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
+                    <option value="command">外部命令 / Shell 脚本提取</option>
+                  </select>
+                </div>
+                <div class="form-group" id="ipv6DynamicField"></div>
+              </div>
+              <div class="form-group">
+                <label>提取正则表达式 (可选)</label>
+                <input type="text" id="ipv6Regex" placeholder="例如从多 IP 中匹配固定前缀" />
+              </div>
+              <div class="form-group">
+                <label>解析的 IPv6 域名列表 (一行一个)</label>
+                <textarea id="ipv6Domains" rows="3" placeholder="v6.example.com&#10;nas:example.com"></textarea>
+              </div>
+            </div>
+          </div>
 
         <!-- ========================================== -->
         <!-- TAB 2: 通知与告警推送 -->
@@ -1654,8 +1997,9 @@
             <p class="form-tip">提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。</p>
           </div>
         </div>
-      </div>
-    </main>
+        </div> <!-- /.workspace-body -->
+      </main>
+    </div> <!-- /.app-body-container -->
   </div>
 
   <script>
@@ -1931,17 +2275,33 @@
       
       const navItem = document.getElementById(`nav-${tabId}`);
       if (navItem) navItem.classList.add('active');
-      
-      const titleEl = document.getElementById('currentSectionTitle');
-      const descEl = document.getElementById('currentSectionDesc');
-      if (SECTION_INFO[tabId]) {
-        if (titleEl) titleEl.innerText = SECTION_INFO[tabId].title;
-        if (descEl) descEl.innerText = SECTION_INFO[tabId].desc;
+
+      const dnsSubSidebar = document.getElementById('dnsSubSidebar');
+      if (dnsSubSidebar) {
+        dnsSubSidebar.style.display = (tabId === 'tab-dns') ? 'flex' : 'none';
       }
 
-      // 切换标签页时将内容区滚动条重置回顶部
-      const contentBody = document.querySelector('.content-body');
-      if (contentBody) contentBody.scrollTop = 0;
+      // 控制工作台吸顶 Header 展示内容 (DNS 模式展示任务栏，其它模式展示模块标题)
+      const headerDnsTaskBar = document.getElementById('headerDnsTaskBar');
+      const headerStandardBar = document.getElementById('headerStandardBar');
+      const titleEl = document.getElementById('currentSectionTitle');
+      const descEl = document.getElementById('currentSectionDesc');
+
+      if (tabId === 'tab-dns') {
+        if (headerDnsTaskBar) headerDnsTaskBar.style.display = 'flex';
+        if (headerStandardBar) headerStandardBar.style.display = 'none';
+      } else {
+        if (headerDnsTaskBar) headerDnsTaskBar.style.display = 'none';
+        if (headerStandardBar) headerStandardBar.style.display = 'flex';
+        if (SECTION_INFO[tabId]) {
+          if (titleEl) titleEl.innerText = SECTION_INFO[tabId].title;
+          if (descEl) descEl.innerText = SECTION_INFO[tabId].desc;
+        }
+      }
+
+      // 切换标签页时将工作台滚动主体重置回顶部
+      const workspaceBody = document.querySelector('.workspace-body');
+      if (workspaceBody) workspaceBody.scrollTop = 0;
     }
 
     // 常用邮箱预设数据字典
@@ -2084,8 +2444,9 @@
 
     // 渲染 DNS 服务商动态凭据表单
     function renderProviderFields() {
-      const type = document.getElementById('dnsProviderType').value;
+      const type = document.getElementById('dnsProviderType')?.value || 'cloudflare';
       const container = document.getElementById('providerDynamicFields');
+      if (!container) return;
       if (type === 'cloudflare') {
         container.innerHTML = `
           <div class="grid-2">
@@ -2383,8 +2744,9 @@
 
     // 渲染 IP 获取途径表单
     function renderIpFields(vType) {
-      const sourceType = document.getElementById(`${vType}SourceType`).value;
+      const sourceType = document.getElementById(`${vType}SourceType`)?.value || 'url';
       const fieldContainer = document.getElementById(`${vType}DynamicField`);
+      if (!fieldContainer) return;
       if (sourceType === 'url') {
         const defaultUrls = vType === 'ipv4'
           ? 'https://api.ipify.org, https://myip.ipip.net/ip, https://ddns.oray.com/checkip'
@@ -2392,7 +2754,7 @@
         fieldContainer.innerHTML = `
           <label>探测 URL (多个接口用英文逗号分隔，失败自动回退)</label>
           <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
-      } else if (sourceType === 'net_interface') {
+      } else if (sourceType === 'netInterface') {
         const currentSaved = (vType === 'ipv4' ? savedIpv4NetIf : savedIpv6NetIf) || '';
         let optionsHtml = `<option value="">-- 请选择网卡设备 --</option>`;
         let matched = false;
@@ -2438,104 +2800,197 @@
       }
     }
 
-    // 回显配置
-    function populateForm(conf) {
-      document.getElementById('sysInterval').value = conf.interval_secs || 300;
-      document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
-      document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
+    // ==========================================
+    // 多任务状态管理 (Master-Detail 双栏主从架构)
+    // ==========================================
+    let currentTaskIndex = 0;
 
-      if (conf.auth) {
-        document.getElementById('sysUsername').value = conf.auth.username;
+    const PROVIDER_DISPLAY_NAMES = {
+      cloudflare: 'Cloudflare',
+      ali_dns: '阿里云 AliDNS',
+      tencent_cloud: '腾讯云 DNSPod',
+      huawei_cloud: '华为云',
+      porkbun: 'Porkbun',
+      godaddy: 'GoDaddy',
+      dynv6: 'Dynv6',
+      baidu_cloud: '百度智能云',
+      traffic_route: '火山引擎',
+      namecheap: 'Namecheap',
+      namesilo: 'NameSilo',
+      spaceship: 'Spaceship',
+      dynadot: 'Dynadot',
+      vercel: 'Vercel',
+      rainyun: '雨云',
+      cloudns: 'ClouDNS',
+      gcore: 'Gcore',
+      name_com: 'Name.com',
+      dnsla: 'DNS.LA',
+      aliesa: '阿里 ESA',
+      edgeone: '腾讯 EdgeOne',
+      nowcn: '时代互联',
+      eranet: 'Eranet 国际',
+      tnethk: 'TNetHK',
+      nsone: 'IBM NS1',
+      hipm_dnsmgr: 'HiPM DNSMgr',
+      callback: '自定义 Callback'
+    };
+
+    function getProviderDisplayName(pType) {
+      return PROVIDER_DISPLAY_NAMES[pType] || pType || '未配置服务商';
+    }
+
+    // 渲染左侧解析任务列表 (Master)
+    function renderTaskList() {
+      const container = document.getElementById('taskMasterList');
+      const badge = document.getElementById('taskCountBadge');
+      if (!container || !globalConfig) return;
+
+      const tasks = globalConfig.dns_tasks || [];
+      if (badge) badge.innerText = tasks.length.toString();
+
+      if (tasks.length === 0) {
+        container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:0.8rem;">暂无解析任务，点击上方新建</div>`;
+        return;
       }
 
-      if (conf.dns_tasks && conf.dns_tasks.length > 0) {
-        const task = conf.dns_tasks[0];
-        setTtlValue(task.ttl);
+      if (currentTaskIndex >= tasks.length) {
+        currentTaskIndex = tasks.length - 1;
+      }
 
-        // Provider
-        if (task.provider.type) {
-          document.getElementById('dnsProviderType').value = task.provider.type;
-          renderProviderFields();
-          if (task.provider.type === 'cloudflare') {
-            if (document.getElementById('cfApiToken')) document.getElementById('cfApiToken').value = task.provider.api_token || '';
-            if (document.getElementById('cfApiKey')) document.getElementById('cfApiKey').value = task.provider.api_key || '';
-            if (document.getElementById('cfEmail')) document.getElementById('cfEmail').value = task.provider.email || '';
-          } else if (task.provider.type === 'ali_dns') {
-            if (document.getElementById('aliAccessKeyId')) document.getElementById('aliAccessKeyId').value = task.provider.access_key_id || '';
-            if (document.getElementById('aliAccessKeySecret')) document.getElementById('aliAccessKeySecret').value = task.provider.access_key_secret || '';
-          } else if (task.provider.type === 'tencent_cloud') {
-            if (document.getElementById('tcSecretId')) document.getElementById('tcSecretId').value = task.provider.secret_id || '';
-            if (document.getElementById('tcSecretKey')) document.getElementById('tcSecretKey').value = task.provider.secret_key || '';
-          } else if (task.provider.type === 'huawei_cloud') {
-            if (document.getElementById('hwAccessKeyId')) document.getElementById('hwAccessKeyId').value = task.provider.access_key_id || '';
-            if (document.getElementById('hwSecretAccessKey')) document.getElementById('hwSecretAccessKey').value = task.provider.secret_access_key || '';
-            if (document.getElementById('hwEndpoint')) document.getElementById('hwEndpoint').value = task.provider.endpoint || '';
-          } else if (task.provider.type === 'porkbun') {
-            if (document.getElementById('pbApiKey')) document.getElementById('pbApiKey').value = task.provider.api_key || '';
-            if (document.getElementById('pbSecretKey')) document.getElementById('pbSecretKey').value = task.provider.secret_key || '';
-          } else if (task.provider.type === 'godaddy') {
-            if (document.getElementById('gdApiKey')) document.getElementById('gdApiKey').value = task.provider.api_key || '';
-            if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
-          } else if (task.provider.type === 'dynv6') {
-            if (document.getElementById('dynv6Token')) document.getElementById('dynv6Token').value = task.provider.token || '';
-          } else if (task.provider.type === 'baidu_cloud') {
-            if (document.getElementById('bdAccessKeyId')) document.getElementById('bdAccessKeyId').value = task.provider.access_key_id || '';
-            if (document.getElementById('bdSecretAccessKey')) document.getElementById('bdSecretAccessKey').value = task.provider.secret_access_key || '';
-          } else if (task.provider.type === 'traffic_route') {
-            if (document.getElementById('volcAccessKeyId')) document.getElementById('volcAccessKeyId').value = task.provider.access_key_id || '';
-            if (document.getElementById('volcSecretAccessKey')) document.getElementById('volcSecretAccessKey').value = task.provider.secret_access_key || '';
-          } else if (task.provider.type === 'namecheap') {
-            if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
-          } else if (task.provider.type === 'namesilo') {
-            if (document.getElementById('nsApiKey')) document.getElementById('nsApiKey').value = task.provider.api_key || '';
-          } else if (task.provider.type === 'spaceship') {
-            if (document.getElementById('spApiKey')) document.getElementById('spApiKey').value = task.provider.api_key || '';
-            if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
-          } else if (task.provider.type === 'dynadot') {
-            if (document.getElementById('ddPassword')) document.getElementById('ddPassword').value = task.provider.password || '';
-          } else if (task.provider.type === 'vercel') {
-            if (document.getElementById('vcToken')) document.getElementById('vcToken').value = task.provider.token || '';
-            if (document.getElementById('vcTeamId')) document.getElementById('vcTeamId').value = task.provider.team_id || '';
-          } else if (task.provider.type === 'rainyun') {
-            if (document.getElementById('ryApiKey')) document.getElementById('ryApiKey').value = task.provider.api_key || '';
-            if (document.getElementById('ryDomainId')) document.getElementById('ryDomainId').value = task.provider.domain_id || '';
-          } else if (task.provider.type === 'cloudns') {
-            if (document.getElementById('cldAuthId')) document.getElementById('cldAuthId').value = task.provider.auth_id || '';
-            if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
-          } else if (task.provider.type === 'gcore') {
-            if (document.getElementById('gcApiKey')) document.getElementById('gcApiKey').value = task.provider.api_key || '';
-          } else if (task.provider.type === 'name_com') {
-            if (document.getElementById('ncUsername')) document.getElementById('ncUsername').value = task.provider.username || '';
-            if (document.getElementById('ncApiToken')) document.getElementById('ncApiToken').value = task.provider.api_token || '';
-          } else if (task.provider.type === 'dnsla') {
-            if (document.getElementById('dnslaApiId')) document.getElementById('dnslaApiId').value = task.provider.api_id || '';
-            if (document.getElementById('dnslaApiSecret')) document.getElementById('dnslaApiSecret').value = task.provider.api_secret || '';
-          } else if (task.provider.type === 'aliesa') {
-            if (document.getElementById('esaAccessKeyId')) document.getElementById('esaAccessKeyId').value = task.provider.access_key_id || '';
-            if (document.getElementById('esaAccessKeySecret')) document.getElementById('esaAccessKeySecret').value = task.provider.secret_access_key || '';
-            if (document.getElementById('esaEndpoint')) document.getElementById('esaEndpoint').value = task.provider.endpoint || '';
-          } else if (task.provider.type === 'edgeone') {
-            if (document.getElementById('eoSecretId')) document.getElementById('eoSecretId').value = task.provider.secret_id || '';
-            if (document.getElementById('eoSecretKey')) document.getElementById('eoSecretKey').value = task.provider.secret_key || '';
-          } else if (task.provider.type === 'nowcn') {
-            if (document.getElementById('nowcnId')) document.getElementById('nowcnId').value = task.provider.id || '';
-            if (document.getElementById('nowcnSecret')) document.getElementById('nowcnSecret').value = task.provider.secret || '';
-          } else if (task.provider.type === 'eranet') {
-            if (document.getElementById('eranetId')) document.getElementById('eranetId').value = task.provider.id || '';
-            if (document.getElementById('eranetSecret')) document.getElementById('eranetSecret').value = task.provider.secret || '';
-          } else if (task.provider.type === 'tnethk') {
-            if (document.getElementById('tnetId')) document.getElementById('tnetId').value = task.provider.id || '';
-            if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
-          } else if (task.provider.type === 'nsone') {
-            if (document.getElementById('nsoneApiKey')) document.getElementById('nsoneApiKey').value = task.provider.api_key || '';
-          } else if (task.provider.type === 'hipm_dnsmgr') {
-            if (document.getElementById('hipmApiToken')) document.getElementById('hipmApiToken').value = task.provider.api_token || '';
-            if (document.getElementById('hipmEndpoint')) document.getElementById('hipmEndpoint').value = task.provider.endpoint || '';
-          }
+      let html = '';
+      tasks.forEach((task, idx) => {
+        const isActive = idx === currentTaskIndex;
+        const isEnabled = task.enabled !== false;
+        const pName = getProviderDisplayName(task.provider?.type);
+        
+        let domainSummary = '未配置解析域名';
+        if (task.ipv4?.domains && task.ipv4.domains.length > 0) {
+          domainSummary = task.ipv4.domains[0] + (task.ipv4.domains.length > 1 ? ` (+${task.ipv4.domains.length - 1})` : '');
+        } else if (task.ipv6?.domains && task.ipv6.domains.length > 0) {
+          domainSummary = task.ipv6.domains[0] + (task.ipv6.domains.length > 1 ? ` (+${task.ipv6.domains.length - 1})` : '');
         }
 
-        // IPv4
-        document.getElementById('ipv4Enable').checked = task.ipv4.enabled;
+        const dotStyle = isEnabled 
+          ? 'background:var(--success); box-shadow:0 0 6px var(--success);' 
+          : 'background:var(--text-dim); box-shadow:none;';
+
+        html += `
+          <div class="task-item-card ${isActive ? 'active' : ''}" onclick="switchTask(${idx})">
+            <div class="task-item-head">
+              <div class="task-item-name" title="${task.name || '未命名任务'}">
+                <span class="dot" style="width:7px; height:7px; border-radius:50%; display:inline-block; ${dotStyle}"></span>
+                <span>${task.name || '未命名任务'}</span>
+              </div>
+              <span class="task-item-provider-tag">${pName}</span>
+            </div>
+            <div class="task-item-domain" title="${domainSummary}">${domainSummary}</div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    // 填充单个任务的配置到右侧表单 (Detail)
+    function populateCurrentTaskForm(task) {
+      if (!task) return;
+
+      // 1. 任务基础信息
+      const nameInput = document.getElementById('currentTaskNameInput');
+      if (nameInput) nameInput.value = task.name || '';
+      
+      const enabledCheck = document.getElementById('currentTaskEnabled');
+      if (enabledCheck) enabledCheck.checked = task.enabled !== false;
+
+      // 2. TTL
+      setTtlValue(task.ttl);
+
+      // 3. DNS Provider
+      if (task.provider && task.provider.type) {
+        document.getElementById('dnsProviderType').value = task.provider.type;
+        renderProviderFields();
+
+        if (task.provider.type === 'cloudflare') {
+          if (document.getElementById('cfApiToken')) document.getElementById('cfApiToken').value = task.provider.api_token || '';
+          if (document.getElementById('cfApiKey')) document.getElementById('cfApiKey').value = task.provider.api_key || '';
+          if (document.getElementById('cfEmail')) document.getElementById('cfEmail').value = task.provider.email || '';
+        } else if (task.provider.type === 'ali_dns') {
+          if (document.getElementById('aliAccessKeyId')) document.getElementById('aliAccessKeyId').value = task.provider.access_key_id || '';
+          if (document.getElementById('aliAccessKeySecret')) document.getElementById('aliAccessKeySecret').value = task.provider.access_key_secret || '';
+        } else if (task.provider.type === 'tencent_cloud') {
+          if (document.getElementById('tcSecretId')) document.getElementById('tcSecretId').value = task.provider.secret_id || '';
+          if (document.getElementById('tcSecretKey')) document.getElementById('tcSecretKey').value = task.provider.secret_key || '';
+        } else if (task.provider.type === 'huawei_cloud') {
+          if (document.getElementById('hwAccessKeyId')) document.getElementById('hwAccessKeyId').value = task.provider.access_key_id || '';
+          if (document.getElementById('hwSecretAccessKey')) document.getElementById('hwSecretAccessKey').value = task.provider.secret_access_key || '';
+          if (document.getElementById('hwEndpoint')) document.getElementById('hwEndpoint').value = task.provider.endpoint || '';
+        } else if (task.provider.type === 'porkbun') {
+          if (document.getElementById('pbApiKey')) document.getElementById('pbApiKey').value = task.provider.api_key || '';
+          if (document.getElementById('pbSecretKey')) document.getElementById('pbSecretKey').value = task.provider.secret_key || '';
+        } else if (task.provider.type === 'godaddy') {
+          if (document.getElementById('gdApiKey')) document.getElementById('gdApiKey').value = task.provider.api_key || '';
+          if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
+        } else if (task.provider.type === 'dynv6') {
+          if (document.getElementById('dynv6Token')) document.getElementById('dynv6Token').value = task.provider.token || '';
+        } else if (task.provider.type === 'baidu_cloud') {
+          if (document.getElementById('bdAccessKeyId')) document.getElementById('bdAccessKeyId').value = task.provider.access_key_id || '';
+          if (document.getElementById('bdSecretAccessKey')) document.getElementById('bdSecretAccessKey').value = task.provider.secret_access_key || '';
+        } else if (task.provider.type === 'traffic_route') {
+          if (document.getElementById('volcAccessKeyId')) document.getElementById('volcAccessKeyId').value = task.provider.access_key_id || '';
+          if (document.getElementById('volcSecretAccessKey')) document.getElementById('volcSecretAccessKey').value = task.provider.secret_access_key || '';
+        } else if (task.provider.type === 'namecheap') {
+          if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
+        } else if (task.provider.type === 'namesilo') {
+          if (document.getElementById('nsApiKey')) document.getElementById('nsApiKey').value = task.provider.api_key || '';
+        } else if (task.provider.type === 'spaceship') {
+          if (document.getElementById('spApiKey')) document.getElementById('spApiKey').value = task.provider.api_key || '';
+          if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
+        } else if (task.provider.type === 'dynadot') {
+          if (document.getElementById('ddPassword')) document.getElementById('ddPassword').value = task.provider.password || '';
+        } else if (task.provider.type === 'vercel') {
+          if (document.getElementById('vcToken')) document.getElementById('vcToken').value = task.provider.token || '';
+          if (document.getElementById('vcTeamId')) document.getElementById('vcTeamId').value = task.provider.team_id || '';
+        } else if (task.provider.type === 'rainyun') {
+          if (document.getElementById('ryApiKey')) document.getElementById('ryApiKey').value = task.provider.api_key || '';
+          if (document.getElementById('ryDomainId')) document.getElementById('ryDomainId').value = task.provider.domain_id || '';
+        } else if (task.provider.type === 'cloudns') {
+          if (document.getElementById('cldAuthId')) document.getElementById('cldAuthId').value = task.provider.auth_id || '';
+          if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
+        } else if (task.provider.type === 'gcore') {
+          if (document.getElementById('gcApiKey')) document.getElementById('gcApiKey').value = task.provider.api_key || '';
+        } else if (task.provider.type === 'name_com') {
+          if (document.getElementById('ncUsername')) document.getElementById('ncUsername').value = task.provider.username || '';
+          if (document.getElementById('ncApiToken')) document.getElementById('ncApiToken').value = task.provider.api_token || '';
+        } else if (task.provider.type === 'dnsla') {
+          if (document.getElementById('dnslaApiId')) document.getElementById('dnslaApiId').value = task.provider.api_id || '';
+          if (document.getElementById('dnslaApiSecret')) document.getElementById('dnslaApiSecret').value = task.provider.api_secret || '';
+        } else if (task.provider.type === 'aliesa') {
+          if (document.getElementById('esaAccessKeyId')) document.getElementById('esaAccessKeyId').value = task.provider.access_key_id || '';
+          if (document.getElementById('esaAccessKeySecret')) document.getElementById('esaAccessKeySecret').value = task.provider.secret_access_key || '';
+          if (document.getElementById('esaEndpoint')) document.getElementById('esaEndpoint').value = task.provider.endpoint || '';
+        } else if (task.provider.type === 'edgeone') {
+          if (document.getElementById('eoSecretId')) document.getElementById('eoSecretId').value = task.provider.secret_id || '';
+          if (document.getElementById('eoSecretKey')) document.getElementById('eoSecretKey').value = task.provider.secret_key || '';
+        } else if (task.provider.type === 'nowcn') {
+          if (document.getElementById('nowcnId')) document.getElementById('nowcnId').value = task.provider.id || '';
+          if (document.getElementById('nowcnSecret')) document.getElementById('nowcnSecret').value = task.provider.secret || '';
+        } else if (task.provider.type === 'eranet') {
+          if (document.getElementById('eranetId')) document.getElementById('eranetId').value = task.provider.id || '';
+          if (document.getElementById('eranetSecret')) document.getElementById('eranetSecret').value = task.provider.secret || '';
+        } else if (task.provider.type === 'tnethk') {
+          if (document.getElementById('tnetId')) document.getElementById('tnetId').value = task.provider.id || '';
+          if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
+        } else if (task.provider.type === 'nsone') {
+          if (document.getElementById('nsoneApiKey')) document.getElementById('nsoneApiKey').value = task.provider.api_key || '';
+        } else if (task.provider.type === 'hipm_dnsmgr') {
+          if (document.getElementById('hipmApiToken')) document.getElementById('hipmApiToken').value = task.provider.api_token || '';
+          if (document.getElementById('hipmEndpoint')) document.getElementById('hipmEndpoint').value = task.provider.endpoint || '';
+        }
+      }
+
+      // 4. IPv4
+      if (task.ipv4) {
+        document.getElementById('ipv4Enable').checked = task.ipv4.enabled !== false;
         document.getElementById('ipv4SourceType').value = task.ipv4.source_type || 'url';
         savedIpv4NetIf = task.ipv4.net_interface || '';
         renderIpFields('ipv4');
@@ -2547,10 +3002,12 @@
         }
         document.getElementById('ipv4Regex').value = task.ipv4.regex || '';
         document.getElementById('ipv4Domains').value = (task.ipv4.domains || []).join('\n');
+      }
 
-        // IPv6
-        document.getElementById('ipv6Enable').checked = task.ipv6.enabled;
-        document.getElementById('ipv6SourceType').value = task.ipv6.source_type || 'url';
+      // 5. IPv6
+      if (task.ipv6) {
+        document.getElementById('ipv6Enable').checked = task.ipv6.enabled !== false;
+        document.getElementById('ipv6SourceType').value = task.ipv6.source_type || 'netInterface';
         savedIpv6NetIf = task.ipv6.net_interface || '';
         renderIpFields('ipv6');
         if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
@@ -2562,6 +3019,263 @@
         document.getElementById('ipv6Regex').value = task.ipv6.regex || '';
         document.getElementById('ipv6Domains').value = (task.ipv6.domains || []).join('\n');
       }
+    }
+
+    // 从右侧表单采集当前任务数据，同步更新回 globalConfig.dns_tasks[index]
+    function collectCurrentTaskFromForm(index) {
+      if (!globalConfig || !globalConfig.dns_tasks || !globalConfig.dns_tasks[index]) return;
+
+      const pType = document.getElementById('dnsProviderType').value;
+      let providerObj = { type: pType };
+
+      if (pType === 'cloudflare') {
+        providerObj.api_token = document.getElementById('cfApiToken')?.value || null;
+        providerObj.api_key = document.getElementById('cfApiKey')?.value || null;
+        providerObj.email = document.getElementById('cfEmail')?.value || null;
+      } else if (pType === 'ali_dns') {
+        providerObj.access_key_id = document.getElementById('aliAccessKeyId')?.value || '';
+        providerObj.access_key_secret = document.getElementById('aliAccessKeySecret')?.value || '';
+      } else if (pType === 'tencent_cloud') {
+        providerObj.secret_id = document.getElementById('tcSecretId')?.value || '';
+        providerObj.secret_key = document.getElementById('tcSecretKey')?.value || '';
+      } else if (pType === 'huawei_cloud') {
+        providerObj.access_key_id = document.getElementById('hwAccessKeyId')?.value || '';
+        providerObj.secret_access_key = document.getElementById('hwSecretAccessKey')?.value || '';
+        const ep = document.getElementById('hwEndpoint')?.value?.trim();
+        if (ep) providerObj.endpoint = ep;
+      } else if (pType === 'porkbun') {
+        providerObj.api_key = document.getElementById('pbApiKey')?.value || '';
+        providerObj.secret_key = document.getElementById('pbSecretKey')?.value || '';
+      } else if (pType === 'godaddy') {
+        providerObj.api_key = document.getElementById('gdApiKey')?.value || '';
+        providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
+      } else if (pType === 'dynv6') {
+        providerObj.token = document.getElementById('dynv6Token')?.value || '';
+      } else if (pType === 'baidu_cloud') {
+        providerObj.access_key_id = document.getElementById('bdAccessKeyId')?.value || '';
+        providerObj.secret_access_key = document.getElementById('bdSecretAccessKey')?.value || '';
+      } else if (pType === 'traffic_route') {
+        providerObj.access_key_id = document.getElementById('volcAccessKeyId')?.value || '';
+        providerObj.secret_access_key = document.getElementById('volcSecretAccessKey')?.value || '';
+      } else if (pType === 'namecheap') {
+        providerObj.password = document.getElementById('ncPassword')?.value || '';
+      } else if (pType === 'namesilo') {
+        providerObj.api_key = document.getElementById('nsApiKey')?.value || '';
+      } else if (pType === 'spaceship') {
+        providerObj.api_key = document.getElementById('spApiKey')?.value || '';
+        providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
+      } else if (pType === 'dynadot') {
+        providerObj.password = document.getElementById('ddPassword')?.value || '';
+      } else if (pType === 'vercel') {
+        providerObj.token = document.getElementById('vcToken')?.value || '';
+        const tid = document.getElementById('vcTeamId')?.value?.trim();
+        if (tid) providerObj.team_id = tid;
+      } else if (pType === 'rainyun') {
+        providerObj.api_key = document.getElementById('ryApiKey')?.value || '';
+        const did = document.getElementById('ryDomainId')?.value?.trim();
+        if (did) providerObj.domain_id = did;
+      } else if (pType === 'cloudns') {
+        providerObj.auth_id = document.getElementById('cldAuthId')?.value || '';
+        providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
+      } else if (pType === 'gcore') {
+        providerObj.api_key = document.getElementById('gcApiKey')?.value || '';
+      } else if (pType === 'name_com') {
+        providerObj.username = document.getElementById('ncUsername')?.value || '';
+        providerObj.api_token = document.getElementById('ncApiToken')?.value || '';
+      } else if (pType === 'dnsla') {
+        providerObj.api_id = document.getElementById('dnslaApiId')?.value || '';
+        providerObj.api_secret = document.getElementById('dnslaApiSecret')?.value || '';
+      } else if (pType === 'aliesa') {
+        providerObj.access_key_id = document.getElementById('esaAccessKeyId')?.value || '';
+        providerObj.access_key_secret = document.getElementById('esaAccessKeySecret')?.value || '';
+        const ep = document.getElementById('esaEndpoint')?.value?.trim();
+        if (ep) providerObj.endpoint = ep;
+      } else if (pType === 'edgeone') {
+        providerObj.secret_id = document.getElementById('eoSecretId')?.value || '';
+        providerObj.secret_key = document.getElementById('eoSecretKey')?.value || '';
+      } else if (pType === 'nowcn') {
+        providerObj.id = document.getElementById('nowcnId')?.value || '';
+        providerObj.secret = document.getElementById('nowcnSecret')?.value || '';
+      } else if (pType === 'eranet') {
+        providerObj.id = document.getElementById('eranetId')?.value || '';
+        providerObj.secret = document.getElementById('eranetSecret')?.value || '';
+      } else if (pType === 'tnethk') {
+        providerObj.id = document.getElementById('tnetId')?.value || '';
+        providerObj.secret = document.getElementById('tnetSecret')?.value || '';
+      } else if (pType === 'nsone') {
+        providerObj.api_key = document.getElementById('nsoneApiKey')?.value || '';
+      } else if (pType === 'hipm_dnsmgr') {
+        providerObj.api_token = document.getElementById('hipmApiToken')?.value || '';
+        const ep = document.getElementById('hipmEndpoint')?.value?.trim();
+        if (ep) providerObj.endpoint = ep;
+      }
+
+      const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+      const ipv6Urls = (document.getElementById('ipv6Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+
+      const taskName = document.getElementById('currentTaskNameInput')?.value.trim() || `解析任务 ${index + 1}`;
+      const taskEnabled = document.getElementById('currentTaskEnabled') ? document.getElementById('currentTaskEnabled').checked : true;
+
+      globalConfig.dns_tasks[index] = {
+        name: taskName,
+        enabled: taskEnabled,
+        provider: providerObj,
+        ttl: getTtlValue(),
+        ipv4: {
+          enabled: document.getElementById('ipv4Enable').checked,
+          source_type: document.getElementById('ipv4SourceType').value,
+          url_endpoints: ipv4Urls,
+          net_interface: getNetIfValue('ipv4'),
+          cmd: document.getElementById('ipv4Cmd')?.value || null,
+          regex: document.getElementById('ipv4Regex').value || null,
+          domains: document.getElementById('ipv4Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
+        },
+        ipv6: {
+          enabled: document.getElementById('ipv6Enable').checked,
+          source_type: document.getElementById('ipv6SourceType').value,
+          url_endpoints: ipv6Urls,
+          net_interface: getNetIfValue('ipv6'),
+          cmd: document.getElementById('ipv6Cmd')?.value || null,
+          regex: document.getElementById('ipv6Regex').value || null,
+          domains: document.getElementById('ipv6Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
+        }
+      };
+    }
+
+    // 切换当前激活的任务
+    function switchTask(targetIndex) {
+      if (targetIndex === currentTaskIndex) return;
+      collectCurrentTaskFromForm(currentTaskIndex);
+      currentTaskIndex = targetIndex;
+      populateCurrentTaskForm(globalConfig.dns_tasks[currentTaskIndex]);
+      renderTaskList();
+    }
+
+    // 新增解析任务
+    function addNewTask() {
+      collectCurrentTaskFromForm(currentTaskIndex);
+
+      const nextNum = (globalConfig.dns_tasks ? globalConfig.dns_tasks.length : 0) + 1;
+      const newTask = {
+        name: `解析任务 ${nextNum}`,
+        enabled: true,
+        provider: { type: 'cloudflare', api_token: '' },
+        ttl: null,
+        ipv4: {
+          enabled: true,
+          source_type: 'url',
+          url_endpoints: ['https://api.ipify.org', 'https://myip.ipip.net/ip', 'https://ddns.oray.com/checkip'],
+          net_interface: null,
+          cmd: null,
+          regex: null,
+          domains: []
+        },
+        ipv6: {
+          enabled: true,
+          source_type: 'netInterface',
+          url_endpoints: [],
+          net_interface: null,
+          cmd: null,
+          regex: null,
+          domains: []
+        }
+      };
+
+      if (!globalConfig.dns_tasks) globalConfig.dns_tasks = [];
+      globalConfig.dns_tasks.push(newTask);
+      currentTaskIndex = globalConfig.dns_tasks.length - 1;
+
+      populateCurrentTaskForm(newTask);
+      renderTaskList();
+      showToast(`已新建任务【${newTask.name}】！`, 'success');
+
+      // 聚焦任务名称输入框
+      const nameInput = document.getElementById('currentTaskNameInput');
+      if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+      }
+    }
+
+    // 删除当前选中的任务
+    function deleteCurrentTask() {
+      if (!globalConfig || !globalConfig.dns_tasks || globalConfig.dns_tasks.length <= 1) {
+        showToast('系统至少需要保留一个解析任务！', 'warning');
+        return;
+      }
+
+      const taskName = globalConfig.dns_tasks[currentTaskIndex]?.name || '当前任务';
+      if (!confirm(`确定要删除任务【${taskName}】吗？\n\n注意：此操作将在点击右上角【保存配置】后正式持久化生效。`)) {
+        return;
+      }
+
+      globalConfig.dns_tasks.splice(currentTaskIndex, 1);
+      if (currentTaskIndex >= globalConfig.dns_tasks.length) {
+        currentTaskIndex = globalConfig.dns_tasks.length - 1;
+      }
+
+      populateCurrentTaskForm(globalConfig.dns_tasks[currentTaskIndex]);
+      renderTaskList();
+      showToast(`已删除任务【${taskName}】`, 'success');
+    }
+
+    // 复制克隆当前任务
+    function cloneCurrentTask() {
+      if (!globalConfig || !globalConfig.dns_tasks || !globalConfig.dns_tasks[currentTaskIndex]) return;
+
+      collectCurrentTaskFromForm(currentTaskIndex);
+      const cloned = JSON.parse(JSON.stringify(globalConfig.dns_tasks[currentTaskIndex]));
+      cloned.name = `${cloned.name || '解析任务'} - 副本`;
+
+      globalConfig.dns_tasks.push(cloned);
+      currentTaskIndex = globalConfig.dns_tasks.length - 1;
+
+      populateCurrentTaskForm(cloned);
+      renderTaskList();
+      showToast(`已复制当前任务配置并生成【${cloned.name}】！`, 'success');
+    }
+
+    // 实时任务名称输入响应
+    function onTaskNameChange(val) {
+      if (globalConfig && globalConfig.dns_tasks && globalConfig.dns_tasks[currentTaskIndex]) {
+        globalConfig.dns_tasks[currentTaskIndex].name = val.trim() || '未命名任务';
+        renderTaskList();
+      }
+    }
+
+    // 实时任务启用状态响应
+    function onTaskEnabledChange(checked) {
+      if (globalConfig && globalConfig.dns_tasks && globalConfig.dns_tasks[currentTaskIndex]) {
+        globalConfig.dns_tasks[currentTaskIndex].enabled = checked;
+        renderTaskList();
+      }
+    }
+
+    // 全局回显配置 (首次加载或刷新配置时触发)
+    function populateForm(conf) {
+      document.getElementById('sysInterval').value = conf.interval_secs || 300;
+      document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
+      document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
+
+      if (conf.auth) {
+        document.getElementById('sysUsername').value = conf.auth.username;
+      }
+
+      // 如果任务列表为空，自动补全默认任务
+      if (!conf.dns_tasks || conf.dns_tasks.length === 0) {
+        conf.dns_tasks = [{
+          name: "默认解析任务",
+          enabled: true,
+          provider: { type: 'cloudflare', api_token: '' },
+          ttl: null,
+          ipv4: { enabled: true, source_type: 'url', url_endpoints: ['https://api.ipify.org'], net_interface: null, cmd: null, regex: null, domains: [] },
+          ipv6: { enabled: true, source_type: 'netInterface', url_endpoints: [], net_interface: null, cmd: null, regex: null, domains: [] }
+        }];
+      }
+
+      currentTaskIndex = 0;
+      renderTaskList();
+      populateCurrentTaskForm(conf.dns_tasks[currentTaskIndex]);
 
       // Notifications
       if (conf.notifications) {
@@ -2637,6 +3351,54 @@
           document.getElementById('webhookHeaders').value = notif.webhook.headers ? JSON.stringify(notif.webhook.headers) : '';
           document.getElementById('webhookBody').value = notif.webhook.body || '';
         }
+      }
+    }
+
+    // 保存全局配置 (包含所有多任务与系统通知)
+    async function saveConfig() {
+      // 1. 先将当前正在编辑的任务表单同步写回 globalConfig.dns_tasks[currentTaskIndex]
+      collectCurrentTaskFromForm(currentTaskIndex);
+
+      const notifications = collectNotificationConfig();
+
+      const payload = {
+        config: {
+          listen_port: globalConfig?.listen_port || 9876,
+          interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
+          cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
+          not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
+          auth: document.getElementById('sysUsername').value ? {
+            username: document.getElementById('sysUsername').value,
+            password_hash: "******"
+          } : null,
+          dns_tasks: globalConfig.dns_tasks || [],
+          notifications
+        },
+        new_password: document.getElementById('sysPassword').value || null
+      };
+
+      try {
+        const res = await apiFetch('/api/v1/config', {
+          method: 'POST',
+          body: payload
+        });
+        const json = await res.json();
+        if (json.success) {
+          showToast('全部配置已成功保存并热更新生效！', 'success');
+          // 若修改了管理员用户名/密码，则同步更新本地 Basic Auth 凭据
+          const newUsername = document.getElementById('sysUsername').value.trim();
+          const newPassword = document.getElementById('sysPassword').value;
+          if (newPassword) {
+            localStorage.setItem('rddns_auth', btoa(newUsername + ':' + newPassword));
+            updateLogoutBtn();
+          }
+          document.getElementById('sysPassword').value = '';
+          renderTaskList();
+        } else {
+          showToast('保存失败: ' + json.message, 'error');
+        }
+      } catch (e) {
+        showToast('请求异常: ' + e, 'error');
       }
     }
 
@@ -2748,160 +3510,7 @@
       return cfg;
     }
 
-    // 保存配置
-    async function saveConfig() {
-      const pType = document.getElementById('dnsProviderType').value;
-      let providerObj = { type: pType };
-      if (pType === 'cloudflare') {
-        providerObj.api_token = document.getElementById('cfApiToken')?.value || null;
-        providerObj.api_key = document.getElementById('cfApiKey')?.value || null;
-        providerObj.email = document.getElementById('cfEmail')?.value || null;
-      } else if (pType === 'ali_dns') {
-        providerObj.access_key_id = document.getElementById('aliAccessKeyId')?.value || '';
-        providerObj.access_key_secret = document.getElementById('aliAccessKeySecret')?.value || '';
-      } else if (pType === 'tencent_cloud') {
-        providerObj.secret_id = document.getElementById('tcSecretId')?.value || '';
-        providerObj.secret_key = document.getElementById('tcSecretKey')?.value || '';
-      } else if (pType === 'huawei_cloud') {
-        providerObj.access_key_id = document.getElementById('hwAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('hwSecretAccessKey')?.value || '';
-        const ep = document.getElementById('hwEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      } else if (pType === 'porkbun') {
-        providerObj.api_key = document.getElementById('pbApiKey')?.value || '';
-        providerObj.secret_key = document.getElementById('pbSecretKey')?.value || '';
-      } else if (pType === 'godaddy') {
-        providerObj.api_key = document.getElementById('gdApiKey')?.value || '';
-        providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
-      } else if (pType === 'dynv6') {
-        providerObj.token = document.getElementById('dynv6Token')?.value || '';
-      } else if (pType === 'baidu_cloud') {
-        providerObj.access_key_id = document.getElementById('bdAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('bdSecretAccessKey')?.value || '';
-      } else if (pType === 'traffic_route') {
-        providerObj.access_key_id = document.getElementById('volcAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('volcSecretAccessKey')?.value || '';
-      } else if (pType === 'namecheap') {
-        providerObj.password = document.getElementById('ncPassword')?.value || '';
-      } else if (pType === 'namesilo') {
-        providerObj.api_key = document.getElementById('nsApiKey')?.value || '';
-      } else if (pType === 'spaceship') {
-        providerObj.api_key = document.getElementById('spApiKey')?.value || '';
-        providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
-      } else if (pType === 'dynadot') {
-        providerObj.password = document.getElementById('ddPassword')?.value || '';
-      } else if (pType === 'vercel') {
-        providerObj.token = document.getElementById('vcToken')?.value || '';
-        const tid = document.getElementById('vcTeamId')?.value?.trim();
-        if (tid) providerObj.team_id = tid;
-      } else if (pType === 'rainyun') {
-        providerObj.api_key = document.getElementById('ryApiKey')?.value || '';
-        const did = document.getElementById('ryDomainId')?.value?.trim();
-        if (did) providerObj.domain_id = did;
-      } else if (pType === 'cloudns') {
-        providerObj.auth_id = document.getElementById('cldAuthId')?.value || '';
-        providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
-      } else if (pType === 'gcore') {
-        providerObj.api_key = document.getElementById('gcApiKey')?.value || '';
-      } else if (pType === 'name_com') {
-        providerObj.username = document.getElementById('ncUsername')?.value || '';
-        providerObj.api_token = document.getElementById('ncApiToken')?.value || '';
-      } else if (pType === 'dnsla') {
-        providerObj.api_id = document.getElementById('dnslaApiId')?.value || '';
-        providerObj.api_secret = document.getElementById('dnslaApiSecret')?.value || '';
-      } else if (pType === 'aliesa') {
-        providerObj.access_key_id = document.getElementById('esaAccessKeyId')?.value || '';
-        providerObj.access_key_secret = document.getElementById('esaAccessKeySecret')?.value || '';
-        const ep = document.getElementById('esaEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      } else if (pType === 'edgeone') {
-        providerObj.secret_id = document.getElementById('eoSecretId')?.value || '';
-        providerObj.secret_key = document.getElementById('eoSecretKey')?.value || '';
-      } else if (pType === 'nowcn') {
-        providerObj.id = document.getElementById('nowcnId')?.value || '';
-        providerObj.secret = document.getElementById('nowcnSecret')?.value || '';
-      } else if (pType === 'eranet') {
-        providerObj.id = document.getElementById('eranetId')?.value || '';
-        providerObj.secret = document.getElementById('eranetSecret')?.value || '';
-      } else if (pType === 'tnethk') {
-        providerObj.id = document.getElementById('tnetId')?.value || '';
-        providerObj.secret = document.getElementById('tnetSecret')?.value || '';
-      } else if (pType === 'nsone') {
-        providerObj.api_key = document.getElementById('nsoneApiKey')?.value || '';
-      } else if (pType === 'hipm_dnsmgr') {
-        providerObj.api_token = document.getElementById('hipmApiToken')?.value || '';
-        const ep = document.getElementById('hipmEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      }
 
-      const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-      const ipv6Urls = (document.getElementById('ipv6Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-
-      const task = {
-        name: "默认任务",
-        provider: providerObj,
-        ttl: getTtlValue(),
-        ipv4: {
-          enabled: document.getElementById('ipv4Enable').checked,
-          source_type: document.getElementById('ipv4SourceType').value,
-          url_endpoints: ipv4Urls,
-          net_interface: getNetIfValue('ipv4'),
-          cmd: document.getElementById('ipv4Cmd')?.value || null,
-          regex: document.getElementById('ipv4Regex').value || null,
-          domains: document.getElementById('ipv4Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
-        },
-        ipv6: {
-          enabled: document.getElementById('ipv6Enable').checked,
-          source_type: document.getElementById('ipv6SourceType').value,
-          url_endpoints: ipv6Urls,
-          net_interface: getNetIfValue('ipv6'),
-          cmd: document.getElementById('ipv6Cmd')?.value || null,
-          regex: document.getElementById('ipv6Regex').value || null,
-          domains: document.getElementById('ipv6Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
-        }
-      };
-
-      const notifications = collectNotificationConfig();
-
-      const payload = {
-        config: {
-          listen_port: globalConfig?.listen_port || 9876,
-          interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
-          cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
-          not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
-          auth: document.getElementById('sysUsername').value ? {
-            username: document.getElementById('sysUsername').value,
-            password_hash: "******"
-          } : null,
-          dns_tasks: [task],
-          notifications
-        },
-        new_password: document.getElementById('sysPassword').value || null
-      };
-
-      try {
-        const res = await apiFetch('/api/v1/config', {
-          method: 'POST',
-          body: payload
-        });
-        const json = await res.json();
-        if (json.success) {
-          showToast('配置保存成功并已热更新生效！', 'success');
-          // 若修改了管理员用户名/密码，则同步更新本地 Basic Auth 凭据
-          const newUsername = document.getElementById('sysUsername').value.trim();
-          const newPassword = document.getElementById('sysPassword').value;
-          if (newPassword) {
-            localStorage.setItem('rddns_auth', btoa(newUsername + ':' + newPassword));
-            updateLogoutBtn();
-          }
-          document.getElementById('sysPassword').value = '';
-        } else {
-          showToast('保存失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('请求异常: ' + e, 'error');
-      }
-    }
 
     // 立即触发全量同步
     async function triggerSync() {
