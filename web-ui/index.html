@@ -880,14 +880,19 @@
         </ul>
       </div>
 
-      <div class="sidebar-footer" style="display:flex; justify-content:space-between; align-items:center;">
-        <div class="status-badge">
-          <span class="live-dot"></span>
-          <span>v0.2.0 已连接</span>
+      <div class="sidebar-footer" style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div class="status-badge" id="versionBadge" onclick="checkAppVersion(true)" style="cursor:pointer;" title="点击检查更新">
+            <span class="live-dot"></span>
+            <span id="versionText">v0.2.0 已连接</span>
+          </div>
+          <button class="btn-outline btn-sm" onclick="logout()" title="退出登录" id="logoutBtn" style="padding:4px 8px; font-size:12px; display:none;">
+            <span>退出</span>
+          </button>
         </div>
-        <button class="btn-outline btn-sm" onclick="logout()" title="退出登录" id="logoutBtn" style="padding:4px 8px; font-size:12px; display:none;">
-          <span>退出</span>
-        </button>
+        <div id="updateNotice" style="display:none; font-size:12px; color:var(--primary-color); cursor:pointer;" onclick="triggerWebUpgrade()">
+          <span>🎉 发现新版本，点击自动升级</span>
+        </div>
       </div>
     </aside>
 
@@ -3245,10 +3250,52 @@
         showMainApp();
         loadNetworkInterfaces();
         initSSE();
+        checkAppVersion(false);
       } else {
         showLoginPage();
       }
     };
+
+    // 检查版本更新
+    async function checkAppVersion(isManual) {
+      try {
+        const res = await apiFetch('/api/v1/version');
+        const json = await res.json();
+        if (json.success && json.data) {
+          const info = json.data;
+          document.getElementById('versionText').innerText = `v${info.current_version} 已连接`;
+          if (info.has_update) {
+            document.getElementById('updateNotice').style.display = 'block';
+            document.getElementById('updateNotice').innerHTML = `<span>🎉 发现新版本 v${info.latest_version} (点击升级)</span>`;
+            if (isManual) {
+              if (confirm(`发现新版本 v${info.latest_version}！\n\n更新说明:\n${info.release_notes || '常规功能优化与 Bug 修复'}\n\n是否立即启动自动升级？`)) {
+                triggerWebUpgrade();
+              }
+            }
+          } else if (isManual) {
+            alert(`✨ 当前已是最新版本 (v${info.current_version})！`);
+          }
+        }
+      } catch (e) {
+        if (isManual) alert('检查更新失败: ' + e.message);
+      }
+    }
+
+    // 触发在线升级
+    async function triggerWebUpgrade() {
+      if (!confirm('确定要在后台自动下载并热替换最新版本吗？升级完成后请重启服务。')) return;
+      try {
+        const res = await apiFetch('/api/v1/upgrade', { method: 'POST' });
+        const json = await res.json();
+        if (json.success) {
+          alert('🚀 ' + json.message);
+        } else {
+          alert('升级失败: ' + json.message);
+        }
+      } catch (e) {
+        alert('触发升级失败: ' + e.message);
+      }
+    }
   </script>
 </body>
 </html>

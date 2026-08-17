@@ -390,3 +390,24 @@ pub async fn login_auth_handler(
         Json(ApiResponse::ok("系统未设置密码，直接放行")),
     )
 }
+
+/// 获取系统版本与更新信息
+pub async fn get_version_handler() -> impl IntoResponse {
+    match crate::util::update::check_version().await {
+        Ok(info) => Json(ApiResponse::ok(info)),
+        Err(err) => Json(ApiResponse::err(err)),
+    }
+}
+
+/// 触发在线自动更新
+pub async fn trigger_upgrade_handler() -> impl IntoResponse {
+    tokio::spawn(async {
+        if let Err(e) = crate::util::update::upgrade_self().await {
+            tracing::error!("在线自动更新失败: {}", e);
+        }
+    });
+
+    Json(ApiResponse::ok(
+        "已在后台启动自动更新，下载替换完成后请重启服务",
+    ))
+}

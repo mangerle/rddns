@@ -49,11 +49,21 @@ struct CliArgs {
     /// 系统自启服务管理 (install | uninstall | start | stop | restart | status)
     #[arg(short = 's', long = "service")]
     service: Option<String>,
+
+    /// 检查并自动升级至最新版本
+    #[arg(short = 'u', long = "upgrade", default_value_t = false)]
+    upgrade: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
+
+    // 如果指定了 -u 则执行自动升级并退出
+    if args.upgrade {
+        util::update::upgrade_self().await?;
+        return Ok(());
+    }
 
     // 如果指定了 -d 且当前不是派生的后台子进程，则启动独立守护进程并退出当前父终端
     if args.daemon && !util::daemon::is_daemon_child() {
