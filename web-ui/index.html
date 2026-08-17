@@ -977,6 +977,7 @@
                   <option value="spaceship">Spaceship (API Key / Secret)</option>
                   <option value="dynadot">Dynadot (动态 DNS 密码)</option>
                   <option value="vercel">Vercel DNS (Access Token)</option>
+                  <option value="rainyun">雨云 (RainYun API-Key)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2221,6 +2222,18 @@
               <input type="text" id="vcTeamId" placeholder="team_xxxx (个人账户留空)" />
             </div>
           </div>`;
+      } else if (type === 'rainyun') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>API Key (x-api-key)</label>
+              <input type="password" id="ryApiKey" placeholder="雨云控制台 API 密钥" />
+            </div>
+            <div class="form-group">
+              <label>Domain ID (域名编号/选填)</label>
+              <input type="text" id="ryDomainId" placeholder="自动根据域名查询 / 可手动指定" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2345,6 +2358,9 @@
           } else if (task.provider.type === 'vercel') {
             if (document.getElementById('vcToken')) document.getElementById('vcToken').value = task.provider.token || '';
             if (document.getElementById('vcTeamId')) document.getElementById('vcTeamId').value = task.provider.team_id || '';
+          } else if (task.provider.type === 'rainyun') {
+            if (document.getElementById('ryApiKey')) document.getElementById('ryApiKey').value = task.provider.api_key || '';
+            if (document.getElementById('ryDomainId')) document.getElementById('ryDomainId').value = task.provider.domain_id || '';
           }
         }
 
@@ -2608,6 +2624,10 @@
         providerObj.token = document.getElementById('vcToken')?.value || '';
         const tid = document.getElementById('vcTeamId')?.value?.trim();
         if (tid) providerObj.team_id = tid;
+      } else if (pType === 'rainyun') {
+        providerObj.api_key = document.getElementById('ryApiKey')?.value || '';
+        const did = document.getElementById('ryDomainId')?.value?.trim();
+        if (did) providerObj.domain_id = did;
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

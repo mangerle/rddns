@@ -280,6 +280,12 @@ pub enum ProviderConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         team_id: Option<String>,
     },
+    /// 雨云 (RainYun)
+    RainYun {
+        api_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        domain_id: Option<String>,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -354,6 +360,7 @@ impl ProviderConfig {
             } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
             Self::Dynadot { password } => !password.trim().is_empty(),
             Self::Vercel { token, .. } => !token.trim().is_empty(),
+            Self::RainYun { api_key, .. } => !api_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

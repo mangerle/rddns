@@ -10,6 +10,7 @@ pub mod huawei;
 pub mod namecheap;
 pub mod namesilo;
 pub mod porkbun;
+pub mod rainyun;
 pub mod spaceship;
 pub mod traffic_route;
 pub mod trait_def;
@@ -27,6 +28,7 @@ pub use huawei::*;
 pub use namecheap::*;
 pub use namesilo::*;
 pub use porkbun::*;
+pub use rainyun::*;
 pub use spaceship::*;
 pub use traffic_route::*;
 pub use trait_def::*;
@@ -123,6 +125,10 @@ pub fn create_dns_provider(
         ProviderConfig::Vercel { token, team_id } => Ok(Arc::new(VercelProvider::new(
             token.clone(),
             team_id.clone(),
+        ))),
+        ProviderConfig::RainYun { api_key, domain_id } => Ok(Arc::new(RainYunProvider::new(
+            api_key.clone(),
+            domain_id.clone(),
         ))),
         ProviderConfig::Callback {
             url,
