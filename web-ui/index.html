@@ -986,6 +986,7 @@
                   <option value="edgeone">腾讯云 EdgeOne (SecretId / SecretKey)</option>
                   <option value="nowcn">时代互联 (NowCN AccessID / Key)</option>
                   <option value="eranet">时代互联国际版 (Eranet AccessID / Key)</option>
+                  <option value="tnethk">TNetHK (AccessID / Key)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2336,6 +2337,18 @@
               <input type="password" id="eranetSecret" placeholder="时代互联国际版 API 密钥" />
             </div>
           </div>`;
+      } else if (type === 'tnethk') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>AccessInstanceID</label>
+              <input type="text" id="tnetId" placeholder="TNetHK AccessInstanceID" />
+            </div>
+            <div class="form-group">
+              <label>SecretKey (密钥)</label>
+              <input type="password" id="tnetSecret" placeholder="TNetHK API 密钥" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2487,6 +2500,9 @@
           } else if (task.provider.type === 'eranet') {
             if (document.getElementById('eranetId')) document.getElementById('eranetId').value = task.provider.id || '';
             if (document.getElementById('eranetSecret')) document.getElementById('eranetSecret').value = task.provider.secret || '';
+          } else if (task.provider.type === 'tnethk') {
+            if (document.getElementById('tnetId')) document.getElementById('tnetId').value = task.provider.id || '';
+            if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
           }
         }
 
@@ -2779,6 +2795,9 @@
       } else if (pType === 'eranet') {
         providerObj.id = document.getElementById('eranetId')?.value || '';
         providerObj.secret = document.getElementById('eranetSecret')?.value || '';
+      } else if (pType === 'tnethk') {
+        providerObj.id = document.getElementById('tnetId')?.value || '';
+        providerObj.secret = document.getElementById('tnetSecret')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

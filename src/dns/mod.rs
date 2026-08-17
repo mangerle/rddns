@@ -187,6 +187,10 @@ pub fn create_dns_provider(
             id.clone(),
             secret.clone(),
         )?)),
+        ProviderConfig::TNetHk { id, secret } => Ok(Arc::new(NowcnProvider::new_tnethk(
+            id.clone(),
+            secret.clone(),
+        )?)),
         ProviderConfig::Callback {
             url,
             method,

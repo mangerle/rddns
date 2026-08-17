@@ -12,10 +12,10 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 pub const NOWCN_ENDPOINT: &str = "https://api.now.cn";
-#[allow(dead_code)]
 pub const ERANET_ENDPOINT: &str = "https://www.eranet.com";
+pub const TNETHK_ENDPOINT: &str = "https://www.tnet.hk";
 
-/// 时代互联 / 时代互联国际版通用 DNS 提供商
+/// 时代互联 / 时代互联国际版 / TNetHK 通用 DNS 提供商
 pub struct NowcnProvider {
     access_instance_id: String,
     secret_key: String,
@@ -60,7 +60,6 @@ impl NowcnProvider {
         )
     }
 
-    #[allow(dead_code)]
     pub fn new_eranet(
         access_instance_id: String,
         secret_key: String,
@@ -70,6 +69,18 @@ impl NowcnProvider {
             secret_key,
             ERANET_ENDPOINT.to_string(),
             "时代互联国际版 (Eranet)",
+        )
+    }
+
+    pub fn new_tnethk(
+        access_instance_id: String,
+        secret_key: String,
+    ) -> Result<Self, DnsProviderError> {
+        Self::new(
+            access_instance_id,
+            secret_key,
+            TNETHK_ENDPOINT.to_string(),
+            "TNetHK",
         )
     }
 

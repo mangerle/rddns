@@ -275,6 +275,7 @@ pub enum ProviderConfig {
     /// Dynadot
     Dynadot { password: String },
     /// Vercel DNS
+    /// Vercel DNS
     Vercel {
         token: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -313,6 +314,8 @@ pub enum ProviderConfig {
     NowCn { id: String, secret: String },
     /// 时代互联国际版 (Eranet)
     Eranet { id: String, secret: String },
+    /// TNetHK
+    TNetHk { id: String, secret: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -411,6 +414,7 @@ impl ProviderConfig {
             } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
             Self::NowCn { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::Eranet { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
+            Self::TNetHk { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
