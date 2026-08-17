@@ -970,8 +970,21 @@
                 </select>
               </div>
               <div class="form-group">
-                <label>TTL 缓存时间 (秒)<span class="label-hint">0 或留空表示自动默认</span></label>
-                <input type="number" id="dnsTtl" placeholder="例如 Cloudflare 填 1，阿里/腾讯填 600" />
+                <label>TTL 缓存时间<span class="label-hint">记录解析生效与缓存周期</span></label>
+                <select id="dnsTtlSelect" onchange="handleTtlSelect()">
+                  <option value="">自动默认 (留空 / 推荐)</option>
+                  <option value="1">1 秒 (Cloudflare Auto / 尊享版)</option>
+                  <option value="60">1 分钟 (60 秒)</option>
+                  <option value="120">2 分钟 (120 秒 - 腾讯云基础版)</option>
+                  <option value="300">5 分钟 (300 秒)</option>
+                  <option value="600">10 分钟 (600 秒 - 阿里/腾讯免费版)</option>
+                  <option value="1800">30 分钟 (1800 秒)</option>
+                  <option value="3600">1 小时 (3600 秒)</option>
+                  <option value="43200">12 小时 (43200 秒)</option>
+                  <option value="86400">1 天 (86400 秒)</option>
+                  <option value="__custom__">自定义输入秒数...</option>
+                </select>
+                <input type="number" id="dnsTtlCustom" placeholder="请输入自定义 TTL 秒数（如 600）" style="margin-top:8px; display:none;" min="1" />
               </div>
             </div>
             <div id="providerDynamicFields"></div>
@@ -1986,6 +1999,61 @@
       return selectEl.value.trim() || null;
     }
 
+    // 处理 TTL 下拉框选择变化
+    function handleTtlSelect() {
+      const selVal = document.getElementById('dnsTtlSelect')?.value;
+      const customInput = document.getElementById('dnsTtlCustom');
+      if (selVal === '__custom__') {
+        if (customInput) {
+          customInput.style.display = 'block';
+          customInput.focus();
+        }
+      } else {
+        if (customInput) {
+          customInput.style.display = 'none';
+          customInput.value = '';
+        }
+      }
+    }
+
+    // 获取选定的 TTL 数值 (秒)
+    function getTtlValue() {
+      const selectEl = document.getElementById('dnsTtlSelect');
+      if (!selectEl) return null;
+      if (selectEl.value === '__custom__') {
+        const raw = document.getElementById('dnsTtlCustom')?.value.trim();
+        const val = parseInt(raw);
+        return isNaN(val) ? null : val;
+      }
+      if (!selectEl.value) return null;
+      const val = parseInt(selectEl.value);
+      return isNaN(val) ? null : val;
+    }
+
+    // 回显设置 TTL 状态
+    function setTtlValue(ttl) {
+      const selectEl = document.getElementById('dnsTtlSelect');
+      const customInput = document.getElementById('dnsTtlCustom');
+      if (!selectEl || !customInput) return;
+      if (ttl === undefined || ttl === null || ttl === '' || ttl === 0) {
+        selectEl.value = '';
+        customInput.style.display = 'none';
+        customInput.value = '';
+      } else {
+        const strTtl = String(ttl);
+        const hasOption = Array.from(selectEl.options).some(opt => opt.value === strTtl);
+        if (hasOption) {
+          selectEl.value = strTtl;
+          customInput.style.display = 'none';
+          customInput.value = '';
+        } else {
+          selectEl.value = '__custom__';
+          customInput.style.display = 'block';
+          customInput.value = strTtl;
+        }
+      }
+    }
+
     // 渲染 DNS 服务商动态凭据表单
     function renderProviderFields() {
       const type = document.getElementById('dnsProviderType').value;
@@ -2108,7 +2176,7 @@
 
       if (conf.dns_tasks && conf.dns_tasks.length > 0) {
         const task = conf.dns_tasks[0];
-        document.getElementById('dnsTtl').value = task.ttl || '';
+        setTtlValue(task.ttl);
 
         // Provider
         if (task.provider.type) {
@@ -2363,7 +2431,7 @@
       const task = {
         name: "默认任务",
         provider: providerObj,
-        ttl: parseInt(document.getElementById('dnsTtl').value) || null,
+        ttl: getTtlValue(),
         ipv4: {
           enabled: document.getElementById('ipv4Enable').checked,
           source_type: document.getElementById('ipv4SourceType').value,
