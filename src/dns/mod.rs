@@ -3,6 +3,7 @@ pub mod baidu;
 pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
+pub mod dynadot;
 pub mod dynv6;
 pub mod godaddy;
 pub mod huawei;
@@ -18,6 +19,7 @@ pub use baidu::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
+pub use dynadot::*;
 pub use dynv6::*;
 pub use godaddy::*;
 pub use huawei::*;
@@ -113,6 +115,9 @@ pub fn create_dns_provider(
             api_key.clone(),
             api_secret.clone(),
         ))),
+        ProviderConfig::Dynadot { password } => {
+            Ok(Arc::new(DynadotProvider::new(password.clone())))
+        }
         ProviderConfig::Callback {
             url,
             method,

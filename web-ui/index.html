@@ -975,6 +975,7 @@
                   <option value="namecheap">Namecheap (动态 DNS 专用密码)</option>
                   <option value="namesilo">NameSilo (API Key)</option>
                   <option value="spaceship">Spaceship (API Key / Secret)</option>
+                  <option value="dynadot">Dynadot (动态 DNS 密码)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2201,6 +2202,12 @@
               <input type="password" id="spApiSecret" placeholder="Spaceship API Secret" />
             </div>
           </div>`;
+      } else if (type === 'dynadot') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>动态 DNS 密码 (Dynamic DNS Password)</label>
+            <input type="password" id="ddPassword" placeholder="Dynadot 域名设置中的动态 DNS 密码" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2320,6 +2327,8 @@
           } else if (task.provider.type === 'spaceship') {
             if (document.getElementById('spApiKey')) document.getElementById('spApiKey').value = task.provider.api_key || '';
             if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
+          } else if (task.provider.type === 'dynadot') {
+            if (document.getElementById('ddPassword')) document.getElementById('ddPassword').value = task.provider.password || '';
           }
         }
 
@@ -2577,6 +2586,8 @@
       } else if (pType === 'spaceship') {
         providerObj.api_key = document.getElementById('spApiKey')?.value || '';
         providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
+      } else if (pType === 'dynadot') {
+        providerObj.password = document.getElementById('ddPassword')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

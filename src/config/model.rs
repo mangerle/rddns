@@ -272,6 +272,8 @@ pub enum ProviderConfig {
     NameSilo { api_key: String },
     /// Spaceship
     Spaceship { api_key: String, api_secret: String },
+    /// Dynadot
+    Dynadot { password: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -344,6 +346,7 @@ impl ProviderConfig {
                 api_key,
                 api_secret,
             } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
+            Self::Dynadot { password } => !password.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }
