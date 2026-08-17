@@ -7,6 +7,7 @@ pub mod dynv6;
 pub mod godaddy;
 pub mod huawei;
 pub mod porkbun;
+pub mod traffic_route;
 pub mod trait_def;
 
 pub use alidns::*;
@@ -18,6 +19,7 @@ pub use dynv6::*;
 pub use godaddy::*;
 pub use huawei::*;
 pub use porkbun::*;
+pub use traffic_route::*;
 pub use trait_def::*;
 
 use crate::config::model::ProviderConfig;
@@ -82,6 +84,13 @@ pub fn create_dns_provider(
             access_key_id,
             secret_access_key,
         } => Ok(Arc::new(BaiduCloudProvider::new(
+            access_key_id.clone(),
+            secret_access_key.clone(),
+        ))),
+        ProviderConfig::TrafficRoute {
+            access_key_id,
+            secret_access_key,
+        } => Ok(Arc::new(TrafficRouteProvider::new(
             access_key_id.clone(),
             secret_access_key.clone(),
         ))),
