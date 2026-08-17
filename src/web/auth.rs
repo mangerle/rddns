@@ -11,8 +11,35 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = state.config_manager.get_config();
 
-    // 如果未配置用户认证凭据
+    // 如果未配置用户认证凭据：默认只允许本地回环和内网局域网访问，严禁公网未授权访问
     if config.auth.is_none() {
+        let client_ip_str = req
+            .headers()
+            .get("X-Forwarded-For")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .or_else(|| {
+                req.headers()
+                    .get("X-Real-IP")
+                    .and_then(|h| h.to_str().ok())
+            })
+            .map(|s| s.trim());
+
+        if let Some(ip_str) = client_ip_str {
+            if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                if !crate::util::net::is_private_or_loopback(&ip) {
+                    tracing::warn!("🛡️ [安全拦截] 阻止公网 IP ({}) 访问未设置密码的管理控制台", ip);
+                    return Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .header("Content-Type", "application/json; charset=utf-8")
+                        .body(axum::body::Body::from(
+                            r#"{"success":false,"message":"🛡️ 出于安全保护，系统尚未配置管理员密码时禁止从公网(WAN)访问。请通过本机(127.0.0.1)或内网局域网私网IP登录并初始化密码！"}"#,
+                        ))
+                        .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
+                }
+            }
+        }
+
         return next.run(req).await;
     }
 

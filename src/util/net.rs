@@ -1,5 +1,5 @@
 use regex::Regex;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// IPv4 正则提取器（匹配常见 IPv4 地址文本）
 static IPV4_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
@@ -67,6 +67,23 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
         || addr.is_broadcast()
         || addr.is_documentation()
         || addr.is_unspecified())
+}
+
+/// 判断 IP 是否属于私有局域网或本地回环 (包括 RFC1918 私网, 127.0.0.1, ::1, fe80::, fd00::)
+pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || !is_global_unicast_ipv6(v6)
+        }
+    }
 }
 
 /// 从字符串文本中提取第一个合法的 IPv4 地址
@@ -215,5 +232,19 @@ mod tests {
             extract_ipv6(sample, None),
             Some(Ipv6Addr::from_str("2409:8a00:1234:5678:abcd:efff:1:2").unwrap())
         );
+    }
+
+    #[test]
+    fn test_is_private_or_loopback() {
+        assert!(is_private_or_loopback(&IpAddr::from_str("127.0.0.1").unwrap()));
+        assert!(is_private_or_loopback(&IpAddr::from_str("192.168.1.100").unwrap()));
+        assert!(is_private_or_loopback(&IpAddr::from_str("10.0.0.1").unwrap()));
+        assert!(is_private_or_loopback(&IpAddr::from_str("172.16.0.1").unwrap()));
+        assert!(is_private_or_loopback(&IpAddr::from_str("::1").unwrap()));
+        assert!(is_private_or_loopback(&IpAddr::from_str("fe80::1").unwrap()));
+
+        // 公网 IP
+        assert!(!is_private_or_loopback(&IpAddr::from_str("114.114.114.114").unwrap()));
+        assert!(!is_private_or_loopback(&IpAddr::from_str("240e:390:800:100::1").unwrap()));
     }
 }
