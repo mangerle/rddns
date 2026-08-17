@@ -130,6 +130,43 @@ pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> 
     None
 }
 
+/// 判断 IPv6 是否为基于网卡硬件 MAC 地址生成的 EUI-64 稳定单播地址
+pub fn is_eui64_ipv6(addr: &Ipv6Addr) -> bool {
+    if !is_global_unicast_ipv6(addr) {
+        return false;
+    }
+    let segments = addr.segments();
+    (segments[5] & 0x00ff) == 0x00ff && (segments[6] & 0xff00) == 0xfe00
+}
+
+/// 在候选 IPv6 地址列表中智能优选最稳定的公网地址（优先 EUI-64 硬件地址和静态分配地址，避开临时隐私地址）
+pub fn select_best_ipv6(candidates: &[Ipv6Addr]) -> Option<Ipv6Addr> {
+    let global_addrs: Vec<&Ipv6Addr> = candidates
+        .iter()
+        .filter(|ip| is_global_unicast_ipv6(ip))
+        .collect();
+
+    if global_addrs.is_empty() {
+        return None;
+    }
+
+    // 1. 优先查找具有 EUI-64 硬件特征的长期稳定 IPv6
+    if let Some(&eui64_ip) = global_addrs.iter().find(|&&ip| is_eui64_ipv6(ip)) {
+        return Some(*eui64_ip);
+    }
+
+    // 2. 其次查找具有静态分配特征的 IPv6 (后64位为小数值/短后缀如 ::1, ::10 等)
+    if let Some(&static_ip) = global_addrs.iter().find(|&&ip| {
+        let segs = ip.segments();
+        segs[4] == 0 && segs[5] == 0 && segs[6] == 0
+    }) {
+        return Some(*static_ip);
+    }
+
+    // 3. 兜底返回第一个全球单播 IPv6
+    Some(*global_addrs[0])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +185,18 @@ mod tests {
 
         let loopback = Ipv6Addr::from_str("::1").unwrap();
         assert!(!is_global_unicast_ipv6(&loopback));
+    }
+
+    #[test]
+    fn test_select_best_ipv6_prefers_eui64() {
+        // 临时随机公网 IPv6
+        let temp_ip = Ipv6Addr::from_str("240e:390:800:100:a1b2:c3d4:e5f6:7890").unwrap();
+        // 基于网卡 MAC 生成的稳定 EUI-64 IPv6
+        let stable_eui64 = Ipv6Addr::from_str("240e:390:800:100:21a:2bff:fe3c:4d5e").unwrap();
+
+        let addrs = vec![temp_ip, stable_eui64];
+        // 尽管 temp_ip 排在第一个，智能选优策略仍能精准挑选出稳定 EUI-64 IPv6
+        assert_eq!(select_best_ipv6(&addrs), Some(stable_eui64));
     }
 
     #[test]

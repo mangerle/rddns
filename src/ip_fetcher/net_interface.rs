@@ -1,5 +1,7 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
-use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4};
+use crate::util::net::{
+    extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4, select_best_ipv6,
+};
 use async_trait::async_trait;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -57,6 +59,8 @@ impl IpFetcher for NetInterfaceIpFetcher {
             .find(|iface| iface.name.eq_ignore_ascii_case(&self.interface_name))
             .ok_or_else(|| FetchError::InterfaceNotFound(self.interface_name.clone()))?;
 
+        let mut candidates = Vec::new();
+
         for addr in target_if.addr {
             if let Addr::V6(v6_addr) = addr {
                 let ip = v6_addr.ip;
@@ -67,10 +71,15 @@ impl IpFetcher for NetInterfaceIpFetcher {
                             return Ok(Some(matched_ip));
                         }
                     } else {
-                        return Ok(Some(ip));
+                        candidates.push(ip);
                     }
                 }
             }
+        }
+
+        // 无正则时，通过智能算法选优（优先 EUI-64 硬件稳定地址与静态配置，避开临时隐私地址）
+        if let Some(best_ip) = select_best_ipv6(&candidates) {
+            return Ok(Some(best_ip));
         }
 
         Ok(None)
