@@ -256,6 +256,11 @@ pub enum ProviderConfig {
     GoDaddy { api_key: String, api_secret: String },
     /// Dynv6
     Dynv6 { token: String },
+    /// 百度智能云
+    BaiduCloud {
+        access_key_id: String,
+        secret_access_key: String,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -314,6 +319,10 @@ impl ProviderConfig {
                 api_secret,
             } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
             Self::Dynv6 { token } => !token.trim().is_empty(),
+            Self::BaiduCloud {
+                access_key_id,
+                secret_access_key,
+            } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

@@ -970,6 +970,7 @@
                   <option value="porkbun">Porkbun (API Key / Secret)</option>
                   <option value="godaddy">GoDaddy (API Key / Secret)</option>
                   <option value="dynv6">Dynv6 (免费 IPv6 动态 DNS Token)</option>
+                  <option value="baidu_cloud">百度智能云 (Baidu Cloud - 纯 Rust BCE 签名)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2148,6 +2149,18 @@
             <label>HTTP Token</label>
             <input type="password" id="dynv6Token" placeholder="Dynv6 API Token" />
           </div>`;
+      } else if (type === 'baidu_cloud') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>AccessKey (AK)</label>
+              <input type="text" id="bdAccessKeyId" placeholder="百度云 AccessKey ID" />
+            </div>
+            <div class="form-group">
+              <label>SecretKey (SK)</label>
+              <input type="password" id="bdSecretAccessKey" placeholder="百度云 Secret Access Key" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2254,6 +2267,9 @@
             if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
           } else if (task.provider.type === 'dynv6') {
             if (document.getElementById('dynv6Token')) document.getElementById('dynv6Token').value = task.provider.token || '';
+          } else if (task.provider.type === 'baidu_cloud') {
+            if (document.getElementById('bdAccessKeyId')) document.getElementById('bdAccessKeyId').value = task.provider.access_key_id || '';
+            if (document.getElementById('bdSecretAccessKey')) document.getElementById('bdSecretAccessKey').value = task.provider.secret_access_key || '';
           }
         }
 
@@ -2498,6 +2514,9 @@
         providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
       } else if (pType === 'dynv6') {
         providerObj.token = document.getElementById('dynv6Token')?.value || '';
+      } else if (pType === 'baidu_cloud') {
+        providerObj.access_key_id = document.getElementById('bdAccessKeyId')?.value || '';
+        providerObj.secret_access_key = document.getElementById('bdSecretAccessKey')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

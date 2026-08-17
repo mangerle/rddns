@@ -1,4 +1,5 @@
 pub mod alidns;
+pub mod baidu;
 pub mod callback;
 pub mod cloudflare;
 pub mod dnspod;
@@ -9,6 +10,7 @@ pub mod porkbun;
 pub mod trait_def;
 
 pub use alidns::*;
+pub use baidu::*;
 pub use callback::*;
 pub use cloudflare::*;
 pub use dnspod::*;
@@ -76,6 +78,13 @@ pub fn create_dns_provider(
             api_secret.clone(),
         ))),
         ProviderConfig::Dynv6 { token } => Ok(Arc::new(Dynv6Provider::new(token.clone()))),
+        ProviderConfig::BaiduCloud {
+            access_key_id,
+            secret_access_key,
+        } => Ok(Arc::new(BaiduCloudProvider::new(
+            access_key_id.clone(),
+            secret_access_key.clone(),
+        ))),
         ProviderConfig::Callback {
             url,
             method,
