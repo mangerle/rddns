@@ -276,6 +276,7 @@ pub enum ProviderConfig {
     Dynadot { password: String },
     /// Vercel DNS
     /// Vercel DNS
+    /// Vercel DNS
     Vercel {
         token: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -318,6 +319,12 @@ pub enum ProviderConfig {
     TNetHk { id: String, secret: String },
     /// IBM NS1 Connect
     NsOne { api_key: String },
+    /// HiPM DNSMgr
+    HipmDnsMgr {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        api_token: String,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -418,6 +425,7 @@ impl ProviderConfig {
             Self::Eranet { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::TNetHk { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
             Self::NsOne { api_key } => !api_key.trim().is_empty(),
+            Self::HipmDnsMgr { api_token, .. } => !api_token.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

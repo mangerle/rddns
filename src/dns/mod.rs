@@ -10,6 +10,7 @@ pub mod dynadot;
 pub mod dynv6;
 pub mod gcore;
 pub mod godaddy;
+pub mod hipm_dnsmgr;
 pub mod huawei;
 pub mod name_com;
 pub mod namecheap;
@@ -36,6 +37,7 @@ pub use dynadot::*;
 pub use dynv6::*;
 pub use gcore::*;
 pub use godaddy::*;
+pub use hipm_dnsmgr::*;
 pub use huawei::*;
 pub use name_com::*;
 pub use namecheap::*;
@@ -194,6 +196,13 @@ pub fn create_dns_provider(
             secret.clone(),
         )?)),
         ProviderConfig::NsOne { api_key } => Ok(Arc::new(NsOneProvider::new(api_key.clone())?)),
+        ProviderConfig::HipmDnsMgr {
+            endpoint,
+            api_token,
+        } => Ok(Arc::new(HipmDnsMgrProvider::new(
+            endpoint.clone(),
+            api_token.clone(),
+        )?)),
         ProviderConfig::Callback {
             url,
             method,

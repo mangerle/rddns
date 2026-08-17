@@ -988,6 +988,7 @@
                   <option value="eranet">时代互联国际版 (Eranet AccessID / Key)</option>
                   <option value="tnethk">TNetHK (AccessID / Key)</option>
                   <option value="nsone">IBM NS1 Connect (API Key)</option>
+                  <option value="hipm_dnsmgr">HiPM DNSMgr (自建/托管 DNS 管理平台)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2356,6 +2357,16 @@
             <label>API Key (Secret)</label>
             <input type="password" id="nsoneApiKey" placeholder="IBM NS1 Connect API Key" />
           </div>`;
+      } else if (type === 'hipm_dnsmgr') {
+        container.innerHTML = `
+          <div class="form-group">
+            <label>API Token</label>
+            <input type="password" id="hipmApiToken" placeholder="HiPM DNSMgr API Token" />
+          </div>
+          <div class="form-group">
+            <label>DNSMgr 服务地址 (选填)</label>
+            <input type="text" id="hipmEndpoint" placeholder="默认: https://dnsmgr.example.com" />
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2512,6 +2523,9 @@
             if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
           } else if (task.provider.type === 'nsone') {
             if (document.getElementById('nsoneApiKey')) document.getElementById('nsoneApiKey').value = task.provider.api_key || '';
+          } else if (task.provider.type === 'hipm_dnsmgr') {
+            if (document.getElementById('hipmApiToken')) document.getElementById('hipmApiToken').value = task.provider.api_token || '';
+            if (document.getElementById('hipmEndpoint')) document.getElementById('hipmEndpoint').value = task.provider.endpoint || '';
           }
         }
 
@@ -2809,6 +2823,10 @@
         providerObj.secret = document.getElementById('tnetSecret')?.value || '';
       } else if (pType === 'nsone') {
         providerObj.api_key = document.getElementById('nsoneApiKey')?.value || '';
+      } else if (pType === 'hipm_dnsmgr') {
+        providerObj.api_token = document.getElementById('hipmApiToken')?.value || '';
+        const ep = document.getElementById('hipmEndpoint')?.value?.trim();
+        if (ep) providerObj.endpoint = ep;
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
