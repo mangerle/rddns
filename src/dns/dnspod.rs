@@ -169,11 +169,22 @@ impl DnsProvider for TencentCloudProvider {
             "RecordType": record_type.to_string(),
         });
 
-        let list_data: TcRecordListResponse = self
+        let list_res: Result<TcRecordListResponse, DnsProviderError> = self
             .request_tc3_api("DescribeRecordList", list_payload)
-            .await?;
+            .await;
 
-        let records = list_data.record_list.unwrap_or_default();
+        let records = match list_res {
+            Ok(data) => data.record_list.unwrap_or_default(),
+            Err(DnsProviderError::ApiError { ref code, .. })
+                if code == "ResourceNotFound.NoDataOfRecord"
+                    || code == "ResourceNotFound.NoDataOfDomain" =>
+            {
+                // 腾讯云 DNSPod 在没有查到记录时会返回 ResourceNotFound 错误码，此处应视为空记录列表
+                Vec::new()
+            }
+            Err(e) => return Err(e),
+        };
+
         let matched = records.into_iter().find(|r| {
             r.name.eq_ignore_ascii_case(&sub_domain)
                 && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
