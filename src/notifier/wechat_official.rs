@@ -97,32 +97,54 @@ impl WechatOfficialNotifier {
             }
         }
 
-        // 默认标准通用模板结构
+        // 默认标准通用模板结构（多别名全覆盖，无论微信后台使用 keyword/thing/命名变量 均能自动渲染）
+        let ip_combined = if event.ipv4.is_some() && event.ipv6.is_some() {
+            format!("IPv4: {} | IPv6: {}", ipv4_str, ipv6_str)
+        } else if event.ipv4.is_some() {
+            ipv4_str.clone()
+        } else if event.ipv6.is_some() {
+            ipv6_str.clone()
+        } else {
+            "未探测到有效IP".to_string()
+        };
+
         json!({
-            "first": {
-                "value": format!("【rddns 动态解析通知】{}", status_str),
-                "color": "#173177"
-            },
-            "keyword1": {
-                "value": event.task_name,
-                "color": "#173177"
-            },
-            "keyword2": {
-                "value": format!("IPv4: {} | IPv6: {}", ipv4_str, ipv6_str),
-                "color": "#173177"
-            },
-            "keyword3": {
-                "value": domains_str,
-                "color": "#173177"
-            },
-            "keyword4": {
-                "value": time_str,
-                "color": "#173177"
-            },
-            "remark": {
-                "value": format!("\n更新详情:\n{}", details_str),
-                "color": "#173177"
-            }
+            // 经典模板变量
+            "first": { "value": format!("【rddns 动态解析通知】{}", status_str), "color": "#173177" },
+            "keyword1": { "value": &event.task_name, "color": "#173177" },
+            "keyword2": { "value": &ip_combined, "color": "#173177" },
+            "keyword3": { "value": &domains_str, "color": "#173177" },
+            "keyword4": { "value": &time_str, "color": "#173177" },
+            "keyword5": { "value": &status_str, "color": "#173177" },
+            "remark": { "value": format!("\n更新详情:\n{}", details_str), "color": "#173177" },
+
+            // 语义化通用变量
+            "status": { "value": status_str, "color": "#173177" },
+            "task": { "value": &event.task_name, "color": "#173177" },
+            "taskName": { "value": &event.task_name, "color": "#173177" },
+            "task_name": { "value": &event.task_name, "color": "#173177" },
+            "ip": { "value": &ip_combined, "color": "#173177" },
+            "ipv4": { "value": &ipv4_str, "color": "#173177" },
+            "ipv4Addr": { "value": &ipv4_str, "color": "#173177" },
+            "ipv6": { "value": &ipv6_str, "color": "#173177" },
+            "ipv6Addr": { "value": &ipv6_str, "color": "#173177" },
+            "domain": { "value": &domains_str, "color": "#173177" },
+            "domains": { "value": &domains_str, "color": "#173177" },
+            "time": { "value": &time_str, "color": "#173177" },
+            "timestamp": { "value": &time_str, "color": "#173177" },
+            "date": { "value": &time_str, "color": "#173177" },
+            "details": { "value": &details_str, "color": "#173177" },
+            "content": { "value": &details_str, "color": "#173177" },
+
+            // 微信类目新规范模板变量 (thing / time / phrase)
+            "thing1": { "value": &event.task_name, "color": "#173177" },
+            "thing2": { "value": if domains_str.len() > 20 { domains_str[..20].to_string() } else { domains_str.clone() }, "color": "#173177" },
+            "thing3": { "value": if ip_combined.len() > 20 { ip_combined[..20].to_string() } else { ip_combined.clone() }, "color": "#173177" },
+            "character_string1": { "value": &ipv4_str, "color": "#173177" },
+            "character_string2": { "value": &domains_str, "color": "#173177" },
+            "time1": { "value": &time_str, "color": "#173177" },
+            "time2": { "value": &time_str, "color": "#173177" },
+            "phrase1": { "value": status_str, "color": "#173177" }
         })
     }
 }

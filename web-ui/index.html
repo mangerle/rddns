@@ -1158,7 +1158,20 @@
                 <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
               </div>
             </div>
-            <p class="form-tip">提示：个人用户推荐使用微信官方提供的免认证<b>「公众平台测试号」</b>，扫码关注即可秒获 AppID、AppSecret 与 OpenID，100% 随时无限制主动推送！</p>
+            <div class="form-tip" style="background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 12px; margin-top: 10px;">
+              <div style="font-weight: 600; color: var(--text); margin-bottom: 6px;">💡 微信公众平台模板消息设置指南：</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.6;">
+                1. 推荐在微信官方 <b>「公众平台测试号」</b> 中新增模板，标题填写：<code>DDNS动态解析通知</code><br />
+                2. <b>模板内容</b> 直接复制粘贴下方标准模板（系统已自动映射）：<br />
+                <code style="display:block; background:var(--bg-input); padding:8px 10px; border-radius:6px; margin:6px 0; color:var(--primary); user-select:all;">{{first.DATA}}
+任务名称：{{keyword1.DATA}}
+当前 IP：{{keyword2.DATA}}
+解析域名：{{keyword3.DATA}}
+更新时间：{{keyword4.DATA}}
+{{remark.DATA}}</code>
+                <i>（测试号扫码关注后可在页面右侧「微信号」列获取您的专属 OpenID）</i>
+              </div>
+            </div>
           </div>
 
           <!-- 企业微信 -->
