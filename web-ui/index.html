@@ -10,16 +10,21 @@
       --font-mono: "Cascadia Code", Consolas, Monaco, "Courier New", monospace;
       
       /* Dark Theme (默认暗色) */
-      --bg: #0b1120;
+      --bg: #090e17;
+      --bg-sidebar: #0f172a;
       --bg-surface: #131d31;
       --bg-card: #1e293b;
-      --bg-input: #0f172a;
+      --bg-input: #0b1120;
       --bg-hover: #334155;
       --border: #334155;
       --border-focus: #6366f1;
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --text-dim: #64748b;
+      
+      --console-bg: #050811;
+      --console-text: #e2e8f0;
+      --console-border: #1e293b;
       
       --primary: #6366f1;
       --primary-hover: #4f46e5;
@@ -38,16 +43,21 @@
     }
 
     [data-theme="light"] {
-      --bg: #f8fafc;
+      --bg: #f1f5f9;
+      --bg-sidebar: #ffffff;
       --bg-surface: #ffffff;
       --bg-card: #ffffff;
-      --bg-input: #f1f5f9;
+      --bg-input: #f8fafc;
       --bg-hover: #f1f5f9;
       --border: #e2e8f0;
       --border-focus: #6366f1;
       --text: #0f172a;
       --text-muted: #64748b;
       --text-dim: #94a3b8;
+      
+      --console-bg: #f8fafc;
+      --console-text: #1e293b;
+      --console-border: #e2e8f0;
       
       --primary: #4f46e5;
       --primary-hover: #4338ca;
@@ -72,13 +82,147 @@
       line-height: 1.5;
       transition: background-color 0.25s ease, color 0.25s ease;
       min-height: 100vh;
-      padding-bottom: 40px;
     }
 
-    .container {
-      max-width: 1040px;
-      margin: 0 auto;
-      padding: 24px 20px;
+    /* 整体分栏布局 */
+    .app-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* 左侧边栏 (Sidebar) */
+    .sidebar {
+      width: 260px;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px 16px;
+      flex-shrink: 0;
+      transition: all 0.25s ease;
+    }
+
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 8px 24px 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .brand-logo {
+      background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 1.15rem;
+      letter-spacing: -0.5px;
+      padding: 7px 12px;
+      border-radius: var(--radius);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .brand-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
+    }
+    .brand-desc {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* 侧边栏导航链接 */
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      list-style: none;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+    .nav-item:hover {
+      background-color: var(--bg-hover);
+      color: var(--text);
+    }
+    .nav-item.active {
+      background-color: var(--primary-light);
+      color: var(--primary);
+      border-color: rgba(99, 102, 241, 0.25);
+    }
+
+    /* 侧边栏底部信息 */
+    .sidebar-footer {
+      padding: 16px 8px 0 8px;
+      border-top: 1px solid var(--border);
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* 右侧主内容区 */
+    .main-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    /* 顶部导航顶栏 */
+    .top-header {
+      background-color: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .page-title h2 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .page-title p {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* 内容承载容器 */
+    .content-body {
+      padding: 28px 32px 48px 32px;
+      max-width: 1080px;
+      width: 100%;
     }
 
     /* 矢量图标通用样式 */
@@ -94,61 +238,6 @@
       width: 1.15em;
       height: 1.15em;
       stroke: currentColor;
-    }
-
-    /* 顶部导航与品牌区 */
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding-bottom: 20px;
-      margin-bottom: 24px;
-      border-bottom: 1px solid var(--border);
-    }
-    .brand-area {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-    .brand-logo {
-      background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
-      color: #ffffff;
-      font-weight: 800;
-      font-size: 1.2rem;
-      letter-spacing: -0.5px;
-      padding: 8px 14px;
-      border-radius: var(--radius);
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .brand-text h1 {
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .version-tag {
-      font-size: 0.72rem;
-      background: var(--primary-light);
-      color: var(--primary);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 600;
-    }
-    .brand-text p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
     }
 
     /* 按钮通用体系 */
@@ -199,36 +288,6 @@
       font-size: 0.8rem;
     }
 
-    /* 选项卡导航 */
-    .tabs-nav {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 24px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 8px;
-    }
-    .tab-item {
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--text-muted);
-      padding: 10px 18px;
-      border-radius: var(--radius);
-      font-size: 0.92rem;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .tab-item:hover {
-      color: var(--text);
-      background: var(--bg-surface);
-    }
-    .tab-item.active {
-      color: var(--primary);
-      background: var(--primary-light);
-      border-color: rgba(99, 102, 241, 0.25);
-    }
-
     /* 卡片体系 */
     .card {
       background-color: var(--bg-card);
@@ -249,6 +308,8 @@
       margin-bottom: 18px;
       padding-bottom: 12px;
       border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 10px;
     }
     .card-title {
       font-size: 1.05rem;
@@ -257,6 +318,12 @@
       display: flex;
       align-items: center;
       gap: 8px;
+    }
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
     }
     .card-badge {
       font-size: 0.72rem;
@@ -271,6 +338,39 @@
       background: var(--success-light);
       color: var(--success);
       border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    /* IP 探测结果内联徽章 */
+    .ip-probe-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      transition: all 0.2s ease;
+      user-select: text;
+    }
+    .ip-probe-badge.loading {
+      background: var(--bg-surface);
+      color: var(--primary);
+      border: 1px dashed var(--primary);
+    }
+    .ip-probe-badge.success {
+      background: var(--success-light);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .ip-probe-badge.error {
+      background: var(--danger-light);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+    .ip-probe-badge .ip-text {
+      font-weight: 700;
+      letter-spacing: 0.2px;
     }
 
     /* 表单与输入控件 */
@@ -321,11 +421,6 @@
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
       gap: 16px;
-    }
-    @media (max-width: 768px) {
-      .grid-2, .grid-3 { grid-template-columns: 1fr; }
-      header { flex-direction: column; align-items: flex-start; gap: 16px; }
-      .header-actions { width: 100%; justify-content: flex-start; }
     }
 
     /* Switch 开关组件 */
@@ -378,30 +473,85 @@
       line-height: 1.4;
     }
 
-    /* 实时日志终端面板 */
-    .console-panel {
-      margin-top: 32px;
-      background: #050811;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      box-shadow: var(--shadow-lg);
+    /* 模态日志弹窗样式 (完全适配暗色与亮色主题) */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      animation: fadeIn 0.2s ease forwards;
     }
-    .console-header {
-      background: #0b1120;
-      padding: 10px 16px;
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .modal-content {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 920px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+      animation: zoomIn 0.2s ease forwards;
+    }
+    @keyframes zoomIn {
+      from { transform: scale(0.96); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .modal-header {
+      padding: 14px 20px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid var(--border);
     }
-    .console-title {
-      font-size: 0.85rem;
+    .modal-title {
+      font-size: 1rem;
       font-weight: 700;
-      color: #94a3b8;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
+      color: var(--text);
+    }
+    .version-tag {
+      font-size: 0.72rem;
+      background: var(--primary-light);
+      color: var(--primary);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .modal-body {
+      flex: 1;
+      height: 480px;
+      min-height: 350px;
+      overflow-y: auto;
+      padding: 16px 20px;
+      background: var(--console-bg);
+      color: var(--console-text);
+      border-top: 1px solid var(--console-border);
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      line-height: 1.6;
+      transition: background 0.25s ease, color 0.25s ease;
     }
     .live-dot {
       width: 8px;
@@ -416,26 +566,20 @@
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.85); }
     }
-    .console-body {
-      height: 280px;
-      overflow-y: auto;
-      padding: 14px 16px;
-      font-family: var(--font-mono);
-      font-size: 0.82rem;
-      line-height: 1.6;
-      background: #040711;
-      color: #e2e8f0;
-    }
     .log-line {
       margin-bottom: 4px;
       word-break: break-all;
     }
-    .log-time { color: #64748b; margin-right: 8px; }
-    .log-target { color: #818cf8; margin-right: 8px; font-weight: 500; }
-    .log-lvl-INFO { color: #38bdf8; font-weight: 600; }
-    .log-lvl-WARN { color: #f59e0b; font-weight: 600; }
-    .log-lvl-ERROR { color: #f87171; font-weight: 700; }
-    .log-lvl-DEBUG { color: #c084fc; }
+    .log-time { color: var(--text-dim); margin-right: 8px; }
+    .log-target { color: var(--primary); margin-right: 8px; font-weight: 500; }
+    .log-lvl-INFO { color: #0284c7; font-weight: 600; }
+    [data-theme="dark"] .log-lvl-INFO { color: #38bdf8; }
+    .log-lvl-WARN { color: #d97706; font-weight: 600; }
+    [data-theme="dark"] .log-lvl-WARN { color: #f59e0b; }
+    .log-lvl-ERROR { color: #dc2626; font-weight: 700; }
+    [data-theme="dark"] .log-lvl-ERROR { color: #f87171; }
+    .log-lvl-DEBUG { color: #7c3aed; }
+    [data-theme="dark"] .log-lvl-DEBUG { color: #c084fc; }
 
     /* Toast 浮动提示 */
     .toast-container {
@@ -470,545 +614,32 @@
       from { opacity: 0; transform: translateX(30px); }
       to { opacity: 1; transform: translateX(0); }
     }
+
+    @media (max-width: 860px) {
+      .app-layout { flex-direction: column; }
+      .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+      .nav-list { flex-direction: row; overflow-x: auto; }
+      .sidebar-footer { display: none; }
+      .content-body { padding: 20px 16px; }
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .top-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body>
   <div class="toast-container" id="toastContainer"></div>
 
-  <div class="container">
-    <!-- 顶部品牌导航 -->
-    <header>
-      <div class="brand-area">
-        <div class="brand-logo">
-          <span class="icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-            </svg>
-          </span>
-          <span>rddns</span>
-        </div>
-        <div class="brand-text">
-          <h1>动态域名解析系统 <span class="version-tag">v0.1.0 (Rust)</span></h1>
-          <p>高性能、高安全性 | 微信公众号与全渠道通知 | 多云厂商 DNS 原生驱动</p>
-        </div>
-      </div>
-      <div class="header-actions">
-        <button class="btn-theme" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">
-          <span class="icon" id="themeIcon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path>
-            </svg>
-          </span>
-        </button>
-        <button class="btn-outline" onclick="triggerSync()" id="syncBtn">
-          <span class="icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-          </span>
-          <span>立即全量同步</span>
-        </button>
-        <button class="btn-primary" onclick="saveConfig()" id="saveBtn">
-          <span class="icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-              <polyline points="17 21 17 13 7 13 7 21"></polyline>
-              <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
-          </span>
-          <span>保存配置</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- Tab 选项卡切换 -->
-    <nav class="tabs-nav">
-      <button class="tab-item active" onclick="switchTab('tab-dns')">
-        <span class="icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="2" y1="12" x2="22" y2="12"></line>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-          </svg>
-        </span>
-        <span>DNS 服务商与解析</span>
-      </button>
-      <button class="tab-item" onclick="switchTab('tab-notify')">
-        <span class="icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-          </svg>
-        </span>
-        <span>通知与告警推送</span>
-      </button>
-      <button class="tab-item" onclick="switchTab('tab-system')">
-        <span class="icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </span>
-        <span>系统与安全设置</span>
-      </button>
-    </nav>
-
-    <!-- ========================================== -->
-    <!-- TAB 1: DNS 服务商与任务配置 -->
-    <!-- ========================================== -->
-    <div id="tab-dns" class="tab-content">
-      <!-- 服务商选择 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
-              </svg>
-            </span>
-            <span>DNS 服务商配置</span>
-          </div>
-          <span class="card-badge active">原生签名驱动</span>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>选择 DNS 服务商</label>
-            <select id="dnsProviderType" onchange="renderProviderFields()">
-              <option value="cloudflare">Cloudflare (支持小黄云保持与 API Token)</option>
-              <option value="ali_dns">阿里云 (AliDNS - 纯 Rust POP 签名)</option>
-              <option value="tencent_cloud">腾讯云 (DNSPod - 纯 Rust TC3 签名)</option>
-              <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>TTL 缓存时间 (秒)<span class="label-hint">0 或留空表示自动默认</span></label>
-            <input type="number" id="dnsTtl" placeholder="例如 Cloudflare 填 1，阿里/腾讯填 600" />
-          </div>
-        </div>
-        <div id="providerDynamicFields"></div>
-      </div>
-
-      <!-- IPv4 配置 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <label class="switch-wrapper">
-              <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked />
-              <span class="switch-label">启用 IPv4 解析</span>
-            </label>
-          </div>
-          <button class="btn-outline btn-sm" onclick="testIp('ipv4')">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-            </span>
-            <span>立即探测 IPv4</span>
-          </button>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>IPv4 获取途径</label>
-            <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
-              <option value="url">远程 URL 接口获取 (智能多接口回退)</option>
-              <option value="net_interface">本地网卡设备直读 (自动剔除私网与链路地址)</option>
-              <option value="command">外部命令 / Shell 脚本提取</option>
-            </select>
-          </div>
-          <div class="form-group" id="ipv4DynamicField"></div>
-        </div>
-        <div class="form-group">
-          <label>提取正则表达式 (可选)<span class="label-hint">如需从多条输出中提取指定前缀时填写</span></label>
-          <input type="text" id="ipv4Regex" placeholder="例如: \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b" />
-        </div>
-        <div class="form-group">
-          <label>解析的 IPv4 域名列表 (一行一个)<span class="label-hint">支持 @ 或子域名，支持冒号语法 如 home:example.com</span></label>
-          <textarea id="ipv4Domains" rows="3" placeholder="example.com&#10;nas.example.com&#10;vpn:example.com"></textarea>
-        </div>
-      </div>
-
-      <!-- IPv6 配置 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <label class="switch-wrapper">
-              <input type="checkbox" id="ipv6Enable" class="toggle-switch" checked />
-              <span class="switch-label">启用 IPv6 解析</span>
-            </label>
-          </div>
-          <button class="btn-outline btn-sm" onclick="testIp('ipv6')">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              </svg>
-            </span>
-            <span>立即探测 IPv6</span>
-          </button>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>IPv6 获取途径</label>
-            <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
-              <option value="url">远程 URL 接口获取 (推荐)</option>
-              <option value="net_interface">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
-              <option value="command">外部命令 / Shell 脚本提取</option>
-            </select>
-          </div>
-          <div class="form-group" id="ipv6DynamicField"></div>
-        </div>
-        <div class="form-group">
-          <label>提取正则表达式 (可选)</label>
-          <input type="text" id="ipv6Regex" placeholder="例如从多 IP 中匹配固定前缀" />
-        </div>
-        <div class="form-group">
-          <label>解析的 IPv6 域名列表 (一行一个)</label>
-          <textarea id="ipv6Domains" rows="3" placeholder="v6.example.com&#10;nas:example.com"></textarea>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========================================== -->
-    <!-- TAB 2: 通知与告警推送 -->
-    <!-- ========================================== -->
-    <div id="tab-notify" class="tab-content" style="display:none;">
-      <!-- 策略控制顶栏 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-              </svg>
-            </span>
-            <span>全局通知触发策略</span>
-          </div>
-          <button class="btn-primary btn-sm" onclick="testNotify()">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
-            </span>
-            <span>发送测试通知</span>
-          </button>
-        </div>
-        <div class="grid-3">
-          <label class="switch-wrapper">
-            <input type="checkbox" id="notifyOnIpChangeOnly" class="toggle-switch" checked />
-            <span class="switch-label">仅 IP 发生变动时通知</span>
-          </label>
-          <label class="switch-wrapper">
-            <input type="checkbox" id="notifyOnSuccess" class="toggle-switch" checked />
-            <span class="switch-label">同步成功时通知</span>
-          </label>
-          <label class="switch-wrapper">
-            <input type="checkbox" id="notifyOnFailure" class="toggle-switch" checked />
-            <span class="switch-label">同步失败时告警</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- 微信公众号官方原生模板消息 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-              </svg>
-            </span>
-            <span>微信公众号 (官方原生模板消息直推)</span>
-          </div>
-          <label class="switch-wrapper">
-            <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
-          </label>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>公众号 AppID</label>
-            <input type="text" id="wxOfficialAppId" placeholder="例如 wx8888888888888888" />
-          </div>
-          <div class="form-group">
-            <label>公众号 AppSecret</label>
-            <input type="password" id="wxOfficialAppSecret" placeholder="开发者密码 AppSecret" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>模板消息 ID (template_id)</label>
-            <input type="text" id="wxOfficialTemplateId" placeholder="微信公众平台模板库中的模板ID" />
-          </div>
-          <div class="form-group">
-            <label>接收者 OpenID (多个用户用英文逗号隔开)</label>
-            <input type="text" id="wxOfficialToUser" placeholder="关注公众号后生成的 OpenID (如 oABCD...)" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>点击卡片跳转 URL (可选)</label>
-            <input type="text" id="wxOfficialUrl" placeholder="例如 http://your-nas.local" />
-          </div>
-          <div class="form-group">
-            <label>自定义模板 JSON 结构 (可选，留空使用标准通用结构)</label>
-            <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
-          </div>
-        </div>
-        <p class="form-tip">提示：个人用户推荐使用微信官方提供的免认证<b>「公众平台测试号」</b>，扫码关注即可秒获 AppID、AppSecret 与 OpenID，100% 随时无限制主动推送！</p>
-      </div>
-
-      <!-- 企业微信 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                <line x1="9" y1="22" x2="9" y2="22.01"></line>
-                <line x1="15" y1="22" x2="15" y2="22.01"></line>
-                <line x1="9" y1="6" x2="9" y2="6.01"></line>
-                <line x1="15" y1="6" x2="15" y2="6.01"></line>
-                <line x1="9" y1="10" x2="9" y2="10.01"></line>
-                <line x1="15" y1="10" x2="15" y2="10.01"></line>
-                <line x1="9" y1="14" x2="9" y2="14.01"></line>
-                <line x1="15" y1="14" x2="15" y2="14.01"></line>
-                <line x1="9" y1="18" x2="9" y2="18.01"></line>
-                <line x1="15" y1="18" x2="15" y2="18.01"></line>
-              </svg>
-            </span>
-            <span>企业微信 (群机器人 / 自建应用推送)</span>
-          </div>
-          <label class="switch-wrapper">
-            <input type="checkbox" id="wecomEnable" class="toggle-switch" />
-          </label>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>推送模式</label>
-            <select id="wecomMode" onchange="toggleWecomMode()">
-              <option value="bot">群机器人 Webhook</option>
-              <option value="app">自建应用消息推送 (配合微信插件可直接弹窗置顶个人微信)</option>
-            </select>
-          </div>
-          <div class="form-group" id="wecomBotField">
-            <label>群机器人 Webhook URL</label>
-            <input type="text" id="wecomWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
-          </div>
-        </div>
-        <div id="wecomAppFields" style="display:none;">
-          <div class="grid-2">
-            <div class="form-group">
-              <label>企业 ID (CorpID)</label>
-              <input type="text" id="wecomCorpId" />
-            </div>
-            <div class="form-group">
-              <label>应用 Secret (CorpSecret)</label>
-              <input type="password" id="wecomCorpSecret" />
-            </div>
-            <div class="form-group">
-              <label>应用 AgentID</label>
-              <input type="number" id="wecomAgentId" />
-            </div>
-            <div class="form-group">
-              <label>接收成员 (默认 @all)</label>
-              <input type="text" id="wecomToUser" placeholder="@all 或 指定成员账号" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- SMTP 邮件通知 -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                <polyline points="22,6 12,13 2,6"></polyline>
-              </svg>
-            </span>
-            <span>SMTP 邮件通知 (支持常用服务商一键配置)</span>
-          </div>
-          <label class="switch-wrapper">
-            <input type="checkbox" id="emailEnable" class="toggle-switch" />
-          </label>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>常用邮箱服务商预设</label>
-            <select id="emailPreset" onchange="applyEmailPreset()">
-              <option value="custom">自定义 SMTP 服务器</option>
-              <option value="qq">QQ 邮箱 (smtp.qq.com:465)</option>
-              <option value="163">163 网易邮箱 (smtp.163.com:465)</option>
-              <option value="126">126 网易邮箱 (smtp.126.com:465)</option>
-              <option value="qq_enterprise">腾讯企业邮箱 / Foxmail (smtp.exmail.qq.com:465)</option>
-              <option value="aliyun">阿里云个人/企业邮箱 (smtp.aliyun.com:465)</option>
-              <option value="gmail">Google Gmail (smtp.gmail.com:465)</option>
-              <option value="outlook">微软 Outlook / Office 365 (smtp.office365.com:587)</option>
-              <option value="139">139 移动邮箱 (smtp.139.com:465)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>SMTP 服务器地址</label>
-            <input type="text" id="emailSmtpServer" placeholder="例如 smtp.qq.com" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>SMTP 端口</label>
-            <input type="number" id="emailSmtpPort" placeholder="465 (SSL) 或 587 (STARTTLS)" value="465" />
-          </div>
-          <div class="form-group">
-            <label>发信邮箱账号 / 用户名</label>
-            <input type="text" id="emailUsername" oninput="autoFillFromAddress()" placeholder="your_email@example.com" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>邮箱独立授权码 / 密码<span class="label-hint">主流邮箱需在设置中开启 POP3/SMTP 并生成授权码</span></label>
-            <input type="password" id="emailPassword" placeholder="SMTP 独立授权码（非邮箱登录密码）" />
-          </div>
-          <div class="form-group">
-            <label>发件人邮箱 (From)</label>
-            <input type="text" id="emailFrom" placeholder="your_email@example.com" />
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>收件人邮箱 (To，多个用英文逗号分隔，可填自己)</label>
-            <input type="text" id="emailTo" placeholder="receiver@example.com" />
-          </div>
-          <div class="form-group" style="display:flex; align-items:flex-end; padding-bottom:12px;">
-            <label class="switch-wrapper">
-              <input type="checkbox" id="emailUseSsl" class="toggle-switch" checked />
-              <span class="switch-label">启用 SSL / TLS 加密 (465 端口推荐开启)</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <!-- 第三方推送 (PushPlus / Server酱 / Telegram / 钉钉) -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-8.27 4a2 2 0 0 1-3.46 0"></path>
-              </svg>
-            </span>
-            <span>其他第三方通知渠道</span>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>PushPlus (推送加 Token)</label>
-            <input type="text" id="pushplusToken" placeholder="留空则不启用" />
-          </div>
-          <div class="form-group">
-            <label>Server酱 SendKey (Turbo 版)</label>
-            <input type="text" id="serverchanKey" placeholder="留空则不启用" />
-          </div>
-          <div class="form-group">
-            <label>Telegram Bot Token</label>
-            <input type="password" id="tgToken" placeholder="例如: 123456:ABC-DEF..." />
-          </div>
-          <div class="form-group">
-            <label>Telegram Chat ID</label>
-            <input type="text" id="tgChatId" placeholder="例如: 12345678" />
-          </div>
-          <div class="form-group">
-            <label>钉钉机器人 Access Token</label>
-            <input type="password" id="dingToken" placeholder="Webhook access_token" />
-          </div>
-          <div class="form-group">
-            <label>钉钉机器人加签 Secret (可选)</label>
-            <input type="password" id="dingSecret" placeholder="SECxxxx" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========================================== -->
-    <!-- TAB 3: 系统与安全配置 -->
-    <!-- ========================================== -->
-    <div id="tab-system" class="tab-content" style="display:none;">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-              </svg>
-            </span>
-            <span>核心运行与轮询设置</span>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>Web 服务监听地址</label>
-            <input type="text" id="sysListenAddr" value="127.0.0.1:9876" />
-            <p class="form-tip">安全建议：仅监听在 127.0.0.1:9876，如需局域网访问请改为 0.0.0.0:9876</p>
-          </div>
-          <div class="form-group">
-            <label>全局同步间隔 (秒)</label>
-            <input type="number" id="sysInterval" value="300" />
-            <p class="form-tip">默认 300 秒（5 分钟）定期检查并自动同步 IP</p>
-          </div>
-          <div class="form-group">
-            <label>CacheTimes 缓存比对次数</label>
-            <input type="number" id="sysCacheTimes" value="10" />
-            <p class="form-tip">每 N 次探测 IP 无变化后，比对一次远程 DNS 解析记录</p>
-          </div>
-          <div class="form-group" style="display:flex; align-items:center; padding-top:20px;">
-            <label class="switch-wrapper">
-              <input type="checkbox" id="sysNotAllowWan" class="toggle-switch" />
-              <span class="switch-label">禁止公网访问 Web 界面</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">
-            <span class="icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-              </svg>
-            </span>
-            <span>Web 管理员身份认证 (Basic Auth)</span>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label>管理员账号</label>
-            <input type="text" id="sysUsername" placeholder="留空则不开启登录认证" />
-          </div>
-          <div class="form-group">
-            <label>管理员密码</label>
-            <input type="password" id="sysPassword" placeholder="留空表示不修改密码" />
-          </div>
-        </div>
-        <p class="form-tip">提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。</p>
-      </div>
-    </div>
-
-    <!-- ========================================== -->
-    <!-- 底部终端面板: 实时 SSE 运行日志 -->
-    <!-- ========================================== -->
-    <div class="console-panel">
-      <div class="console-header">
-        <div class="console-title">
+  <!-- 模态日志弹窗 -->
+  <div class="modal-backdrop" id="logModal" style="display:none;" onclick="handleBackdropClick(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title">
           <span class="live-dot"></span>
-          <span>实时运行日志 (Server-Sent Events)</span>
+          <span>系统实时运行日志</span>
+          <span class="version-tag">SSE 推流</span>
         </div>
-        <div style="display:flex; gap:8px;">
+        <div class="modal-actions">
           <button class="btn-outline btn-sm" onclick="clearLogs()">
             <span class="icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1016,12 +647,539 @@
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
               </svg>
             </span>
-            <span>清空日志</span>
+            <span>清空</span>
+          </button>
+          <button class="btn-outline btn-sm" onclick="closeLogModal()" title="关闭 (Esc)">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </span>
+            <span>关闭</span>
           </button>
         </div>
       </div>
-      <div class="console-body" id="logContainer"></div>
+      <div class="modal-body" id="logContainer"></div>
     </div>
+  </div>
+
+  <div class="app-layout">
+    <!-- 左侧导航侧边栏 -->
+    <aside class="sidebar">
+      <div>
+        <div class="sidebar-brand">
+          <div class="brand-logo">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+              </svg>
+            </span>
+            <span>rddns</span>
+          </div>
+          <div>
+            <div class="brand-title">动态域名解析</div>
+            <div class="brand-desc">高性能 Rust 驱动</div>
+          </div>
+        </div>
+
+        <ul class="nav-list">
+          <li class="nav-item active" id="nav-tab-dns" onclick="switchNav('tab-dns')">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </span>
+            <span>DNS 服务商与解析</span>
+          </li>
+          <li class="nav-item" id="nav-tab-notify" onclick="switchNav('tab-notify')">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+            </span>
+            <span>通知与告警推送</span>
+          </li>
+          <li class="nav-item" id="nav-tab-system" onclick="switchNav('tab-system')">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </span>
+            <span>系统与安全设置</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-badge">
+          <span class="live-dot"></span>
+          <span>rddns v0.1.0 已连接</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右侧主体内容 -->
+    <main class="main-wrapper">
+      <header class="top-header">
+        <div class="page-title">
+          <h2 id="currentSectionTitle">DNS 服务商与解析</h2>
+          <p>配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn-theme" onclick="toggleTheme()" id="themeBtn" title="切换明暗主题">
+            <span class="icon" id="themeIcon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path>
+              </svg>
+            </span>
+          </button>
+          <button class="btn-outline" onclick="openLogModal()" id="logBtn" title="查看实时运行日志">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </span>
+            <span>运行日志</span>
+          </button>
+          <button class="btn-outline" onclick="triggerSync()" id="syncBtn">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </span>
+            <span>立即全量同步</span>
+          </button>
+          <button class="btn-primary" onclick="saveConfig()" id="saveBtn">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+            </span>
+            <span>保存配置</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="content-body">
+        <!-- ========================================== -->
+        <!-- TAB 1: DNS 服务商与任务配置 -->
+        <!-- ========================================== -->
+        <div id="tab-dns" class="tab-content">
+          <!-- 服务商选择 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                  </svg>
+                </span>
+                <span>DNS 服务商配置</span>
+              </div>
+              <span class="card-badge active">原生签名驱动</span>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>选择 DNS 服务商</label>
+                <select id="dnsProviderType" onchange="renderProviderFields()">
+                  <option value="cloudflare">Cloudflare (支持小黄云保持与 API Token)</option>
+                  <option value="ali_dns">阿里云 (AliDNS - 纯 Rust POP 签名)</option>
+                  <option value="tencent_cloud">腾讯云 (DNSPod - 纯 Rust TC3 签名)</option>
+                  <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>TTL 缓存时间 (秒)<span class="label-hint">0 或留空表示自动默认</span></label>
+                <input type="number" id="dnsTtl" placeholder="例如 Cloudflare 填 1，阿里/腾讯填 600" />
+              </div>
+            </div>
+            <div id="providerDynamicFields"></div>
+          </div>
+
+          <!-- IPv4 配置 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked />
+                  <span class="switch-label">启用 IPv4 解析</span>
+                </label>
+              </div>
+              <div class="card-actions">
+                <div id="ipv4ProbeResult" class="ip-probe-badge" style="display:none;"></div>
+                <button class="btn-outline btn-sm" onclick="testIp('ipv4')" id="ipv4TestBtn">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                  </span>
+                  <span>立即探测 IPv4</span>
+                </button>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>IPv4 获取途径</label>
+                <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
+                  <option value="url">远程 URL 接口获取 (智能多接口回退)</option>
+                  <option value="net_interface">本地网卡设备直读 (自动剔除私网与链路地址)</option>
+                  <option value="command">外部命令 / Shell 脚本提取</option>
+                </select>
+              </div>
+              <div class="form-group" id="ipv4DynamicField"></div>
+            </div>
+            <div class="form-group">
+              <label>提取正则表达式 (可选)<span class="label-hint">如需从多条输出中提取指定前缀时填写</span></label>
+              <input type="text" id="ipv4Regex" placeholder="例如: \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b" />
+            </div>
+            <div class="form-group">
+              <label>解析的 IPv4 域名列表 (一行一个)<span class="label-hint">支持 @ 或子域名，支持冒号语法 如 home:example.com</span></label>
+              <textarea id="ipv4Domains" rows="3" placeholder="example.com&#10;nas.example.com&#10;vpn:example.com"></textarea>
+            </div>
+          </div>
+
+          <!-- IPv6 配置 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="ipv6Enable" class="toggle-switch" checked />
+                  <span class="switch-label">启用 IPv6 解析</span>
+                </label>
+              </div>
+              <div class="card-actions">
+                <div id="ipv6ProbeResult" class="ip-probe-badge" style="display:none;"></div>
+                <button class="btn-outline btn-sm" onclick="testIp('ipv6')" id="ipv6TestBtn">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                  </span>
+                  <span>立即探测 IPv6</span>
+                </button>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>IPv6 获取途径</label>
+                <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
+                  <option value="url">远程 URL 接口获取 (推荐)</option>
+                  <option value="net_interface">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
+                  <option value="command">外部命令 / Shell 脚本提取</option>
+                </select>
+              </div>
+              <div class="form-group" id="ipv6DynamicField"></div>
+            </div>
+            <div class="form-group">
+              <label>提取正则表达式 (可选)</label>
+              <input type="text" id="ipv6Regex" placeholder="例如从多 IP 中匹配固定前缀" />
+            </div>
+            <div class="form-group">
+              <label>解析的 IPv6 域名列表 (一行一个)</label>
+              <textarea id="ipv6Domains" rows="3" placeholder="v6.example.com&#10;nas:example.com"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 2: 通知与告警推送 -->
+        <!-- ========================================== -->
+        <div id="tab-notify" class="tab-content" style="display:none;">
+          <!-- 策略控制顶栏 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  </svg>
+                </span>
+                <span>全局通知触发策略</span>
+              </div>
+              <button class="btn-primary btn-sm" onclick="testNotify()">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                  </svg>
+                </span>
+                <span>发送测试通知</span>
+              </button>
+            </div>
+            <div class="grid-3">
+              <label class="switch-wrapper">
+                <input type="checkbox" id="notifyOnIpChangeOnly" class="toggle-switch" checked />
+                <span class="switch-label">仅 IP 发生变动时通知</span>
+              </label>
+              <label class="switch-wrapper">
+                <input type="checkbox" id="notifyOnSuccess" class="toggle-switch" checked />
+                <span class="switch-label">同步成功时通知</span>
+              </label>
+              <label class="switch-wrapper">
+                <input type="checkbox" id="notifyOnFailure" class="toggle-switch" checked />
+                <span class="switch-label">同步失败时告警</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 微信公众号官方原生模板消息 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                </span>
+                <span>微信公众号 (官方原生模板消息直推)</span>
+              </div>
+              <label class="switch-wrapper">
+                <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
+              </label>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>公众号 AppID</label>
+                <input type="text" id="wxOfficialAppId" placeholder="例如 wx8888888888888888" />
+              </div>
+              <div class="form-group">
+                <label>公众号 AppSecret</label>
+                <input type="password" id="wxOfficialAppSecret" placeholder="开发者密码 AppSecret" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>模板消息 ID (template_id)</label>
+                <input type="text" id="wxOfficialTemplateId" placeholder="微信公众平台模板库中的模板ID" />
+              </div>
+              <div class="form-group">
+                <label>接收者 OpenID (多个用户用英文逗号隔开)</label>
+                <input type="text" id="wxOfficialToUser" placeholder="关注公众号后生成的 OpenID (如 oABCD...)" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>点击卡片跳转 URL (可选)</label>
+                <input type="text" id="wxOfficialUrl" placeholder="例如 http://your-nas.local" />
+              </div>
+              <div class="form-group">
+                <label>自定义模板 JSON 结构 (可选，留空使用标准通用结构)</label>
+                <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
+              </div>
+            </div>
+            <p class="form-tip">提示：个人用户推荐使用微信官方提供的免认证<b>「公众平台测试号」</b>，扫码关注即可秒获 AppID、AppSecret 与 OpenID，100% 随时无限制主动推送！</p>
+          </div>
+
+          <!-- 企业微信 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+                    <line x1="9" y1="22" x2="9" y2="22.01"></line>
+                    <line x1="15" y1="22" x2="15" y2="22.01"></line>
+                    <line x1="9" y1="6" x2="9" y2="6.01"></line>
+                    <line x1="15" y1="6" x2="15" y2="6.01"></line>
+                    <line x1="9" y1="10" x2="9" y2="10.01"></line>
+                    <line x1="15" y1="10" x2="15" y2="10.01"></line>
+                    <line x1="9" y1="14" x2="9" y2="14.01"></line>
+                    <line x1="15" y1="14" x2="15" y2="14.01"></line>
+                    <line x1="9" y1="18" x2="9" y2="18.01"></line>
+                    <line x1="15" y1="18" x2="15" y2="18.01"></line>
+                  </svg>
+                </span>
+                <span>企业微信 (群机器人 / 自建应用推送)</span>
+              </div>
+              <label class="switch-wrapper">
+                <input type="checkbox" id="wecomEnable" class="toggle-switch" />
+              </label>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>推送模式</label>
+                <select id="wecomMode" onchange="toggleWecomMode()">
+                  <option value="bot">群机器人 Webhook</option>
+                  <option value="app">自建应用消息推送 (配合微信插件可直接弹窗置顶个人微信)</option>
+                </select>
+              </div>
+              <div class="form-group" id="wecomBotField">
+                <label>群机器人 Webhook URL</label>
+                <input type="text" id="wecomWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+              </div>
+            </div>
+            <div id="wecomAppFields" style="display:none;">
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>企业 ID (CorpID)</label>
+                  <input type="text" id="wecomCorpId" />
+                </div>
+                <div class="form-group">
+                  <label>应用 Secret (CorpSecret)</label>
+                  <input type="password" id="wecomCorpSecret" />
+                </div>
+                <div class="form-group">
+                  <label>应用 AgentID</label>
+                  <input type="number" id="wecomAgentId" />
+                </div>
+                <div class="form-group">
+                  <label>接收成员 (默认 @all)</label>
+                  <input type="text" id="wecomToUser" placeholder="@all 或 指定成员账号" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SMTP 邮件通知 -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                    <polyline points="22,6 12,13 2,6"></polyline>
+                  </svg>
+                </span>
+                <span>SMTP 邮件通知 (支持常用服务商一键配置)</span>
+              </div>
+              <label class="switch-wrapper">
+                <input type="checkbox" id="emailEnable" class="toggle-switch" />
+              </label>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>常用邮箱服务商预设</label>
+                <select id="emailPreset" onchange="applyEmailPreset()">
+                  <option value="custom">自定义 SMTP 服务器</option>
+                  <option value="qq">QQ 邮箱 (smtp.qq.com:465)</option>
+                  <option value="163">163 网易邮箱 (smtp.163.com:465)</option>
+                  <option value="126">126 网易邮箱 (smtp.126.com:465)</option>
+                  <option value="qq_enterprise">腾讯企业邮箱 / Foxmail (smtp.exmail.qq.com:465)</option>
+                  <option value="aliyun">阿里云个人/企业邮箱 (smtp.aliyun.com:465)</option>
+                  <option value="gmail">Google Gmail (smtp.gmail.com:465)</option>
+                  <option value="outlook">微软 Outlook / Office 365 (smtp.office365.com:587)</option>
+                  <option value="139">139 移动邮箱 (smtp.139.com:465)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>SMTP 服务器地址</label>
+                <input type="text" id="emailSmtpServer" placeholder="例如 smtp.qq.com" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>SMTP 端口</label>
+                <input type="number" id="emailSmtpPort" placeholder="465 (SSL) 或 587 (STARTTLS)" value="465" />
+              </div>
+              <div class="form-group">
+                <label>发信邮箱账号 / 用户名</label>
+                <input type="text" id="emailUsername" oninput="autoFillFromAddress()" placeholder="your_email@example.com" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>邮箱独立授权码 / 密码<span class="label-hint">主流邮箱需在设置中开启 POP3/SMTP 并生成授权码</span></label>
+                <input type="password" id="emailPassword" placeholder="SMTP 独立授权码（非邮箱登录密码）" />
+              </div>
+              <div class="form-group">
+                <label>发件人邮箱 (From)</label>
+                <input type="text" id="emailFrom" placeholder="your_email@example.com" />
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>收件人邮箱 (To，多个用英文逗号分隔，可填自己)</label>
+                <input type="text" id="emailTo" placeholder="receiver@example.com" />
+              </div>
+              <div class="form-group" style="display:flex; align-items:flex-end; padding-bottom:12px;">
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="emailUseSsl" class="toggle-switch" checked />
+                  <span class="switch-label">启用 SSL / TLS 加密 (465 端口推荐开启)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- TAB 3: 系统与安全配置 -->
+        <!-- ========================================== -->
+        <div id="tab-system" class="tab-content" style="display:none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                </span>
+                <span>核心运行与轮询设置</span>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>全局同步间隔 (秒)</label>
+                <input type="number" id="sysInterval" value="300" />
+                <p class="form-tip">默认 300 秒（5 分钟）定期检查并自动同步 IP</p>
+              </div>
+              <div class="form-group">
+                <label>CacheTimes 缓存比对次数</label>
+                <input type="number" id="sysCacheTimes" value="10" />
+                <p class="form-tip">每 N 次探测 IP 无变化后，比对一次远程 DNS 解析记录</p>
+              </div>
+            </div>
+            <div class="form-group" style="margin-top:8px;">
+              <label class="switch-wrapper">
+                <input type="checkbox" id="sysNotAllowWan" class="toggle-switch" />
+                <span class="switch-label">禁止公网访问 Web 界面</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                  </svg>
+                </span>
+                <span>Web 管理员身份认证 (Basic Auth)</span>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="form-group">
+                <label>管理员账号</label>
+                <input type="text" id="sysUsername" placeholder="留空则不开启登录认证" />
+              </div>
+              <div class="form-group">
+                <label>管理员密码</label>
+                <input type="password" id="sysPassword" placeholder="留空表示不修改密码" />
+              </div>
+            </div>
+            <p class="form-tip">提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。</p>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <script>
@@ -1090,14 +1248,50 @@
       }, 3500);
     }
 
-    // Tab 选项卡切换
-    function switchTab(tabId) {
+    // 模态日志控制
+    function openLogModal() {
+      document.getElementById('logModal').style.display = 'flex';
+      const container = document.getElementById('logContainer');
+      if (container) container.scrollTop = container.scrollHeight;
+    }
+
+    function closeLogModal() {
+      document.getElementById('logModal').style.display = 'none';
+    }
+
+    function handleBackdropClick(e) {
+      if (e.target.id === 'logModal') {
+        closeLogModal();
+      }
+    }
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeLogModal();
+      }
+    });
+
+    // 侧边栏导航切换
+    const SECTION_TITLES = {
+      'tab-dns': 'DNS 服务商与解析',
+      'tab-notify': '通知与告警推送',
+      'tab-system': '系统与安全设置'
+    };
+
+    function switchNav(tabId) {
       document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      
       const activeTab = document.getElementById(tabId);
       if (activeTab) activeTab.style.display = 'block';
-      const btn = Array.from(document.querySelectorAll('.tab-item')).find(b => b.getAttribute('onclick')?.includes(tabId));
-      if (btn) btn.classList.add('active');
+      
+      const navItem = document.getElementById(`nav-${tabId}`);
+      if (navItem) navItem.classList.add('active');
+      
+      const titleEl = document.getElementById('currentSectionTitle');
+      if (titleEl && SECTION_TITLES[tabId]) {
+        titleEl.innerText = SECTION_TITLES[tabId];
+      }
     }
 
     // 常用邮箱预设数据字典
@@ -1144,7 +1338,6 @@
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
           availableInterfaces = json.data;
-          // 如果当前正好展示网卡字段，刷新其下拉框
           if (document.getElementById('ipv4SourceType')?.value === 'net_interface') {
             renderIpFields('ipv4');
           }
@@ -1291,7 +1484,6 @@
 
     // 回显配置
     function populateForm(conf) {
-      document.getElementById('sysListenAddr').value = conf.listen_addr || '127.0.0.1:9876';
       document.getElementById('sysInterval').value = conf.interval_secs || 300;
       document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
       document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
@@ -1376,20 +1568,6 @@
           document.getElementById('wecomAgentId').value = notif.wecom.agent_id || '';
           document.getElementById('wecomToUser').value = notif.wecom.to_user || '';
         }
-        if (notif.pushplus) {
-          document.getElementById('pushplusToken').value = notif.pushplus.token || '';
-        }
-        if (notif.serverchan) {
-          document.getElementById('serverchanKey').value = notif.serverchan.send_key || '';
-        }
-        if (notif.telegram) {
-          document.getElementById('tgToken').value = notif.telegram.bot_token || '';
-          document.getElementById('tgChatId').value = notif.telegram.chat_id || '';
-        }
-        if (notif.dingtalk) {
-          document.getElementById('dingToken').value = notif.dingtalk.access_token || '';
-          document.getElementById('dingSecret').value = notif.dingtalk.secret || '';
-        }
         if (notif.email) {
           document.getElementById('emailEnable').checked = notif.email.enabled;
           document.getElementById('emailSmtpServer').value = notif.email.smtp_server || '';
@@ -1436,24 +1614,6 @@
           agent_id: parseInt(document.getElementById('wecomAgentId')?.value) || null,
           to_user: document.getElementById('wecomToUser')?.value || null
         },
-        pushplus: document.getElementById('pushplusToken').value ? {
-          enabled: true,
-          token: document.getElementById('pushplusToken').value
-        } : null,
-        serverchan: document.getElementById('serverchanKey').value ? {
-          enabled: true,
-          send_key: document.getElementById('serverchanKey').value
-        } : null,
-        telegram: document.getElementById('tgToken').value ? {
-          enabled: true,
-          bot_token: document.getElementById('tgToken').value,
-          chat_id: document.getElementById('tgChatId').value
-        } : null,
-        dingtalk: document.getElementById('dingToken').value ? {
-          enabled: true,
-          access_token: document.getElementById('dingToken').value,
-          secret: document.getElementById('dingSecret').value || null
-        } : null,
         email: document.getElementById('emailSmtpServer').value.trim() ? {
           enabled: document.getElementById('emailEnable').checked,
           smtp_server: document.getElementById('emailSmtpServer').value.trim(),
@@ -1514,7 +1674,7 @@
 
       const payload = {
         config: {
-          listen_addr: document.getElementById('sysListenAddr').value,
+          listen_addr: globalConfig?.listen_addr || "127.0.0.1:9876",
           interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
           cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
           not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
@@ -1559,6 +1719,10 @@
 
     // 测试探测 IP
     async function testIp(type) {
+      const isV4 = type === 'ipv4';
+      const badgeEl = document.getElementById(`${type}ProbeResult`);
+      const btnEl = document.getElementById(`${type}TestBtn`);
+      
       const urls = (document.getElementById(`${type}Urls`)?.value || '').split(',').map(s => s.trim()).filter(Boolean);
       const payload = {
         ip_type: type,
@@ -1570,6 +1734,14 @@
         regex: document.getElementById(`${type}Regex`).value || null,
         domains: []
       };
+
+      if (badgeEl) {
+        badgeEl.style.display = 'inline-flex';
+        badgeEl.className = 'ip-probe-badge loading';
+        badgeEl.innerHTML = `<span class="live-dot" style="background:var(--primary); box-shadow:0 0 6px var(--primary);"></span> <span>正在探测...</span>`;
+      }
+      if (btnEl) btnEl.disabled = true;
+
       try {
         const res = await fetch('/api/v1/test/ip', {
           method: 'POST',
@@ -1578,17 +1750,35 @@
         });
         const json = await res.json();
         if (json.success) {
-          const val = type === 'ipv4' ? json.data.ipv4 : json.data.ipv6;
+          const val = isV4 ? json.data.ipv4 : json.data.ipv6;
           if (val) {
-            alert(`成功探测到当前 ${type.toUpperCase()} 地址为:\n${val}`);
+            if (badgeEl) {
+              badgeEl.className = 'ip-probe-badge success';
+              badgeEl.innerHTML = `<span class="icon" style="color:var(--success);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <span>当前 ${type.toUpperCase()}: <span class="ip-text">${val}</span></span>`;
+            }
+            showToast(`成功探测到 ${type.toUpperCase()}: ${val}`, 'success');
           } else {
-            alert(`未能从当前配置的接口中获取到有效 ${type.toUpperCase()} 地址，请检查接口配置或网络连通性`);
+            if (badgeEl) {
+              badgeEl.className = 'ip-probe-badge error';
+              badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>未探测到有效 ${type.toUpperCase()}</span>`;
+            }
+            showToast(`未能获取到有效 ${type.toUpperCase()} 地址`, 'error');
           }
         } else {
-          alert('测试失败: ' + json.message);
+          if (badgeEl) {
+            badgeEl.className = 'ip-probe-badge error';
+            badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>探测失败: ${json.message}</span>`;
+          }
+          showToast(`探测失败: ${json.message}`, 'error');
         }
       } catch (e) {
-        alert('请求失败: ' + e);
+        if (badgeEl) {
+          badgeEl.className = 'ip-probe-badge error';
+          badgeEl.innerHTML = `<span>请求异常: ${e}</span>`;
+        }
+        showToast('请求异常: ' + e, 'error');
+      } finally {
+        if (btnEl) btnEl.disabled = false;
       }
     }
 
@@ -1616,6 +1806,7 @@
     // 日志追加与 SSE 连接
     function appendLog(entry) {
       const container = document.getElementById('logContainer');
+      if (!container) return;
       const div = document.createElement('div');
       div.className = 'log-line';
       div.innerHTML = `<span class="log-time">[${entry.timestamp}]</span> <span class="log-lvl-${entry.level}">[${entry.level}]</span> <span class="log-target">[${entry.target}]</span> ${entry.message}`;
@@ -1624,7 +1815,9 @@
     }
 
     function clearLogs() {
-      document.getElementById('logContainer').innerHTML = '';
+      const container = document.getElementById('logContainer');
+      if (container) container.innerHTML = '';
+      showToast('日志已清空', 'info');
     }
 
     function initSSE() {
