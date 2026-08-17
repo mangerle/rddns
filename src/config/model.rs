@@ -95,6 +95,14 @@ pub struct DnsTaskConfig {
     pub http_interface: Option<String>,
 }
 
+impl DnsTaskConfig {
+    /// 检查任务是否配置了待解析的域名
+    pub fn has_domains(&self) -> bool {
+        (self.ipv4.enabled && !self.ipv4.domains.is_empty())
+            || (self.ipv6.enabled && !self.ipv6.domains.is_empty())
+    }
+}
+
 fn default_task_name() -> String {
     "默认任务".to_string()
 }
@@ -104,7 +112,7 @@ impl Default for DnsTaskConfig {
         Self {
             name: default_task_name(),
             provider: ProviderConfig::Cloudflare {
-                api_token: Some("".to_string()),
+                api_token: None,
                 api_key: None,
                 email: None,
             },
@@ -119,7 +127,7 @@ impl Default for DnsTaskConfig {
                 net_interface: None,
                 cmd: None,
                 regex: None,
-                domains: vec!["example.com".to_string()],
+                domains: vec![],
             },
             ipv6: IpFetchConfig {
                 enabled: false,
@@ -237,6 +245,39 @@ pub enum ProviderConfig {
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
     },
+}
+
+impl ProviderConfig {
+    /// 判断是否已配置了有效的认证凭据
+    pub fn is_configured(&self) -> bool {
+        match self {
+            Self::Cloudflare {
+                api_token,
+                api_key,
+                email,
+            } => {
+                let has_token = api_token.as_ref().map(|t| !t.trim().is_empty()).unwrap_or(false);
+                let has_key = api_key.as_ref().map(|k| !k.trim().is_empty()).unwrap_or(false);
+                let has_email = email.as_ref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+                has_token || (has_key && has_email)
+            }
+            Self::AliDns {
+                access_key_id,
+                access_key_secret,
+                ..
+            } => !access_key_id.trim().is_empty() && !access_key_secret.trim().is_empty(),
+            Self::TencentCloud {
+                secret_id,
+                secret_key,
+            } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
+            Self::HuaweiCloud {
+                access_key_id,
+                secret_access_key,
+                ..
+            } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
+            Self::Callback { url, .. } => !url.trim().is_empty(),
+        }
+    }
 }
 
 fn default_http_method() -> String {

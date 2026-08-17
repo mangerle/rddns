@@ -50,6 +50,22 @@ impl DdnsEngine {
         dispatcher: &NotificationDispatcher,
         force_sync: bool,
     ) {
+        if !task.provider.is_configured() {
+            tracing::info!(
+                "[{}] 未配置有效的 DNS 服务商认证凭据，跳过同步（请访问 Web 界面 http://localhost:9876 完成配置）",
+                task.name
+            );
+            return;
+        }
+
+        if !task.has_domains() {
+            tracing::info!(
+                "[{}] 未配置需要解析的域名，跳过同步（请访问 Web 界面添加解析域名）",
+                task.name
+            );
+            return;
+        }
+
         tracing::info!("======== 开始执行任务: [{}] ========", task.name);
 
         let mut current_state = self.state_manager.get_task_state(&task.name);
@@ -230,9 +246,6 @@ impl DdnsEngine {
         let initial_conf = self.config_manager.get_config();
         let mut current_interval = Duration::from_secs(initial_conf.interval_secs.max(5));
         let mut timer = tokio::time::interval(current_interval);
-
-        // 首次启动立即执行一次全量检测
-        self.run_once(true).await;
 
         loop {
             tokio::select! {
