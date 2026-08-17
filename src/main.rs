@@ -41,11 +41,21 @@ struct CliArgs {
     /// 重置 Web 管理员密码并退出
     #[arg(long = "reset-password")]
     reset_password: Option<String>,
+
+    /// 在后台静默运行 (守护进程模式)
+    #[arg(short = 'd', long = "daemon", default_value_t = false)]
+    daemon: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
+
+    // 如果指定了 -d 且当前不是派生的后台子进程，则启动独立守护进程并退出当前父终端
+    if args.daemon && !util::daemon::is_daemon_child() {
+        util::daemon::run_as_daemon()?;
+        return Ok(());
+    }
 
     // 1. 初始化内存环形日志缓冲区与 Tracing 订阅者
     let log_buffer = LogBuffer::new(300);
