@@ -286,6 +286,11 @@ pub enum ProviderConfig {
         #[serde(skip_serializing_if = "Option::is_none")]
         domain_id: Option<String>,
     },
+    /// ClouDNS
+    ClouDNS {
+        auth_id: String,
+        auth_password: String,
+    },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -361,6 +366,10 @@ impl ProviderConfig {
             Self::Dynadot { password } => !password.trim().is_empty(),
             Self::Vercel { token, .. } => !token.trim().is_empty(),
             Self::RainYun { api_key, .. } => !api_key.trim().is_empty(),
+            Self::ClouDNS {
+                auth_id,
+                auth_password,
+            } => !auth_id.trim().is_empty() && !auth_password.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

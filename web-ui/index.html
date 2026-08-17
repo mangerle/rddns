@@ -978,6 +978,7 @@
                   <option value="dynadot">Dynadot (动态 DNS 密码)</option>
                   <option value="vercel">Vercel DNS (Access Token)</option>
                   <option value="rainyun">雨云 (RainYun API-Key)</option>
+                  <option value="cloudns">ClouDNS (Auth-ID / Password)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2234,6 +2235,18 @@
               <input type="text" id="ryDomainId" placeholder="自动根据域名查询 / 可手动指定" />
             </div>
           </div>`;
+      } else if (type === 'cloudns') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>Auth ID (或 sub-auth-id)</label>
+              <input type="text" id="cldAuthId" placeholder="ClouDNS HTTP API Auth ID" />
+            </div>
+            <div class="form-group">
+              <label>Auth Password</label>
+              <input type="password" id="cldAuthPassword" placeholder="ClouDNS API 密码" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2361,6 +2374,9 @@
           } else if (task.provider.type === 'rainyun') {
             if (document.getElementById('ryApiKey')) document.getElementById('ryApiKey').value = task.provider.api_key || '';
             if (document.getElementById('ryDomainId')) document.getElementById('ryDomainId').value = task.provider.domain_id || '';
+          } else if (task.provider.type === 'cloudns') {
+            if (document.getElementById('cldAuthId')) document.getElementById('cldAuthId').value = task.provider.auth_id || '';
+            if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
           }
         }
 
@@ -2628,6 +2644,9 @@
         providerObj.api_key = document.getElementById('ryApiKey')?.value || '';
         const did = document.getElementById('ryDomainId')?.value?.trim();
         if (did) providerObj.domain_id = did;
+      } else if (pType === 'cloudns') {
+        providerObj.auth_id = document.getElementById('cldAuthId')?.value || '';
+        providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);

@@ -2,6 +2,7 @@ pub mod alidns;
 pub mod baidu;
 pub mod callback;
 pub mod cloudflare;
+pub mod cloudns;
 pub mod dnspod;
 pub mod dynadot;
 pub mod dynv6;
@@ -20,6 +21,7 @@ pub use alidns::*;
 pub use baidu::*;
 pub use callback::*;
 pub use cloudflare::*;
+pub use cloudns::*;
 pub use dnspod::*;
 pub use dynadot::*;
 pub use dynv6::*;
@@ -129,6 +131,13 @@ pub fn create_dns_provider(
         ProviderConfig::RainYun { api_key, domain_id } => Ok(Arc::new(RainYunProvider::new(
             api_key.clone(),
             domain_id.clone(),
+        ))),
+        ProviderConfig::ClouDNS {
+            auth_id,
+            auth_password,
+        } => Ok(Arc::new(ClouDnsProvider::new(
+            auth_id.clone(),
+            auth_password.clone(),
         ))),
         ProviderConfig::Callback {
             url,
