@@ -45,6 +45,10 @@ struct CliArgs {
     /// 在后台静默运行 (守护进程模式)
     #[arg(short = 'd', long = "daemon", default_value_t = false)]
     daemon: bool,
+
+    /// 系统自启服务管理 (install | uninstall | start | stop | restart | status)
+    #[arg(short = 's', long = "service")]
+    service: Option<String>,
 }
 
 #[tokio::main]
@@ -57,7 +61,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 1. 初始化内存环形日志缓冲区与 Tracing 订阅者
+    // 1. 解析配置文件路径（若为相对路径，自动锚定至可执行文件所在目录，防止作为系统服务启动时工作目录漂移）
+    let config_path = if args.config.is_relative() {
+        if let Ok(exe_path) = std::env::current_exe() {
+            exe_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(&args.config)
+        } else {
+            args.config
+        }
+    } else {
+        args.config
+    };
+
+    // 处理系统服务管理指令 (-s install/uninstall/restart/status...)
+    if let Some(ref action) = args.service {
+        util::service::handle_service_command(action, &config_path)?;
+        return Ok(());
+    }
+
+    // 2. 初始化内存环形日志缓冲区与 Tracing 订阅者
     let log_buffer = LogBuffer::new(300);
     let buffer_layer = BufferLogLayer::new(log_buffer.clone());
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -74,20 +98,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         env!("CARGO_PKG_VERSION")
     );
     tracing::info!("==========================================");
-
-    // 2. 解析配置文件路径（若为相对路径，自动锚定至可执行文件所在目录，防止作为系统服务启动时工作目录漂移）
-    let config_path = if args.config.is_relative() {
-        if let Ok(exe_path) = std::env::current_exe() {
-            exe_path
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .join(&args.config)
-        } else {
-            args.config
-        }
-    } else {
-        args.config
-    };
 
     let config_manager = Arc::new(ConfigManager::load_or_create(config_path)?);
 
