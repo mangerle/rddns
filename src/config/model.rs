@@ -293,6 +293,8 @@ pub enum ProviderConfig {
     },
     /// Gcore DNS
     Gcore { api_key: String },
+    /// Name.com
+    NameCom { username: String, api_token: String },
     /// 自定义通用 Callback / Webhook 驱动
     Callback {
         url: String,
@@ -373,6 +375,10 @@ impl ProviderConfig {
                 auth_password,
             } => !auth_id.trim().is_empty() && !auth_password.trim().is_empty(),
             Self::Gcore { api_key } => !api_key.trim().is_empty(),
+            Self::NameCom {
+                username,
+                api_token,
+            } => !username.trim().is_empty() && !api_token.trim().is_empty(),
             Self::Callback { url, .. } => !url.trim().is_empty(),
         }
     }

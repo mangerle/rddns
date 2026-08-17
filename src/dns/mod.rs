@@ -9,6 +9,7 @@ pub mod dynv6;
 pub mod gcore;
 pub mod godaddy;
 pub mod huawei;
+pub mod name_com;
 pub mod namecheap;
 pub mod namesilo;
 pub mod porkbun;
@@ -29,6 +30,7 @@ pub use dynv6::*;
 pub use gcore::*;
 pub use godaddy::*;
 pub use huawei::*;
+pub use name_com::*;
 pub use namecheap::*;
 pub use namesilo::*;
 pub use porkbun::*;
@@ -142,6 +144,13 @@ pub fn create_dns_provider(
             auth_password.clone(),
         ))),
         ProviderConfig::Gcore { api_key } => Ok(Arc::new(GcoreProvider::new(api_key.clone()))),
+        ProviderConfig::NameCom {
+            username,
+            api_token,
+        } => Ok(Arc::new(NameComProvider::new(
+            username.clone(),
+            api_token.clone(),
+        ))),
         ProviderConfig::Callback {
             url,
             method,

@@ -980,6 +980,7 @@
                   <option value="rainyun">雨云 (RainYun API-Key)</option>
                   <option value="cloudns">ClouDNS (Auth-ID / Password)</option>
                   <option value="gcore">Gcore DNS (Permanent API-Key)</option>
+                  <option value="name_com">Name.com (Username / Token)</option>
                   <option value="callback">自定义 Callback (通用 Webhook 请求)</option>
                 </select>
               </div>
@@ -2254,6 +2255,18 @@
             <label>API Key (Permanent API-Key)</label>
             <input type="password" id="gcApiKey" placeholder="Gcore 永久 API 令牌 (APIKey xxx)" />
           </div>`;
+      } else if (type === 'name_com') {
+        container.innerHTML = `
+          <div class="grid-2">
+            <div class="form-group">
+              <label>用户名 (Username)</label>
+              <input type="text" id="ncUsername" placeholder="Name.com 用户名" />
+            </div>
+            <div class="form-group">
+              <label>API Token</label>
+              <input type="password" id="ncApiToken" placeholder="Name.com API Token" />
+            </div>
+          </div>`;
       } else if (type === 'callback') {
         container.innerHTML = `
           <div class="form-group">
@@ -2386,6 +2399,9 @@
             if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
           } else if (task.provider.type === 'gcore') {
             if (document.getElementById('gcApiKey')) document.getElementById('gcApiKey').value = task.provider.api_key || '';
+          } else if (task.provider.type === 'name_com') {
+            if (document.getElementById('ncUsername')) document.getElementById('ncUsername').value = task.provider.username || '';
+            if (document.getElementById('ncApiToken')) document.getElementById('ncApiToken').value = task.provider.api_token || '';
           }
         }
 
@@ -2658,6 +2674,9 @@
         providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
       } else if (pType === 'gcore') {
         providerObj.api_key = document.getElementById('gcApiKey')?.value || '';
+      } else if (pType === 'name_com') {
+        providerObj.username = document.getElementById('ncUsername')?.value || '';
+        providerObj.api_token = document.getElementById('ncApiToken')?.value || '';
       }
 
       const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
