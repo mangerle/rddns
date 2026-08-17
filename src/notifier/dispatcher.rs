@@ -40,6 +40,13 @@ impl NotificationDispatcher {
         {
             notifiers.push(Arc::new(ILinkNotifier::new(ilink.clone())));
         }
+        if let Some(ref wx) = config.wechat_official
+            && wx.enabled
+        {
+            notifiers.push(Arc::new(
+                crate::notifier::wechat_official::WechatOfficialNotifier::new(wx.clone()),
+            ));
+        }
         if let Some(ref wecom) = config.wecom
             && wecom.enabled
         {

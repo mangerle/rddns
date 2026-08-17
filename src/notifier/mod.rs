@@ -21,4 +21,6 @@ pub mod trait_def;
 #[allow(unused_imports)]
 pub mod webhook;
 #[allow(unused_imports)]
+pub mod wechat_official;
+#[allow(unused_imports)]
 pub mod wecom;

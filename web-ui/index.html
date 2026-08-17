@@ -212,6 +212,44 @@
         </div>
       </div>
 
+      <!-- 微信公众号官方原生模板消息 -->
+      <div class="card">
+        <div class="card-title">
+          <span>微信公众号 (官方原生模板消息直推)</span>
+          <input type="checkbox" id="wxOfficialEnable" />
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>公众号 AppID</label>
+            <input type="text" id="wxOfficialAppId" placeholder="例如 wx8888888888888888" />
+          </div>
+          <div class="form-group">
+            <label>公众号 AppSecret</label>
+            <input type="password" id="wxOfficialAppSecret" placeholder="开发者密码 AppSecret" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>模板消息 ID (template_id)</label>
+            <input type="text" id="wxOfficialTemplateId" placeholder="微信公众平台模板消息库中的模板ID" />
+          </div>
+          <div class="form-group">
+            <label>接收者 OpenID (多个用户可用逗号分隔)</label>
+            <input type="text" id="wxOfficialToUser" placeholder="用户关注公众号后的 OpenID" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>点击卡片跳转 URL (可选)</label>
+            <input type="text" id="wxOfficialUrl" placeholder="例如 http://your-nas.local" />
+          </div>
+          <div class="form-group">
+            <label>自定义模板 JSON 结构 (可选，留空使用默认通用结构)</label>
+            <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
+          </div>
+        </div>
+      </div>
+
       <!-- 企业微信 -->
       <div class="card">
         <div class="card-title">
@@ -534,6 +572,15 @@
           document.getElementById('ilinkToUser').value = notif.ilink.to_user_id || '';
           document.getElementById('ilinkToken').value = notif.ilink.bot_token || '';
         }
+        if (notif.wechat_official) {
+          document.getElementById('wxOfficialEnable').checked = notif.wechat_official.enabled;
+          document.getElementById('wxOfficialAppId').value = notif.wechat_official.app_id || '';
+          document.getElementById('wxOfficialAppSecret').value = notif.wechat_official.app_secret || '';
+          document.getElementById('wxOfficialTemplateId').value = notif.wechat_official.template_id || '';
+          document.getElementById('wxOfficialToUser').value = notif.wechat_official.to_user || '';
+          document.getElementById('wxOfficialUrl').value = notif.wechat_official.url || '';
+          document.getElementById('wxOfficialTmplData').value = notif.wechat_official.template_data || '';
+        }
         if (notif.wecom) {
           document.getElementById('wecomEnable').checked = notif.wecom.enabled;
           document.getElementById('wecomMode').value = notif.wecom.mode || 'bot';
@@ -612,6 +659,15 @@
           endpoint: document.getElementById('ilinkEndpoint').value || "https://ilinkai.weixin.qq.com",
           to_user_id: document.getElementById('ilinkToUser').value,
           bot_token: document.getElementById('ilinkToken').value
+        },
+        wechat_official: {
+          enabled: document.getElementById('wxOfficialEnable').checked,
+          app_id: document.getElementById('wxOfficialAppId').value.trim(),
+          app_secret: document.getElementById('wxOfficialAppSecret').value.trim(),
+          template_id: document.getElementById('wxOfficialTemplateId').value.trim(),
+          to_user: document.getElementById('wxOfficialToUser').value.trim(),
+          url: document.getElementById('wxOfficialUrl').value.trim() || null,
+          template_data: document.getElementById('wxOfficialTmplData').value.trim() || null,
         },
         wecom: {
           enabled: document.getElementById('wecomEnable').checked,

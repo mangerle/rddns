@@ -311,6 +311,9 @@ pub struct NotificationConfig {
     /// 微信官方 iLink Bot 配置
     pub ilink: Option<ILinkConfig>,
 
+    /// 微信公众号原生模板消息配置
+    pub wechat_official: Option<WechatOfficialConfig>,
+
     /// 企业微信配置
     pub wecom: Option<WeComConfig>,
 
@@ -337,6 +340,24 @@ pub struct NotificationConfig {
 
     /// 通用自定义 Webhook
     pub webhook: Option<WebhookConfig>,
+}
+
+/// 微信公众号原生模板消息推送配置
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WechatOfficialConfig {
+    pub enabled: bool,
+    /// 微信公众号 AppID
+    pub app_id: String,
+    /// 微信公众号 AppSecret
+    pub app_secret: String,
+    /// 模板消息 ID (template_id)
+    pub template_id: String,
+    /// 接收用户的 OpenID
+    pub to_user: String,
+    /// 点击卡片跳转 URL (可选)
+    pub url: Option<String>,
+    /// 自定义模板字段 JSON 结构（可选，为空时使用标准通用格式）
+    pub template_data: Option<String>,
 }
 
 fn default_true() -> bool {
