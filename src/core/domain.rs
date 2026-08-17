@@ -42,17 +42,39 @@ impl ParsedDomain {
 /// - "@:example.com" -> sub: "@", root: "example.com"
 /// - "sub.dev:example.com" -> sub: "sub.dev", root: "example.com"
 /// - "sub:example.com?line=telecom" -> 带自定义参数
+/// 解析用户配置的单个域名字符串
+/// 支持格式:
+/// - "example.com" -> sub: "@", root: "example.com"
+/// - "www.example.com" -> sub: "www", root: "example.com"
+/// - "*.example.com" -> sub: "*", root: "example.com"
+/// - "sub:example.com" -> sub: "sub", root: "example.com"
+/// - "https://www.example.com/" -> 自动清洗为 sub: "www", root: "example.com"
+/// - "sub:example.com?line=telecom" -> 带自定义参数
 pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     let trimmed = raw_input.trim();
-    if trimmed.is_empty() {
+    // 忽略空行以及以 # 或 // 开头的注释行
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
         return None;
     }
 
-    // 提取 query 参数 (以 ? 分割)
-    let (domain_part, query_part) = match trimmed.split_once('?') {
-        Some((d, q)) => (d.trim(), Some(q.trim())),
-        None => (trimmed, None),
+    // 1. 去除协议头 (如 http://, https://, 大小写不敏感)
+    let no_protocol = if let Some(idx) = trimmed.find("://") {
+        &trimmed[idx + 3..]
+    } else {
+        trimmed
     };
+
+    // 2. 提取 query 参数 (以 ? 分割)
+    let (domain_and_path, query_part) = match no_protocol.split_once('?') {
+        Some((d, q)) => (d.trim(), Some(q.trim())),
+        None => (no_protocol.trim(), None),
+    };
+
+    // 3. 去除末尾斜杠及 URL 路径 (例如 example.com/path -> example.com)
+    let domain_raw = domain_and_path.split('/').next().unwrap_or("").trim();
+    if domain_raw.is_empty() {
+        return None;
+    }
 
     let mut custom_params = HashMap::new();
     if let Some(query) = query_part {
@@ -61,10 +83,10 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         }
     }
 
-    // 检查冒号自定义子域名格式: "sub:domain.com"
-    if let Some((sub, root)) = domain_part.split_once(':') {
-        let sub = sub.trim().to_string();
-        let root = root.trim().to_string();
+    // 4. 检查冒号自定义子域名格式: "sub:domain.com"
+    if let Some((sub, root)) = domain_raw.split_once(':') {
+        let sub = sub.trim().to_ascii_lowercase();
+        let root = root.trim().to_ascii_lowercase();
         if root.is_empty() {
             return None;
         }
@@ -76,8 +98,9 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         });
     }
 
-    // 默认按照点号自动拆分（常见两段或多段域名）
-    let parts: Vec<&str> = domain_part.split('.').collect();
+    // 5. 统一转为 ASCII 小写并按点号自动拆分（域名不区分大小写）
+    let domain_lower = domain_raw.to_ascii_lowercase();
+    let parts: Vec<&str> = domain_lower.split('.').collect();
     if parts.len() < 2 {
         // 单个单词无法作为有效公网域名
         return None;
@@ -89,7 +112,7 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
 
     let (sub_domain, root_domain) = if is_special_second_level {
         if parts.len() == 3 {
-            ("@".to_string(), domain_part.to_string())
+            ("@".to_string(), domain_lower)
         } else {
             let sub = parts[..parts.len() - 3].join(".");
             let root = parts[parts.len() - 3..].join(".");
@@ -97,7 +120,7 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         }
     } else {
         if parts.len() == 2 {
-            ("@".to_string(), domain_part.to_string())
+            ("@".to_string(), domain_lower)
         } else {
             let sub = parts[..parts.len() - 2].join(".");
             let root = parts[parts.len() - 2..].join(".");
@@ -138,6 +161,28 @@ pub fn parse_domain_list(raw_list: &[String]) -> Vec<ParsedDomain> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_domain_with_url_prefix_and_slash() {
+        // 自动剔除 https:// 和 尾部斜杠
+        let d1 = parse_domain("https://nas.example.com/").unwrap();
+        assert_eq!(d1.sub_domain, "nas");
+        assert_eq!(d1.root_domain, "example.com");
+
+        // 自动小写化与大写混合
+        let d2 = parse_domain("HTTP://WWW.EXAMPLE.COM/PATH").unwrap();
+        assert_eq!(d2.sub_domain, "www");
+        assert_eq!(d2.root_domain, "example.com");
+
+        // 泛域名支持
+        let d3 = parse_domain("*.example.com").unwrap();
+        assert_eq!(d3.sub_domain, "*");
+        assert_eq!(d3.root_domain, "example.com");
+
+        // 注释行自动过滤
+        assert!(parse_domain("# 这是一行注释").is_none());
+        assert!(parse_domain("// 另一行注释").is_none());
+    }
 
     #[test]
     fn test_parse_domain_standard() {
