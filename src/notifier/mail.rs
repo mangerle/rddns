@@ -40,7 +40,7 @@ impl EmailNotifier {
                 r#"<tr>
                     <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-weight:600;color:#1e293b;font-size:12px;white-space:nowrap;">{domain}</td>
                     <td style="padding:10px 6px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;color:#475569;font-family:monospace;">{record_type}</span></td>
-                    <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#334155;font-size:11px;word-break:break-all;line-height:1.3;">{target_ip}</td>
+                    <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;color:#334155;font-size:11.5px;white-space:nowrap;">{target_ip}</td>
                     <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:{status_badge_bg};color:{status_badge_color};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:600;white-space:nowrap;display:inline-block;">{status_text}</span></td>
                     <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.4;">{message}</td>
                 </tr>"#,
@@ -76,7 +76,7 @@ impl EmailNotifier {
   <table width="100%" border="0" cellspacing="0" cellpadding="0">
     <tr>
       <td align="center">
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
           <!-- 顶部渐变装饰条 -->
           <tr>
             <td height="4" style="background:linear-gradient(90deg,#6366f1 0%,#06b6d4 100%);"></td>
@@ -114,14 +114,14 @@ impl EmailNotifier {
             <td style="padding:0 28px 20px 28px;">
               <table width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
-                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;" valign="top">
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
                     <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv4 地址</div>
-                    <div style="font-size:15px;font-family:monospace;font-weight:700;color:#1e293b;word-break:break-all;">{ipv4_str}</div>
+                    <div style="font-size:13px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;">{ipv4_str}</div>
                   </td>
                   <td width="4%"></td>
-                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;" valign="top">
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
                     <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv6 地址</div>
-                    <div style="font-size:13px;font-family:monospace;font-weight:700;color:#1e293b;word-break:break-all;">{ipv6_str}</div>
+                    <div style="font-size:12px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;letter-spacing:-0.2px;">{ipv6_str}</div>
                   </td>
                 </tr>
               </table>

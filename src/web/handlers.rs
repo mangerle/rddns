@@ -284,3 +284,109 @@ pub async fn get_network_interfaces_handler() -> impl IntoResponse {
     let ifaces = crate::ip_fetcher::net_interface::list_system_interfaces();
     Json(ApiResponse::ok(ifaces))
 }
+
+#[derive(Debug, Serialize)]
+pub struct AuthStatusResponse {
+    pub need_init: bool,
+    pub username: Option<String>,
+}
+
+/// 获取当前认证状态
+pub async fn get_auth_status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let config = state.config_manager.get_config();
+    let need_init = config.auth.is_none();
+    let username = config.auth.as_ref().map(|a| a.username.clone());
+    Json(ApiResponse::ok(AuthStatusResponse {
+        need_init,
+        username,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthInitRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// 首次初始化管理员账号与密码
+pub async fn init_auth_handler(
+    State(state): State<AppState>,
+    Json(req): Json<AuthInitRequest>,
+) -> impl IntoResponse {
+    let mut config = (*state.config_manager.get_config()).clone();
+    if config.auth.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err(
+                "系统已初始化管理员账号，无法重复初始化".to_string(),
+            )),
+        );
+    }
+
+    let username = req.username.trim();
+    let password = req.password.trim();
+    if username.is_empty() || password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err("用户名和密码不能为空".to_string())),
+        );
+    }
+
+    let hash = match bcrypt::hash(password, bcrypt::DEFAULT_COST) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::err(format!("密码加密失败: {}", e))),
+            );
+        }
+    };
+
+    config.auth = Some(UserAuthConfig {
+        username: username.to_string(),
+        password_hash: hash,
+    });
+
+    if let Err(e) = state.config_manager.update_config(config) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("保存管理员配置失败: {}", e))),
+        );
+    }
+
+    tracing::info!("管理员账号 [{}] 已成功初始化", username);
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok("管理员账号初始化成功")),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// 登录验证接口
+pub async fn login_auth_handler(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> impl IntoResponse {
+    let config = state.config_manager.get_config();
+    if let Some(ref auth) = config.auth {
+        if req.username == auth.username
+            && bcrypt::verify(&req.password, &auth.password_hash).unwrap_or(false)
+        {
+            return (StatusCode::OK, Json(ApiResponse::ok("登录成功")));
+        }
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::err("用户名或密码错误".to_string())),
+        );
+    }
+    // 未设置密码时视为成功
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok("系统未设置密码，直接放行")),
+    )
+}

@@ -3,8 +3,9 @@ use crate::util::log_buffer::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{
-    AppState, get_config_handler, get_logs_handler, get_network_interfaces_handler,
-    manual_sync_handler, save_config_handler, test_ip_handler, test_notify_handler,
+    AppState, get_auth_status_handler, get_config_handler, get_logs_handler,
+    get_network_interfaces_handler, init_auth_handler, login_auth_handler, manual_sync_handler,
+    save_config_handler, test_ip_handler, test_notify_handler,
 };
 use crate::web::sse::sse_log_handler;
 use axum::Router;
@@ -70,8 +71,8 @@ impl WebServer {
             log_buffer: self.log_buffer.clone(),
         };
 
-        // API 路由
-        let api_routes = Router::new()
+        // 需受保护的 API 路由 (附带 Basic Auth 校验中间件)
+        let protected_routes = Router::new()
             .route("/config", get(get_config_handler).post(save_config_handler))
             .route("/network-interfaces", get(get_network_interfaces_handler))
             .route("/sync", post(manual_sync_handler))
@@ -80,6 +81,14 @@ impl WebServer {
             .route("/logs", get(get_logs_handler))
             .route("/logs/sse", get(sse_log_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware));
+
+        // 公开 API 路由 (免鉴权，用于首次初始化与登录校验)
+        let public_routes = Router::new()
+            .route("/auth/status", get(get_auth_status_handler))
+            .route("/auth/init", post(init_auth_handler))
+            .route("/auth/login", post(login_auth_handler));
+
+        let api_routes = Router::new().merge(protected_routes).merge(public_routes);
 
         let app = Router::new()
             .nest("/api/v1", api_routes)
