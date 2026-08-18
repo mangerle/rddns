@@ -1,5 +1,22 @@
+use parking_lot::RwLock;
 use regex::Regex;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+/// 自定义正则编译缓存池，避免高频任务重复编译 DFA 状态机
+static CUSTOM_REGEX_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Option<Regex>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
+    if let Some(cached) = CUSTOM_REGEX_CACHE.read().get(pattern) {
+        return cached.clone();
+    }
+    let compiled = Regex::new(pattern).ok();
+    CUSTOM_REGEX_CACHE
+        .write()
+        .insert(pattern.to_string(), compiled.clone());
+    compiled
+}
 
 /// IPv4 正则提取器（严谨匹配四段点分十进制 IPv4 地址文本）
 static IPV4_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
@@ -85,7 +102,7 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
 /// 从字符串文本中提取第一个合法的 IPv4 地址
 pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> {
     if let Some(pattern) = custom_regex
-        && let Ok(re) = Regex::new(pattern)
+        && let Some(re) = get_or_compile_regex(pattern)
     {
         for cap in re.captures_iter(text) {
             if let Some(m) = cap.get(1).or_else(|| cap.get(0))
@@ -110,7 +127,7 @@ pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> 
 /// 若指定了 custom_regex 则使用自定义正则表达式筛选目标 IPv6 (不匹配则返回 None)
 pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> {
     if let Some(pattern) = custom_regex
-        && let Ok(re) = Regex::new(pattern)
+        && let Some(re) = get_or_compile_regex(pattern)
     {
         for cap in re.captures_iter(text) {
             if let Some(m) = cap.get(1).or_else(|| cap.get(0)) {
