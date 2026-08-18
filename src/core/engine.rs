@@ -135,6 +135,22 @@ impl DdnsEngine {
             }
         );
 
+        // 维护 IP 获取状态计数
+        if task.ipv4.enabled {
+            if ipv4_opt.is_some() {
+                current_state.ipv4_fail_count = 0;
+            } else {
+                current_state.ipv4_fail_count += 1;
+            }
+        }
+        if task.ipv6.enabled {
+            if ipv6_opt.is_some() {
+                current_state.ipv6_fail_count = 0;
+            } else {
+                current_state.ipv6_fail_count += 1;
+            }
+        }
+
         // 判断 IP 是否发生变动
         let ipv4_changed = ipv4_opt.is_some() && ipv4_opt != current_state.last_ipv4;
         let ipv6_changed = ipv6_opt.is_some() && ipv6_opt != current_state.last_ipv6;
@@ -154,6 +170,9 @@ impl DdnsEngine {
                 current_state.check_counter,
                 app_config.cache_times
             );
+            current_state.last_sync_time =
+                Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            state_manager.update_task_state(&task.name, |s| *s = current_state);
             return;
         }
 
@@ -172,6 +191,11 @@ impl DdnsEngine {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
+                    current_state.consecutive_failures += 1;
+                    current_state.last_error = Some(format!("创建 DNS 服务商驱动失败: {}", e));
+                    current_state.last_sync_time =
+                        Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                    state_manager.update_task_state(&task.name, |s| *s = current_state);
                     return;
                 }
             };
@@ -285,9 +309,22 @@ impl DdnsEngine {
             current_state.last_ipv6 = ipv6_opt;
         }
 
-        // 仅在全部启用协议同步完全成功时重置计数器；存在失败时保留计数以便下周期立即重试
+        current_state.last_sync_time = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
         if ipv4_all_ok && ipv6_all_ok {
             current_state.check_counter = 0;
+            current_state.consecutive_failures = 0;
+            current_state.last_error = None;
+        } else {
+            current_state.consecutive_failures += 1;
+            let failed_msgs: Vec<String> = sync_results
+                .iter()
+                .filter(|r| r.status == SyncStatus::Failed)
+                .map(|r| format!("{}: {}", r.domain, r.message))
+                .collect();
+            if !failed_msgs.is_empty() {
+                current_state.last_error = Some(failed_msgs.join("; "));
+            }
         }
 
         state_manager.update_task_state(&task.name, |s| *s = current_state);
