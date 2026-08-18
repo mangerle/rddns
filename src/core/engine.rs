@@ -442,6 +442,7 @@ impl DdnsEngine {
         let initial_conf = self.config_manager.get_config();
         let mut current_interval = Duration::from_secs(initial_conf.interval_secs.max(5));
         let mut timer = tokio::time::interval(current_interval);
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -464,7 +465,10 @@ impl DdnsEngine {
                         let new_secs = new_conf.interval_secs.max(5);
                         if Duration::from_secs(new_secs) != current_interval {
                             current_interval = Duration::from_secs(new_secs);
-                            timer = tokio::time::interval(current_interval);
+                            let mut new_timer = tokio::time::interval(current_interval);
+                            new_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                            new_timer.reset();
+                            timer = new_timer;
                             tracing::info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
                         }
                     }
