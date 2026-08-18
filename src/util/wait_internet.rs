@@ -41,10 +41,7 @@ pub async fn check_internet_once() -> bool {
     }
 
     // 2. 如果 TCP 端口被局域网防火墙阻断，尝试极简 HTTP 探测 (超时 1500ms)
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(1500))
-        .build()
-    {
+    let client = match crate::util::http::create_http_client(Duration::from_millis(1500)) {
         Ok(c) => c,
         Err(_) => return false,
     };

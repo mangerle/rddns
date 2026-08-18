@@ -61,7 +61,7 @@ pub fn is_newer_version(current: &str, latest: &str) -> bool {
 pub async fn check_version() -> Result<VersionInfo, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-    let client = reqwest::Client::builder()
+    let client = crate::util::http::create_http_client_builder()
         .timeout(Duration::from_secs(10))
         .user_agent(format!("RDDNS-Updater/v{}", current_version))
         .build()
@@ -74,10 +74,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
         .map_err(|e| format!("连接 GitHub API 失败: {}", e))?;
 
     if !resp.status().is_success() {
-        return Err(format!(
-            "GitHub API 返回错误状态码: {} (可能触发 API 速率限制)",
-            resp.status()
-        ));
+        return Err(format!("GitHub API 响应异常: HTTP {}", resp.status()));
     }
 
     let release: GithubRelease = resp
@@ -85,42 +82,29 @@ pub async fn check_version() -> Result<VersionInfo, String> {
         .await
         .map_err(|e| format!("解析 Release 信息失败: {}", e))?;
 
-    let clean_latest = release
-        .tag_name
-        .trim_start_matches('v')
-        .trim_start_matches('V')
-        .to_string();
-    let has_update = is_newer_version(&current_version, &clean_latest);
+    let latest_ver_clean = release.tag_name.trim_start_matches('v').to_string();
+    let has_update = is_newer_version(&current_version, &latest_ver_clean);
 
-    Ok(VersionInfo {
+    let info = VersionInfo {
         current_version,
-        latest_version: clean_latest,
+        latest_version: release.tag_name,
         has_update,
         release_url: release.html_url,
         release_notes: release.body,
-    })
+    };
+
+    Ok(info)
 }
 
-/// 执行自身在线自更新 (热替换)
+/// 执行原地一键热升级（下载最新发布包 -> 解压 -> 安全备份替换 -> 重启进程）
 pub async fn upgrade_self() -> Result<(), String> {
-    println!("🔍 正在检查最新版本发布信息...");
-    let info = check_version().await?;
-
-    if !info.has_update {
-        println!(
-            "✨ 当前已是最新版本 (v{})，无需更新！",
-            info.current_version
-        );
-        return Ok(());
-    }
-
-    println!(
-        "🚀 检测到新版本 v{} (当前: v{})，正在准备下载更新...",
-        info.latest_version, info.current_version
+    tracing::info!(
+        "🔍 正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
+        env!("CARGO_PKG_VERSION")
     );
 
     let current_version = env!("CARGO_PKG_VERSION");
-    let client = reqwest::Client::builder()
+    let client = crate::util::http::create_http_client_builder()
         .timeout(Duration::from_secs(60))
         .user_agent(format!("RDDNS-Updater/v{}", current_version))
         .build()
@@ -223,7 +207,7 @@ pub async fn upgrade_self() -> Result<(), String> {
     }
 
     println!("==========================================");
-    println!("🎉 RDDNS 成功更新至最新版本 v{}！", info.latest_version);
+    println!("🎉 RDDNS 成功更新至最新版本 {}！", release.tag_name);
     println!("📌 请重启程序或服务以使更新完全生效。");
     println!("==========================================");
 

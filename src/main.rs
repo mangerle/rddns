@@ -26,8 +26,8 @@ struct CliArgs {
     #[arg(short = 'c', long = "config", default_value = ".rddns_config.yaml")]
     config: PathBuf,
 
-    /// 覆盖 Web 服务监听地址 (例如 127.0.0.1:9876)
-    #[arg(short = 'l', long = "listen")]
+    /// 覆盖 Web 服务监听地址或端口 (支持 -l / -p / --listen / --port，例如 127.0.0.1:9876 或 :9876 或 9876)
+    #[arg(short = 'l', short_alias = 'p', long = "listen", alias = "port")]
     listen: Option<String>,
 
     /// 覆盖同步间隔时间 (秒)
@@ -37,6 +37,10 @@ struct CliArgs {
     /// 不启动 Web 管理界面 (纯后台守护模式)
     #[arg(long = "noweb", default_value_t = false)]
     no_web: bool,
+
+    /// 跳过 HTTPS / TLS 证书有效性验证 (支持 --skip-verify / --skipVerify)
+    #[arg(long = "skip-verify", alias = "skipVerify", default_value_t = false)]
+    skip_verify: bool,
 
     /// 重置 Web 管理员密码并退出 (支持 --reset-password / --resetPassword)
     #[arg(long = "reset-password", alias = "resetPassword")]
@@ -59,9 +63,17 @@ struct CliArgs {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
 
+    // 如果开启了跳过证书验证，配置全局 HTTP 策略
+    if args.skip_verify {
+        util::http::set_skip_verify(true);
+    }
+
     // 如果指定了 -u 则执行自动升级并退出
     if args.upgrade {
-        util::update::upgrade_self().await?;
+        if let Err(e) = util::update::upgrade_self().await {
+            eprintln!("❌ 自动升级失败: {}", e);
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
