@@ -17,7 +17,7 @@ pub struct DingTalkNotifier {
 
 impl DingTalkNotifier {
     pub fn new(config: DingTalkConfig) -> Self {
-        let client = Client::builder()
+        let client = crate::util::http::create_http_client_builder()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();

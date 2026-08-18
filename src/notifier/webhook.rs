@@ -13,7 +13,7 @@ pub struct CustomWebhookNotifier {
 
 impl CustomWebhookNotifier {
     pub fn new(config: WebhookConfig) -> Self {
-        let client = Client::builder()
+        let client = crate::util::http::create_http_client_builder()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();

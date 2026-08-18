@@ -17,7 +17,7 @@ pub struct NameSiloProvider {
 
 impl NameSiloProvider {
     pub fn new(api_key: String) -> Self {
-        let client = Client::builder()
+        let client = crate::util::http::create_http_client_builder()
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();

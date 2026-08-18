@@ -36,7 +36,9 @@ impl AliDnsProvider {
             .filter(|e| !e.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ALIDNS_ENDPOINT.to_string());
 
-        let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
+        let client = crate::util::http::create_http_client_builder()
+            .timeout(Duration::from_secs(15))
+            .build()?;
 
         Ok(Self {
             client,

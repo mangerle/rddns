@@ -41,8 +41,8 @@ struct PorkbunBaseResponse {
 
 impl PorkbunProvider {
     pub fn new(api_key: String, secret_key: String) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
+        let client = crate::util::http::create_http_client_builder()
+            .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
         Self {

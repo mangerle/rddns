@@ -66,7 +66,7 @@ impl HipmDnsMgrProvider {
         auth_val.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_val);
 
-        let client = Client::builder()
+        let client = crate::util::http::create_http_client_builder()
             .timeout(Duration::from_secs(15))
             .default_headers(headers)
             .build()?;

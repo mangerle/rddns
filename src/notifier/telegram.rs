@@ -12,7 +12,7 @@ pub struct TelegramNotifier {
 
 impl TelegramNotifier {
     pub fn new(config: TelegramConfig) -> Self {
-        let client = Client::builder()
+        let client = crate::util::http::create_http_client_builder()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();
