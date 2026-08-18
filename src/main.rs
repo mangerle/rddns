@@ -186,13 +186,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 处理命令行参数覆盖
-    if args.frequency.is_some() {
+    // 处理命令行参数覆盖 (仅在当前运行时生效，不写入磁盘配置文件)
+    if let Some(f) = args.frequency {
         let mut conf = (*config_manager.get_config()).clone();
-        if let Some(f) = args.frequency {
-            conf.interval_secs = f;
-        }
-        config_manager.update_config(conf)?;
+        conf.interval_secs = f;
+        config_manager.update_runtime_config(conf);
     }
 
     let cancel_token = CancellationToken::new();

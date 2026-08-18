@@ -71,6 +71,13 @@ impl ConfigManager {
             .map(|_| ())
     }
 
+    /// 仅在内存中更新配置并广播 (不持久化写入磁盘，用于 CLI 运行时临时参数覆盖)
+    pub fn update_runtime_config(&self, new_config: AppConfig) {
+        let new_arc = Arc::new(new_config);
+        *self.current.write() = new_arc.clone();
+        let _ = self.sender.send(new_arc);
+    }
+
     /// 在持有写锁的情况下原子修改并持久化配置 (防止并发写入冲突与覆盖)
     pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
