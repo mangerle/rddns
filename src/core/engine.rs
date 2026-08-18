@@ -211,14 +211,40 @@ impl DdnsEngine {
             }
         }
 
-        // 6. 更新状态快照
-        if ipv4_opt.is_some() {
+        // 6. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
+        let ipv4_all_ok = if task.ipv4.enabled && ipv4_opt.is_some() {
+            let parsed_v4_count = parse_domain_list(&task.ipv4.domains).len();
+            let v4_success_count = sync_results
+                .iter()
+                .filter(|r| r.record_type == DnsRecordType::A && r.status != SyncStatus::Failed)
+                .count();
+            parsed_v4_count > 0 && v4_success_count == parsed_v4_count
+        } else {
+            true
+        };
+
+        let ipv6_all_ok = if task.ipv6.enabled && ipv6_opt.is_some() {
+            let parsed_v6_count = parse_domain_list(&task.ipv6.domains).len();
+            let v6_success_count = sync_results
+                .iter()
+                .filter(|r| r.record_type == DnsRecordType::AAAA && r.status != SyncStatus::Failed)
+                .count();
+            parsed_v6_count > 0 && v6_success_count == parsed_v6_count
+        } else {
+            true
+        };
+
+        if ipv4_all_ok && ipv4_opt.is_some() {
             current_state.last_ipv4 = ipv4_opt;
         }
-        if ipv6_opt.is_some() {
+        if ipv6_all_ok && ipv6_opt.is_some() {
             current_state.last_ipv6 = ipv6_opt;
         }
-        current_state.check_counter = 0;
+
+        // 仅在全部启用协议同步完全成功时重置计数器；存在失败时保留计数以便下周期立即重试
+        if ipv4_all_ok && ipv6_all_ok {
+            current_state.check_counter = 0;
+        }
 
         self.state_manager
             .update_task_state(&task.name, |s| *s = current_state);
