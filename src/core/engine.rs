@@ -36,7 +36,7 @@ impl DdnsEngine {
         (engine, tx)
     }
 
-    /// 执行单次全量任务检查与同步
+    /// 执行单次全量任务检查与同步 (多任务并发执行)
     pub async fn run_once(&self, force_cloud_sync: bool) {
         let config = self.config_manager.get_config();
         let dispatcher = NotificationDispatcher::new_with_trackers(
@@ -44,18 +44,32 @@ impl DdnsEngine {
             self.error_trackers.clone(),
         );
 
-        for task in &config.dns_tasks {
-            self.process_task(task, &config, &dispatcher, force_cloud_sync)
+        let mut join_set = tokio::task::JoinSet::new();
+        for task in config.dns_tasks.clone() {
+            let config_clone = config.clone();
+            let dispatcher_clone = dispatcher.clone();
+            let state_manager = self.state_manager.clone();
+            join_set.spawn(async move {
+                Self::process_task(
+                    &task,
+                    &config_clone,
+                    &dispatcher_clone,
+                    &state_manager,
+                    force_cloud_sync,
+                )
                 .await;
+            });
         }
+
+        while join_set.join_next().await.is_some() {}
     }
 
     /// 处理单个 DNS 任务
     async fn process_task(
-        &self,
         task: &DnsTaskConfig,
         app_config: &AppConfig,
         dispatcher: &NotificationDispatcher,
+        state_manager: &StateManager,
         force_sync: bool,
     ) {
         if !task.provider.is_configured() {
@@ -76,45 +90,50 @@ impl DdnsEngine {
 
         tracing::info!("======== 开始执行任务: [{}] ========", task.name);
 
-        let mut current_state = self.state_manager.get_task_state(&task.name);
+        let mut current_state = state_manager.get_task_state(&task.name);
 
-        // 1. 获取 IPv4
-        let ipv4_opt =
-            if let Some(fetcher) = create_ip_fetcher(&task.ipv4, task.http_interface.as_deref()) {
-                match fetcher.fetch_ipv4().await {
-                    Ok(ip) => {
-                        if let Some(ref v4) = ip {
-                            tracing::info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
-                        }
-                        ip
-                    }
-                    Err(e) => {
-                        tracing::error!("[{}] 获取 IPv4 失败: {}", task.name, e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+        // 1. 并发探测 IPv4 与 IPv6
+        let v4_fetcher = create_ip_fetcher(&task.ipv4, task.http_interface.as_deref());
+        let v6_fetcher = create_ip_fetcher(&task.ipv6, task.http_interface.as_deref());
 
-        // 2. 获取 IPv6
-        let ipv6_opt =
-            if let Some(fetcher) = create_ip_fetcher(&task.ipv6, task.http_interface.as_deref()) {
-                match fetcher.fetch_ipv6().await {
-                    Ok(ip) => {
-                        if let Some(ref v6) = ip {
-                            tracing::info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
+        let (ipv4_opt, ipv6_opt) = tokio::join!(
+            async {
+                if let Some(fetcher) = v4_fetcher {
+                    match fetcher.fetch_ipv4().await {
+                        Ok(ip) => {
+                            if let Some(ref v4) = ip {
+                                tracing::info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
+                            }
+                            ip
                         }
-                        ip
+                        Err(e) => {
+                            tracing::error!("[{}] 获取 IPv4 失败: {}", task.name, e);
+                            None
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!("[{}] 获取 IPv6 失败: {}", task.name, e);
-                        None
-                    }
+                } else {
+                    None
                 }
-            } else {
-                None
-            };
+            },
+            async {
+                if let Some(fetcher) = v6_fetcher {
+                    match fetcher.fetch_ipv6().await {
+                        Ok(ip) => {
+                            if let Some(ref v6) = ip {
+                                tracing::info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
+                            }
+                            ip
+                        }
+                        Err(e) => {
+                            tracing::error!("[{}] 获取 IPv6 失败: {}", task.name, e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        );
 
         // 判断 IP 是否发生变动
         let ipv4_changed = ipv4_opt.is_some() && ipv4_opt != current_state.last_ipv4;
@@ -148,73 +167,91 @@ impl DdnsEngine {
         }
 
         // 3. 构建 DNS 提供商驱动
-        let dns_provider = match create_dns_provider(&task.provider) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
-                return;
-            }
-        };
+        let dns_provider: Arc<dyn crate::dns::trait_def::DnsProvider> =
+            match create_dns_provider(&task.provider) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
+                    return;
+                }
+            };
 
-        let mut sync_results: Vec<SyncRecordResult> = Vec::new();
+        let mut sync_join_set = tokio::task::JoinSet::new();
 
-        // 4. 同步 IPv4 域名
+        // 4. 并发调度 IPv4 域名同步任务
         if task.ipv4.enabled
             && let Some(ipv4) = ipv4_opt
         {
             let parsed_domains = parse_domain_list(&task.ipv4.domains);
             for domain in parsed_domains {
-                match dns_provider
-                    .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), task.ttl)
-                    .await
-                {
-                    Ok(res) => sync_results.push(res),
-                    Err(e) => {
-                        tracing::error!(
-                            "[{}] 同步域名 {} (A 记录) 失败: {}",
-                            task.name,
-                            domain.full_domain(),
-                            e
-                        );
-                        sync_results.push(SyncRecordResult {
-                            domain: domain.full_domain(),
-                            record_type: DnsRecordType::A,
-                            target_ip: ipv4.to_string(),
-                            status: SyncStatus::Failed,
-                            message: e.to_string(),
-                        });
+                let provider = dns_provider.clone();
+                let task_name = task.name.clone();
+                let ttl = task.ttl;
+                sync_join_set.spawn(async move {
+                    match provider
+                        .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), ttl)
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!(
+                                "[{}] 同步域名 {} (A 记录) 失败: {}",
+                                task_name,
+                                domain.full_domain(),
+                                e
+                            );
+                            SyncRecordResult {
+                                domain: domain.full_domain(),
+                                record_type: DnsRecordType::A,
+                                target_ip: ipv4.to_string(),
+                                status: SyncStatus::Failed,
+                                message: e.to_string(),
+                            }
+                        }
                     }
-                }
+                });
             }
         }
 
-        // 5. 同步 IPv6 域名
+        // 5. 并发调度 IPv6 域名同步任务
         if task.ipv6.enabled
             && let Some(ipv6) = ipv6_opt
         {
             let parsed_domains = parse_domain_list(&task.ipv6.domains);
             for domain in parsed_domains {
-                match dns_provider
-                    .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), task.ttl)
-                    .await
-                {
-                    Ok(res) => sync_results.push(res),
-                    Err(e) => {
-                        tracing::error!(
-                            "[{}] 同步域名 {} (AAAA 记录) 失败: {}",
-                            task.name,
-                            domain.full_domain(),
-                            e
-                        );
-                        sync_results.push(SyncRecordResult {
-                            domain: domain.full_domain(),
-                            record_type: DnsRecordType::AAAA,
-                            target_ip: ipv6.to_string(),
-                            status: SyncStatus::Failed,
-                            message: e.to_string(),
-                        });
+                let provider = dns_provider.clone();
+                let task_name = task.name.clone();
+                let ttl = task.ttl;
+                sync_join_set.spawn(async move {
+                    match provider
+                        .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), ttl)
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!(
+                                "[{}] 同步域名 {} (AAAA 记录) 失败: {}",
+                                task_name,
+                                domain.full_domain(),
+                                e
+                            );
+                            SyncRecordResult {
+                                domain: domain.full_domain(),
+                                record_type: DnsRecordType::AAAA,
+                                target_ip: ipv6.to_string(),
+                                status: SyncStatus::Failed,
+                                message: e.to_string(),
+                            }
+                        }
                     }
-                }
+                });
+            }
+        }
+
+        let mut sync_results: Vec<SyncRecordResult> = Vec::new();
+        while let Some(res) = sync_join_set.join_next().await {
+            if let Ok(r) = res {
+                sync_results.push(r);
             }
         }
 
@@ -253,8 +290,7 @@ impl DdnsEngine {
             current_state.check_counter = 0;
         }
 
-        self.state_manager
-            .update_task_state(&task.name, |s| *s = current_state);
+        state_manager.update_task_state(&task.name, |s| *s = current_state);
 
         // 7. 发送通知事件
         if !sync_results.is_empty() {
