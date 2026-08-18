@@ -202,11 +202,22 @@ impl DdnsEngine {
 
         let mut sync_join_set = tokio::task::JoinSet::new();
 
+        let parsed_v4_domains = if task.ipv4.enabled {
+            parse_domain_list(&task.ipv4.domains)
+        } else {
+            Vec::new()
+        };
+        let parsed_v6_domains = if task.ipv6.enabled {
+            parse_domain_list(&task.ipv6.domains)
+        } else {
+            Vec::new()
+        };
+
         // 4. 并发调度 IPv4 域名同步任务
         if task.ipv4.enabled {
             if let Some(ipv4) = ipv4_opt {
-                let parsed_domains = parse_domain_list(&task.ipv4.domains);
-                for domain in parsed_domains {
+                for domain in &parsed_v4_domains {
+                    let domain = domain.clone();
                     let provider = dns_provider.clone();
                     let task_name = task.name.clone();
                     let ttl = task.ttl;
@@ -249,11 +260,11 @@ impl DdnsEngine {
                     });
                 }
             } else {
-                let parsed_domains = parse_domain_list(&task.ipv4.domains);
-                for domain in parsed_domains {
+                for domain in &parsed_v4_domains {
+                    let full_domain = domain.full_domain();
                     sync_join_set.spawn(async move {
                         SyncRecordResult {
-                            domain: domain.full_domain(),
+                            domain: full_domain,
                             record_type: DnsRecordType::A,
                             target_ip: "未知/获取失败".to_string(),
                             status: SyncStatus::Failed,
@@ -267,8 +278,8 @@ impl DdnsEngine {
         // 5. 并发调度 IPv6 域名同步任务
         if task.ipv6.enabled {
             if let Some(ipv6) = ipv6_opt {
-                let parsed_domains = parse_domain_list(&task.ipv6.domains);
-                for domain in parsed_domains {
+                for domain in &parsed_v6_domains {
+                    let domain = domain.clone();
                     let provider = dns_provider.clone();
                     let task_name = task.name.clone();
                     let ttl = task.ttl;
@@ -311,11 +322,11 @@ impl DdnsEngine {
                     });
                 }
             } else {
-                let parsed_domains = parse_domain_list(&task.ipv6.domains);
-                for domain in parsed_domains {
+                for domain in &parsed_v6_domains {
+                    let full_domain = domain.full_domain();
                     sync_join_set.spawn(async move {
                         SyncRecordResult {
-                            domain: domain.full_domain(),
+                            domain: full_domain,
                             record_type: DnsRecordType::AAAA,
                             target_ip: "未知/获取失败".to_string(),
                             status: SyncStatus::Failed,
@@ -336,7 +347,7 @@ impl DdnsEngine {
         // 6. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
         let ipv4_all_ok = if task.ipv4.enabled {
             if ipv4_opt.is_some() {
-                let parsed_v4_count = parse_domain_list(&task.ipv4.domains).len();
+                let parsed_v4_count = parsed_v4_domains.len();
                 let v4_success_count = sync_results
                     .iter()
                     .filter(|r| r.record_type == DnsRecordType::A && r.status != SyncStatus::Failed)
@@ -351,7 +362,7 @@ impl DdnsEngine {
 
         let ipv6_all_ok = if task.ipv6.enabled {
             if ipv6_opt.is_some() {
-                let parsed_v6_count = parse_domain_list(&task.ipv6.domains).len();
+                let parsed_v6_count = parsed_v6_domains.len();
                 let v6_success_count = sync_results
                     .iter()
                     .filter(|r| {
