@@ -67,18 +67,24 @@ impl ConfigManager {
 
     /// 原子更新并持久化配置
     pub fn update_config(&self, new_config: AppConfig) -> Result<(), ConfigError> {
-        // 1. 原子持久化到磁盘
+        self.modify_config::<_, ConfigError>(|_| Ok(new_config))
+            .map(|_| ())
+    }
+
+    /// 在持有写锁的情况下原子修改并持久化配置 (防止并发写入冲突与覆盖)
+    pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
+    where
+        F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
+        E: From<ConfigError>,
+    {
+        let mut guard = self.current.write();
+        let new_config = f(&guard)?;
         Self::atomic_save_to_path(&self.file_path, &new_config)?;
-
-        // 2. 更新内存快照
         let new_arc = Arc::new(new_config);
-        *self.current.write() = new_arc.clone();
-
-        // 3. 广播给所有异步监听者
-        let _ = self.sender.send(new_arc);
-        tracing::info!("配置文件已原子保存并广播更新: {}", self.file_path.display());
-
-        Ok(())
+        *guard = new_arc.clone();
+        let _ = self.sender.send(new_arc.clone());
+        tracing::info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
+        Ok(new_arc)
     }
 
     /// 原子保存配置到指定路径

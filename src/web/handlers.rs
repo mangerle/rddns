@@ -442,10 +442,6 @@ pub async fn save_config_handler(
     Json(payload): Json<SaveConfigRequest>,
 ) -> impl IntoResponse {
     let mut new_config = payload.config;
-    let old_config = state.config_manager.get_config();
-
-    // 合并保留脱敏掩码对应的历史真实凭据
-    merge_sensitive_credentials(&mut new_config, &old_config);
 
     // 如果用户提交了新密码，生成 bcrypt 哈希
     if let Some(ref pwd) = payload.new_password
@@ -484,7 +480,15 @@ pub async fn save_config_handler(
         crate::util::dns_resolver::clear_custom_dns_server();
     }
 
-    match state.config_manager.update_config(new_config) {
+    let save_result = state
+        .config_manager
+        .modify_config::<_, crate::config::storage::ConfigError>(|old_config| {
+            let mut to_save = new_config.clone();
+            merge_sensitive_credentials(&mut to_save, old_config);
+            Ok(to_save)
+        });
+
+    match save_result {
         Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
