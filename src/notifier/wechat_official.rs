@@ -6,12 +6,22 @@ use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
 
+use parking_lot::RwLock;
+use std::time::Instant;
+
 /// 微信 Access Token 响应实体
 #[derive(Debug, Deserialize)]
 struct WechatTokenResponse {
     pub access_token: Option<String>,
+    pub expires_in: Option<u64>,
     pub errcode: Option<i64>,
     pub errmsg: Option<String>,
+}
+
+/// 内存缓存的 AccessToken 凭据
+struct CachedToken {
+    token: String,
+    expires_at: Instant,
 }
 
 /// 微信模板消息发送响应实体
@@ -27,6 +37,7 @@ struct WechatSendResponse {
 pub struct WechatOfficialNotifier {
     config: WechatOfficialConfig,
     client: Client,
+    token_cache: RwLock<Option<CachedToken>>,
 }
 
 impl WechatOfficialNotifier {
@@ -35,11 +46,21 @@ impl WechatOfficialNotifier {
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();
-        Self { config, client }
+        Self {
+            config,
+            client,
+            token_cache: RwLock::new(None),
+        }
     }
 
-    /// 获取公众号全局接口调用凭证 access_token
+    /// 获取公众号全局接口调用凭证 access_token (优先从内存缓存中获取)
     async fn fetch_access_token(&self) -> Result<String, NotifyError> {
+        if let Some(ref cached) = *self.token_cache.read()
+            && Instant::now() < cached.expires_at
+        {
+            return Ok(cached.token.clone());
+        }
+
         let url = format!(
             "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
             self.config.app_id.trim(),
@@ -52,6 +73,12 @@ impl WechatOfficialNotifier {
         if let Some(token) = token_resp.access_token
             && !token.is_empty()
         {
+            let ttl_secs = token_resp.expires_in.unwrap_or(7200).saturating_sub(300); // 预留 5 分钟缓冲
+            let expires_at = Instant::now() + Duration::from_secs(ttl_secs.max(60));
+            *self.token_cache.write() = Some(CachedToken {
+                token: token.clone(),
+                expires_at,
+            });
             return Ok(token);
         }
 
