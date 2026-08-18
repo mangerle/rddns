@@ -3,12 +3,14 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-/// 常用高可用 DNS 探测端点
+/// 常用高可用 DNS 探测端点 (涵盖 IPv4 与 IPv6 双栈)
 const PROBE_DNS_TARGETS: &[&str] = &[
-    "223.5.5.5:53",    // 阿里云公共 DNS
-    "119.29.29.29:53", // 腾讯云 DNSPod DNS
-    "1.1.1.1:53",      // Cloudflare DNS
-    "8.8.8.8:53",      // Google DNS
+    "223.5.5.5:53",              // 阿里云公共 DNS (IPv4)
+    "119.29.29.29:53",           // 腾讯云 DNSPod DNS (IPv4)
+    "1.1.1.1:53",                // Cloudflare DNS (IPv4)
+    "8.8.8.8:53",                // Google DNS (IPv4)
+    "[2400:3200::1]:53",         // 阿里云公共 DNS (IPv6)
+    "[2001:4860:4860::8888]:53", // Google DNS (IPv6)
 ];
 
 /// 常用连通性 HTTP 204 端点
@@ -29,14 +31,16 @@ pub async fn check_internet_once() -> bool {
         false
     }
 
-    let (r1, r2, r3, r4) = tokio::join!(
+    let (r1, r2, r3, r4, r5, r6) = tokio::join!(
         probe_target(PROBE_DNS_TARGETS[0]),
         probe_target(PROBE_DNS_TARGETS[1]),
         probe_target(PROBE_DNS_TARGETS[2]),
         probe_target(PROBE_DNS_TARGETS[3]),
+        probe_target(PROBE_DNS_TARGETS[4]),
+        probe_target(PROBE_DNS_TARGETS[5]),
     );
 
-    if r1 || r2 || r3 || r4 {
+    if r1 || r2 || r3 || r4 || r5 || r6 {
         return true;
     }
 
