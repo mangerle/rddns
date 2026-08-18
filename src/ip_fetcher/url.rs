@@ -18,11 +18,26 @@ impl UrlIpFetcher {
         regex: Option<String>,
         http_interface: Option<&str>,
     ) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
+        let client = match crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(5))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .build()
-            .unwrap_or_default();
+        {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(iface) = http_interface {
+                    tracing::warn!(
+                        "为任务网卡 [{}] 构建专有 HTTP 客户端失败: {}，降级为默认客户端",
+                        iface,
+                        e
+                    );
+                }
+                Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap_or_default()
+            }
+        };
 
         Self {
             endpoints,
