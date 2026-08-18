@@ -1,48 +1,25 @@
 use crate::web::handlers::AppState;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use std::net::SocketAddr;
 
 /// Basic Auth 鉴权中间件
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = state.config_manager.get_config();
 
-    // 如果未配置用户认证凭据：强制只允许本地回环和内网局域网访问，严禁公网未授权访问
+    // 如果未配置用户认证凭据：所有受保护接口直接拦截，强制要求先初始化管理员账号
     if config.auth.is_none() {
-        // 从底层 TCP 连接信息提取真实 Peer IP (防止伪造 X-Forwarded-For 绕过安全拦截)
-        let peer_ip = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip());
-
-        let is_allowed = match peer_ip {
-            Some(ip) => crate::util::net::is_private_or_loopback(&ip),
-            None => false, // 无法确定真实来源时，严格默认拦截
-        };
-
-        if !is_allowed {
-            let blocked_ip = peer_ip
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "未知/无法验证".to_string());
-            tracing::warn!(
-                "🛡️ [安全拦截] 阻止公网 IP ({}) 访问未设置密码的管理控制台",
-                blocked_ip
-            );
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .body(axum::body::Body::from(
-                    r#"{"success":false,"message":"🛡️ 出于安全保护，系统尚未配置管理员密码时禁止从公网(WAN)访问。请通过本机(127.0.0.1)或内网局域网私网IP登录并初始化密码！"}"#,
-                ))
-                .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
-        }
-
-        return next.run(req).await;
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(axum::body::Body::from(
+                r#"{"success":false,"message":"🛡️ 系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
+            ))
+            .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
     }
 
     let auth_conf = config.auth.as_ref().unwrap();
@@ -56,8 +33,9 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         auth_raw = Some(auth_str.trim_start_matches("Basic ").to_string());
     }
 
-    // 2. 若 Header 不存在，尝试从 URL Query（例如 SSE 请求中的 ?auth=...）提取
+    // 2. 若 Header 不存在，仅在 SSE 流式日志接口（/logs/sse）允许从 URL Query 中提取凭据（浏览器 EventSource 原生不支持设置请求头）
     if auth_raw.is_none()
+        && req.uri().path().ends_with("/logs/sse")
         && let Some(query) = req.uri().query()
     {
         for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
@@ -89,4 +67,99 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
             r#"{"success":false,"message":"未登录或登录凭据已过期，请重新登录"}"#,
         ))
         .unwrap_or_else(|_| StatusCode::UNAUTHORIZED.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{AppConfig, UserAuthConfig};
+    use crate::config::storage::ConfigManager;
+    use crate::util::log_buffer::LogBuffer;
+    use axum::Router;
+    use axum::middleware::from_fn_with_state;
+    use axum::routing::get;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_auth_middleware_blocks_when_no_auth() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+        };
+
+        let app = Router::new()
+            .route("/config", get(|| async { "ok" }))
+            .layer(from_fn_with_state(state, auth_middleware));
+
+        let req = Request::builder()
+            .uri("/config")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_query_auth_scope() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+
+        let hash = bcrypt::hash("admin123", bcrypt::DEFAULT_COST).unwrap();
+        config_manager
+            .update_config(AppConfig {
+                auth: Some(UserAuthConfig {
+                    username: "admin".to_string(),
+                    password_hash: hash,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+        };
+
+        let app = Router::new()
+            .route("/config", get(|| async { "ok" }))
+            .route("/logs/sse", get(|| async { "ok" }))
+            .layer(from_fn_with_state(state, auth_middleware));
+
+        let auth_token = BASE64_STANDARD.encode("admin:admin123");
+
+        // 1. 在普通接口 /config 上带 ?auth= 应被拒绝 (401)
+        let req1 = Request::builder()
+            .uri(format!("/config?auth={}", auth_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::UNAUTHORIZED);
+
+        // 2. 在 /logs/sse 上带 ?auth= 应被允许 (200)
+        let req2 = Request::builder()
+            .uri(format!("/logs/sse?auth={}", auth_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+
+        // 3. 在普通接口带 Header 应该被允许 (200)
+        let req3 = Request::builder()
+            .uri("/config")
+            .header(AUTHORIZATION, format!("Basic {}", auth_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res3 = app.oneshot(req3).await.unwrap();
+        assert_eq!(res3.status(), StatusCode::OK);
+    }
 }

@@ -1,4 +1,6 @@
-use crate::config::model::{AppConfig, IpFetchConfig, NotificationConfig, UserAuthConfig};
+use crate::config::model::{
+    AppConfig, IpFetchConfig, IpSourceType, NotificationConfig, UserAuthConfig,
+};
 use crate::config::storage::ConfigManager;
 use crate::core::domain::parse_domain;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
@@ -7,11 +9,12 @@ use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use crate::util::log_buffer::{LogBuffer, LogEntry};
 use axum::Json;
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -674,6 +677,38 @@ pub struct TestIpResult {
 pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoResponse {
     let iface = payload.http_interface.as_deref();
     let config = payload.config;
+
+    // 1. 命令型 IP 获取明确禁止在线即时测试（防止 Web API 暴露任意命令执行风险）
+    if config.source_type == IpSourceType::Command {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<TestIpResult>::err(
+                "命令型 IP 获取不支持在线测试，请保存配置后通过同步日志验证！".to_string(),
+            )),
+        );
+    }
+
+    // 2. URL 型 IP 获取强制校验 Scheme 白名单 (仅允许 http:// 或 https://，防范协议走私与 SSRF 滥用)
+    if config.source_type == IpSourceType::Url {
+        for url in &config.url_endpoints {
+            let trimmed = url.trim();
+            if !trimmed.is_empty()
+                && !trimmed.starts_with("http://")
+                && !trimmed.starts_with("https://")
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<TestIpResult>::err(
+                        format!(
+                            "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
+                            trimmed
+                        ),
+                    )),
+                );
+            }
+        }
+    }
+
     if let Some(fetcher) = create_ip_fetcher(&config, iface) {
         let is_v4_test = payload.ip_type.as_deref() == Some("ipv4");
         let is_v6_test = payload.ip_type.as_deref() == Some("ipv6");
@@ -700,11 +735,14 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
                 .map(|ip| ip.to_string())
         };
 
-        Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 }))
+        (StatusCode::OK, Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 })))
     } else {
-        Json(ApiResponse::<TestIpResult>::err(
-            "无法创建 IP 提取器，请检查是否填写了网卡名称或有效的 URL".to_string(),
-        ))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<TestIpResult>::err(
+                "无法创建 IP 提取器，请检查是否填写了网卡名称或有效的 URL".to_string(),
+            )),
+        )
     }
 }
 
@@ -848,9 +886,61 @@ pub struct AuthInitRequest {
 
 /// 首次初始化管理员账号与密码
 pub async fn init_auth_handler(
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<AuthInitRequest>,
 ) -> impl IntoResponse {
+    // 1. 来源 IP 校验：仅允许本地回环和私网局域网初始化，禁止公网直接初始化
+    if !crate::util::net::is_private_or_loopback(&peer_addr.ip()) {
+        tracing::warn!(
+            "🛡️ [安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
+            peer_addr.ip()
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "出于安全保护，禁止从公网(WAN)初始化管理员账号，请从本机(127.0.0.1)或内网局域网访问！"
+                    .to_string(),
+            )),
+        );
+    }
+
+    // 2. 防范 Drive-by 跨站请求伪造 (CSRF) 攻击
+    if let Some(fetch_site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
+        && fetch_site == "cross-site"
+    {
+        tracing::warn!("🛡️ [安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "出于安全保护，禁止跨站请求发起账号初始化！".to_string(),
+            )),
+        );
+    }
+
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        let host_header = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let origin_host = origin
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .trim_end_matches('/');
+
+        if !host_header.is_empty() && !origin_host.is_empty() && origin_host != host_header {
+            tracing::warn!(
+                "🛡️ [安全拦截] Origin ({}) 与 Host ({}) 不匹配，拦截跨站初始化请求",
+                origin,
+                host_header
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::err(
+                    "出于安全保护，禁止跨站请求发起账号初始化！".to_string(),
+                )),
+            );
+        }
+    }
+
     let username = req.username.trim();
     let password = req.password.trim();
     if username.is_empty() || password.is_empty() {
@@ -1091,4 +1181,133 @@ mod tests {
         }
         assert_eq!(conf.notifications.email.unwrap().password, "******");
     }
+
+    #[tokio::test]
+    async fn test_test_ip_rejects_command() {
+        let req = TestIpRequest {
+            ip_type: Some("ipv4".to_string()),
+            http_interface: None,
+            config: IpFetchConfig {
+                enabled: true,
+                source_type: IpSourceType::Command,
+                cmd: Some("whoami".to_string()),
+                ..Default::default()
+            },
+        };
+        let res = test_ip_handler(Json(req)).await.into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_test_ip_rejects_invalid_scheme() {
+        let req = TestIpRequest {
+            ip_type: Some("ipv4".to_string()),
+            http_interface: None,
+            config: IpFetchConfig {
+                enabled: true,
+                source_type: IpSourceType::Url,
+                url_endpoints: vec!["file:///etc/passwd".to_string()],
+                ..Default::default()
+            },
+        };
+        let res = test_ip_handler(Json(req)).await.into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_init_auth_rejects_wan_ip() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+        };
+
+        // 模拟来自公网 IP (8.8.8.8) 的初始化请求
+        let wan_addr = SocketAddr::from(([8, 8, 8, 8], 12345));
+        let headers = HeaderMap::new();
+        let req = AuthInitRequest {
+            username: "admin".to_string(),
+            password: "password123".to_string(),
+        };
+
+        let res = init_auth_handler(ConnectInfo(wan_addr), headers, State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_init_auth_rejects_cross_site_and_origin_mismatch() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+        };
+
+        let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
+
+        // 1. Sec-Fetch-Site: cross-site 拦截
+        let mut headers = HeaderMap::new();
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        let req = AuthInitRequest {
+            username: "admin".to_string(),
+            password: "password123".to_string(),
+        };
+        let res = init_auth_handler(
+            ConnectInfo(local_addr),
+            headers,
+            State(state.clone()),
+            Json(req),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2. Origin 域名与 Host 不一致拦截
+        let mut headers2 = HeaderMap::new();
+        headers2.insert("host", "127.0.0.1:9876".parse().unwrap());
+        headers2.insert("origin", "http://malicious-site.com".parse().unwrap());
+        let req2 = AuthInitRequest {
+            username: "admin".to_string(),
+            password: "password123".to_string(),
+        };
+        let res2 = init_auth_handler(ConnectInfo(local_addr), headers2, State(state), Json(req2))
+            .await
+            .into_response();
+        assert_eq!(res2.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_task_enabled_serialization() {
+        let yaml_str = r#"
+name: "测试已禁用任务"
+enabled: false
+provider:
+  type: "cloudflare"
+ipv4:
+  enabled: true
+  source_type: "url"
+  domains:
+    - "test.example.com"
+"#;
+        let task: DnsTaskConfig = serde_yaml::from_str(yaml_str).unwrap();
+        assert!(!task.enabled);
+
+        let default_yaml = r#"
+name: "测试默认启用任务"
+provider:
+  type: "cloudflare"
+"#;
+        let task_default: DnsTaskConfig = serde_yaml::from_str(default_yaml).unwrap();
+        assert!(task_default.enabled);
+    }
 }
+

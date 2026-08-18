@@ -2150,7 +2150,7 @@
     // 统一 API 请求拦截封装（自动附加 Basic Auth 认证凭据）
     async function apiFetch(url, options = {}) {
       options.headers = options.headers || {};
-      const auth = localStorage.getItem('rddns_auth');
+      const auth = sessionStorage.getItem('rddns_auth');
       if (auth) {
         options.headers['Authorization'] = 'Basic ' + auth;
       }
@@ -2210,12 +2210,12 @@
     function updateLogoutBtn() {
       const btn = document.getElementById('logoutBtn');
       if (btn) {
-        btn.style.display = localStorage.getItem('rddns_auth') ? 'inline-flex' : 'none';
+        btn.style.display = sessionStorage.getItem('rddns_auth') ? 'inline-flex' : 'none';
       }
     }
 
     function logout() {
-      localStorage.removeItem('rddns_auth');
+      sessionStorage.removeItem('rddns_auth');
       showToast('已退出登录', 'info');
       showLoginPage();
     }
@@ -2250,7 +2250,7 @@
         const json = await res.json();
         if (json.success) {
           const authKey = btoa(username + ':' + password);
-          localStorage.setItem('rddns_auth', authKey);
+          sessionStorage.setItem('rddns_auth', authKey);
           showMainApp();
           showToast('管理员账号初始化成功并已登录！', 'success');
           loadConfig();
@@ -2287,7 +2287,7 @@
         const json = await res.json();
         if (json.success) {
           const authKey = btoa(username + ':' + password);
-          localStorage.setItem('rddns_auth', authKey);
+          sessionStorage.setItem('rddns_auth', authKey);
           showMainApp();
           showToast('登录成功，欢迎使用 rddns！', 'success');
           loadConfig();
@@ -3476,7 +3476,7 @@
           const newUsername = document.getElementById('sysUsername').value.trim();
           const newPassword = document.getElementById('sysPassword').value;
           if (newPassword) {
-            localStorage.setItem('rddns_auth', btoa(newUsername + ':' + newPassword));
+            sessionStorage.setItem('rddns_auth', btoa(newUsername + ':' + newPassword));
             updateLogoutBtn();
           }
           document.getElementById('sysPassword').value = '';
@@ -3879,7 +3879,7 @@
         try { activeEventSource.close(); } catch (_) {}
         activeEventSource = null;
       }
-      const auth = localStorage.getItem('rddns_auth');
+      const auth = sessionStorage.getItem('rddns_auth');
       const sseUrl = auth ? `/api/v1/logs/sse?auth=${encodeURIComponent(auth)}` : '/api/v1/logs/sse';
       const es = new EventSource(sseUrl);
       activeEventSource = es;
@@ -3926,7 +3926,7 @@
       }
 
       // 2. 如果已完成初始化，检查本地凭据
-      const auth = localStorage.getItem('rddns_auth');
+      const auth = sessionStorage.getItem('rddns_auth');
       if (!auth) {
         // 无本地凭据，展示全屏登录页
         showLoginPage();

@@ -48,6 +48,9 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 tar = { version = "0.4", default-features = false }
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [profile.release]
 opt-level = "s"       # 针对二进制体积进行深度优化 (Optimize for size)
 lto = true            # 开启全局链接时优化 (Link Time Optimization)，跨模块裁剪死代码
