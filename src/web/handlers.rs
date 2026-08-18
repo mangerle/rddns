@@ -851,16 +851,6 @@ pub async fn init_auth_handler(
     State(state): State<AppState>,
     Json(req): Json<AuthInitRequest>,
 ) -> impl IntoResponse {
-    let mut config = (*state.config_manager.get_config()).clone();
-    if config.auth.is_some() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err(
-                "系统已初始化管理员账号，无法重复初始化".to_string(),
-            )),
-        );
-    }
-
     let username = req.username.trim();
     let password = req.password.trim();
     if username.is_empty() || password.is_empty() {
@@ -880,23 +870,36 @@ pub async fn init_auth_handler(
         }
     };
 
-    config.auth = Some(UserAuthConfig {
-        username: username.to_string(),
-        password_hash: hash,
-    });
+    let user_str = username.to_string();
+    let init_result = state
+        .config_manager
+        .modify_config::<_, crate::config::storage::ConfigError>(|current_conf| {
+            if current_conf.auth.is_some() {
+                return Err(crate::config::storage::ConfigError::TempFile(
+                    "系统已初始化管理员账号，无法重复初始化".to_string(),
+                ));
+            }
+            let mut updated = current_conf.clone();
+            updated.auth = Some(UserAuthConfig {
+                username: user_str,
+                password_hash: hash,
+            });
+            Ok(updated)
+        });
 
-    if let Err(e) = state.config_manager.update_config(config) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("保存管理员配置失败: {}", e))),
-        );
+    match init_result {
+        Ok(_) => {
+            tracing::info!("管理员账号 [{}] 已成功初始化", username);
+            (
+                StatusCode::OK,
+                Json(ApiResponse::ok("管理员账号初始化成功")),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err(format!("初始化管理员账号失败: {}", e))),
+        ),
     }
-
-    tracing::info!("管理员账号 [{}] 已成功初始化", username);
-    (
-        StatusCode::OK,
-        Json(ApiResponse::ok("管理员账号初始化成功")),
-    )
 }
 
 #[derive(Debug, Deserialize)]
