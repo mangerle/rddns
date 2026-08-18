@@ -175,11 +175,12 @@ impl DnsProvider for TencentCloudProvider {
             .unwrap_or_else(|| "默认".to_string());
         let ttl_val = ttl.unwrap_or(600).max(1);
 
-        // 1. 查询现有解析记录列表
+        // 1. 查询现有解析记录列表 (单页最大 100 条)
         let list_payload = json!({
             "Domain": root_domain,
             "Subdomain": sub_domain,
             "RecordType": record_type.to_string(),
+            "Limit": 100,
         });
 
         let list_res: Result<TcRecordListResponse, DnsProviderError> = self

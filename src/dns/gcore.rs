@@ -119,8 +119,8 @@ impl DnsProvider for GcoreProvider {
                 ))
             })?;
 
-        // 2. 查询现有 RRSet
-        let rrset_url = format!("{}/zones/{}/rrsets", GCORE_API_BASE, zone.name);
+        // 2. 查询现有 RRSet (带 limit=100 参数)
+        let rrset_url = format!("{}/zones/{}/rrsets?limit=100", GCORE_API_BASE, zone.name);
         let rrset_resp = self
             .client
             .get(&rrset_url)
@@ -128,7 +128,14 @@ impl DnsProvider for GcoreProvider {
             .send()
             .await?;
 
+        let status = rrset_resp.status();
         let rrset_text = rrset_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("Gcore 查询 RRSet 失败: {}", rrset_text),
+            });
+        }
         let rrset_data: GcoreRRSetListResponse = serde_json::from_str(&rrset_text)?;
         let rrsets = rrset_data.rrsets.unwrap_or_default();
 
