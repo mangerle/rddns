@@ -649,7 +649,7 @@ pub async fn test_notify_handler(
         timestamp: Local::now(),
     };
 
-    dispatcher.dispatch(sample_event);
+    dispatcher.dispatch_force(sample_event);
     Json(ApiResponse::ok(
         "测试通知已派发至已启用的渠道，请查看目标平台",
     ))
