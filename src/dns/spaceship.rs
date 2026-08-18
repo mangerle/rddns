@@ -78,7 +78,7 @@ impl DnsProvider for SpaceshipProvider {
     ) -> Result<SyncRecordResult, DnsProviderError> {
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let ttl_val = ttl.unwrap_or(600).max(60);
 
         let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
             ""

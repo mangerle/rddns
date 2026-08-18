@@ -75,7 +75,7 @@ impl DnsProvider for PorkbunProvider {
     ) -> Result<SyncRecordResult, DnsProviderError> {
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(60).to_string();
+        let ttl_val = ttl.unwrap_or(600).max(600).to_string();
 
         let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
         let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
