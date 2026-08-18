@@ -17,6 +17,16 @@ impl EmailNotifier {
         Self { config }
     }
 
+    /// HTML 特殊字符转义
+    fn escape_html(input: &str) -> String {
+        input
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#x27;")
+    }
+
     /// 渲染现代响应式 HTML 邮件模板
     fn render_html(event: &NotificationEvent) -> String {
         let (status_bg, status_color, status_border, status_title) = match event.overall_status {
@@ -44,13 +54,13 @@ impl EmailNotifier {
                     <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:{status_badge_bg};color:{status_badge_color};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:600;white-space:nowrap;display:inline-block;">{status_text}</span></td>
                     <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.4;">{message}</td>
                 </tr>"#,
-                domain = r.domain,
+                domain = Self::escape_html(&r.domain),
                 record_type = r.record_type,
-                target_ip = r.target_ip,
+                target_ip = Self::escape_html(&r.target_ip),
                 status_badge_bg = status_badge_bg,
                 status_badge_color = status_badge_color,
                 status_text = status_text,
-                message = r.message
+                message = Self::escape_html(&r.message)
             ));
         }
 
@@ -198,10 +208,27 @@ impl Notifier for EmailNotifier {
             .subject(subject)
             .header(ContentType::TEXT_HTML);
 
+        let mut valid_to_count = 0;
         for to_addr in &self.config.to_addresses {
-            if let Ok(to_mailbox) = to_addr.parse() {
-                msg_builder = msg_builder.to(to_mailbox);
+            let clean = to_addr.trim();
+            if clean.is_empty() {
+                continue;
             }
+            match clean.parse() {
+                Ok(to_mailbox) => {
+                    msg_builder = msg_builder.to(to_mailbox);
+                    valid_to_count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("⚠️ 收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
+                }
+            }
+        }
+
+        if valid_to_count == 0 {
+            return Err(NotifyError::Email(
+                "SMTP 发送失败：未配置有效的收件人邮箱地址 (to_addresses)".to_string(),
+            ));
         }
 
         let message = msg_builder
@@ -231,5 +258,39 @@ impl Notifier for EmailNotifier {
 
         tracing::info!("[{}] 邮件发送成功", self.channel_name());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dns::trait_def::{DnsRecordType, SyncRecordResult};
+    use chrono::Local;
+
+    #[test]
+    fn test_escape_html_and_render() {
+        let result = SyncRecordResult {
+            domain: "<script>alert(1)</script>.com".to_string(),
+            record_type: DnsRecordType::A,
+            target_ip: "1.1.1.1".to_string(),
+            status: SyncStatus::Failed,
+            message: "错误: <API> & \"失败\"".to_string(),
+        };
+
+        let event = NotificationEvent {
+            overall_status: NotificationOverallStatus::Failed,
+            title: "测试标题".to_string(),
+            task_name: "测试任务".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: false,
+            results: vec![result],
+            timestamp: Local::now(),
+        };
+
+        let html = EmailNotifier::render_html(&event);
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;.com"));
+        assert!(html.contains("&lt;API&gt; &amp; &quot;失败&quot;"));
+        assert!(!html.contains("<script>"));
     }
 }
