@@ -33,11 +33,16 @@ struct WechatSendResponse {
     pub msgid: Option<i64>,
 }
 
+use std::collections::HashMap;
+
+/// 全局微信公众号 AccessToken 缓存池 (app_id -> CachedToken)，避免每次任务重复请求消耗微信配额
+static GLOBAL_WECHAT_TOKEN_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedToken>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
 /// 微信公众号原生模板消息适配器
 pub struct WechatOfficialNotifier {
     config: WechatOfficialConfig,
     client: Client,
-    token_cache: RwLock<Option<CachedToken>>,
 }
 
 impl WechatOfficialNotifier {
@@ -46,16 +51,13 @@ impl WechatOfficialNotifier {
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();
-        Self {
-            config,
-            client,
-            token_cache: RwLock::new(None),
-        }
+        Self { config, client }
     }
 
     /// 获取公众号全局接口调用凭证 access_token (优先从内存缓存中获取)
     async fn fetch_access_token(&self) -> Result<String, NotifyError> {
-        if let Some(ref cached) = *self.token_cache.read()
+        let app_id = self.config.app_id.trim();
+        if let Some(cached) = GLOBAL_WECHAT_TOKEN_CACHE.read().get(app_id)
             && Instant::now() < cached.expires_at
         {
             return Ok(cached.token.clone());
@@ -63,7 +65,7 @@ impl WechatOfficialNotifier {
 
         let url = format!(
             "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
-            self.config.app_id.trim(),
+            app_id,
             self.config.app_secret.trim()
         );
 
@@ -75,10 +77,13 @@ impl WechatOfficialNotifier {
         {
             let ttl_secs = token_resp.expires_in.unwrap_or(7200).saturating_sub(300); // 预留 5 分钟缓冲
             let expires_at = Instant::now() + Duration::from_secs(ttl_secs.max(60));
-            *self.token_cache.write() = Some(CachedToken {
-                token: token.clone(),
-                expires_at,
-            });
+            GLOBAL_WECHAT_TOKEN_CACHE.write().insert(
+                app_id.to_string(),
+                CachedToken {
+                    token: token.clone(),
+                    expires_at,
+                },
+            );
             return Ok(token);
         }
 

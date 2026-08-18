@@ -15,12 +15,15 @@ const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
+/// 全局 Cloudflare Zone ID 缓存池 (root_domain -> zone_id)，实现跨任务与跨周期缓存复用
+static GLOBAL_CF_ZONE_CACHE: std::sync::LazyLock<RwLock<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
 pub struct CloudflareProvider {
     client: Client,
     api_token: Option<String>,
     api_key: Option<String>,
     email: Option<String>,
-    zone_cache: RwLock<HashMap<String, String>>,
 }
 
 impl CloudflareProvider {
@@ -54,7 +57,6 @@ impl CloudflareProvider {
             api_token,
             api_key,
             email,
-            zone_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -82,7 +84,7 @@ impl CloudflareProvider {
 
     /// 查询根域名对应的 Zone ID (优先从内存缓存读取)
     async fn get_zone_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
-        if let Some(cached_id) = self.zone_cache.read().get(root_domain).cloned() {
+        if let Some(cached_id) = GLOBAL_CF_ZONE_CACHE.read().get(root_domain).cloned() {
             return Ok(cached_id);
         }
 
@@ -113,7 +115,7 @@ impl CloudflareProvider {
             .and_then(|zones| zones.into_iter().next())
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
-        self.zone_cache
+        GLOBAL_CF_ZONE_CACHE
             .write()
             .insert(root_domain.to_string(), zone.id.clone());
 
