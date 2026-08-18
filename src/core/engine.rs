@@ -72,40 +72,42 @@ impl DdnsEngine {
         let mut current_state = self.state_manager.get_task_state(&task.name);
 
         // 1. 获取 IPv4
-        let ipv4_opt = if let Some(fetcher) = create_ip_fetcher(&task.ipv4) {
-            match fetcher.fetch_ipv4().await {
-                Ok(ip) => {
-                    if let Some(ref v4) = ip {
-                        tracing::info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
+        let ipv4_opt =
+            if let Some(fetcher) = create_ip_fetcher(&task.ipv4, task.http_interface.as_deref()) {
+                match fetcher.fetch_ipv4().await {
+                    Ok(ip) => {
+                        if let Some(ref v4) = ip {
+                            tracing::info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
+                        }
+                        ip
                     }
-                    ip
+                    Err(e) => {
+                        tracing::error!("[{}] 获取 IPv4 失败: {}", task.name, e);
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("[{}] 获取 IPv4 失败: {}", task.name, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // 2. 获取 IPv6
-        let ipv6_opt = if let Some(fetcher) = create_ip_fetcher(&task.ipv6) {
-            match fetcher.fetch_ipv6().await {
-                Ok(ip) => {
-                    if let Some(ref v6) = ip {
-                        tracing::info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
+        let ipv6_opt =
+            if let Some(fetcher) = create_ip_fetcher(&task.ipv6, task.http_interface.as_deref()) {
+                match fetcher.fetch_ipv6().await {
+                    Ok(ip) => {
+                        if let Some(ref v6) = ip {
+                            tracing::info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
+                        }
+                        ip
                     }
-                    ip
+                    Err(e) => {
+                        tracing::error!("[{}] 获取 IPv6 失败: {}", task.name, e);
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("[{}] 获取 IPv6 失败: {}", task.name, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // 判断 IP 是否发生变动
         let ipv4_changed = ipv4_opt.is_some() && ipv4_opt != current_state.last_ipv4;

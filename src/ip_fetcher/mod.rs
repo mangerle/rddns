@@ -11,8 +11,11 @@ pub use url::*;
 use crate::config::model::{IpFetchConfig, IpSourceType};
 use std::sync::Arc;
 
-/// 根据配置构建具体的 IP 提取器实例
-pub fn create_ip_fetcher(config: &IpFetchConfig) -> Option<Arc<dyn IpFetcher>> {
+/// 根据配置构建具体的 IP 提取器实例 (支持绑定任务指定的出站物理网卡)
+pub fn create_ip_fetcher(
+    config: &IpFetchConfig,
+    http_interface: Option<&str>,
+) -> Option<Arc<dyn IpFetcher>> {
     if !config.enabled {
         return None;
     }
@@ -21,6 +24,7 @@ pub fn create_ip_fetcher(config: &IpFetchConfig) -> Option<Arc<dyn IpFetcher>> {
         IpSourceType::Url => Some(Arc::new(UrlIpFetcher::new(
             config.url_endpoints.clone(),
             config.regex.clone(),
+            http_interface,
         ))),
         IpSourceType::NetInterface => {
             if let Some(ref iface) = config.net_interface {

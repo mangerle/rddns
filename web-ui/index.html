@@ -1359,6 +1359,13 @@
                 </div>
               </div>
               <div id="providerDynamicFields" style="margin-top:16px;"></div>
+              <div class="form-group" style="margin-top:16px;">
+                <label>出站网络接口 (HTTP Interface) <span style="font-size:0.75rem;color:var(--text-muted);">(多 WAN 软路由多出口绑定，留空则使用默认系统路由)</span></label>
+                <select id="dnsHttpInterface">
+                  <option value="">使用默认系统路由 (推荐)</option>
+                </select>
+                <p class="form-tip">在多宽带聚合/软路由多拨环境中，指定发送 HTTP 与 API 请求时的物理网卡出口</p>
+              </div>
             </div>
 
             <!-- IPv4 配置 -->
@@ -2347,6 +2354,22 @@
       document.getElementById('wecomAppFields').style.display = mode === 'app' ? 'block' : 'none';
     }
 
+    // 渲染出站物理网卡下拉选项
+    function renderHttpInterfaceOptions(selectedVal) {
+      const selectEl = document.getElementById('dnsHttpInterface');
+      if (!selectEl) return;
+      const current = selectedVal !== undefined ? selectedVal : (selectEl.value || '');
+      let html = '<option value="">使用默认系统路由 (推荐)</option>';
+      availableInterfaces.forEach(iface => {
+        const isSel = (iface.name === current) ? 'selected' : '';
+        html += `<option value="${escapeHtml(iface.name)}" ${isSel}>${escapeHtml(iface.display_name || iface.name)}</option>`;
+      });
+      if (current && !availableInterfaces.some(i => i.name === current)) {
+        html += `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (自定义/已离线)</option>`;
+      }
+      selectEl.innerHTML = html;
+    }
+
     // 异步拉取系统物理与虚拟网卡列表
     async function loadNetworkInterfaces() {
       try {
@@ -2354,6 +2377,7 @@
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
           availableInterfaces = json.data;
+          renderHttpInterfaceOptions();
           if (document.getElementById('ipv4SourceType')?.value === 'net_interface') {
             renderIpFields('ipv4');
           }
@@ -2995,6 +3019,9 @@
         }
       }
 
+      // 3.5. 出站物理网卡 (HTTP Interface)
+      renderHttpInterfaceOptions(task.http_interface || '');
+
       // 4. IPv4
       if (task.ipv4) {
         document.getElementById('ipv4Enable').checked = task.ipv4.enabled !== false;
@@ -3128,6 +3155,7 @@
         enabled: taskEnabled,
         provider: providerObj,
         ttl: getTtlValue(),
+        http_interface: document.getElementById('dnsHttpInterface')?.value || null,
         ipv4: {
           enabled: document.getElementById('ipv4Enable').checked,
           source_type: document.getElementById('ipv4SourceType').value,
@@ -3168,6 +3196,7 @@
         enabled: true,
         provider: { type: 'cloudflare', api_token: '' },
         ttl: null,
+        http_interface: null,
         ipv4: {
           enabled: true,
           source_type: 'url',

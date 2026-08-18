@@ -131,6 +131,7 @@ pub async fn manual_sync_handler(State(state): State<AppState>) -> impl IntoResp
 #[derive(Debug, Deserialize)]
 pub struct TestIpRequest {
     pub ip_type: Option<String>,
+    pub http_interface: Option<String>,
     #[serde(flatten)]
     pub config: IpFetchConfig,
 }
@@ -143,8 +144,9 @@ pub struct TestIpResult {
 }
 
 pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoResponse {
+    let iface = payload.http_interface.as_deref();
     let config = payload.config;
-    if let Some(fetcher) = create_ip_fetcher(&config) {
+    if let Some(fetcher) = create_ip_fetcher(&config, iface) {
         let is_v4_test = payload.ip_type.as_deref() == Some("ipv4");
         let is_v6_test = payload.ip_type.as_deref() == Some("ipv6");
 
@@ -199,7 +201,7 @@ pub async fn test_notify_handler(
     if let Some(t) = task {
         // 探测真实 IPv4
         if let Some(fetcher) = if t.ipv4.enabled {
-            create_ip_fetcher(&t.ipv4)
+            create_ip_fetcher(&t.ipv4, t.http_interface.as_deref())
         } else {
             None
         } {
@@ -207,7 +209,7 @@ pub async fn test_notify_handler(
         }
         // 探测真实 IPv6
         if let Some(fetcher) = if t.ipv6.enabled {
-            create_ip_fetcher(&t.ipv6)
+            create_ip_fetcher(&t.ipv6, t.http_interface.as_deref())
         } else {
             None
         } {
