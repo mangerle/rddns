@@ -34,6 +34,16 @@ impl ParsedDomain {
     }
 }
 
+/// 将域名字符串转换为 ASCII Punycode 格式（针对中文等多语言 IDN 域名）
+fn to_ascii_domain(raw: &str) -> String {
+    let lower = raw.trim().to_ascii_lowercase();
+    if !lower.is_ascii() {
+        idna::domain_to_ascii(&lower).unwrap_or(lower)
+    } else {
+        lower
+    }
+}
+
 /// 解析用户配置的单个域名字符串
 /// 支持格式:
 /// - "example.com" -> sub: "@", root: "example.com"
@@ -77,26 +87,28 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
 
     // 4. 检查冒号自定义子域名格式: "sub:domain.com"
     if let Some((sub, root)) = domain_raw.split_once(':') {
-        let sub = sub.trim().to_ascii_lowercase();
-        let root = root.trim().to_ascii_lowercase();
-        if root.is_empty() {
+        let root_ascii = to_ascii_domain(root);
+        if root_ascii.is_empty() {
             return None;
         }
+        let sub_trimmed = sub.trim();
+        let sub_ascii = if sub_trimmed.is_empty() || sub_trimmed == "@" {
+            "@".to_string()
+        } else if sub_trimmed == "*" {
+            "*".to_string()
+        } else {
+            to_ascii_domain(sub_trimmed)
+        };
         return Some(ParsedDomain {
             raw: raw_input.to_string(),
-            root_domain: root,
-            sub_domain: if sub.is_empty() { "@".to_string() } else { sub },
+            root_domain: root_ascii,
+            sub_domain: sub_ascii,
             custom_params,
         });
     }
 
     // 5. 若包含非 ASCII 字符（如中文域名），使用 IDNA Punycode 转码为 xn--... 形式
-    let domain_ascii = if !domain_raw.is_ascii() {
-        idna::domain_to_ascii(&domain_raw.to_ascii_lowercase())
-            .unwrap_or_else(|_| domain_raw.to_ascii_lowercase())
-    } else {
-        domain_raw.to_ascii_lowercase()
-    };
+    let domain_ascii = to_ascii_domain(domain_raw);
 
     let parts: Vec<&str> = domain_ascii.split('.').collect();
     if parts.len() < 2 {
@@ -374,6 +386,15 @@ mod tests {
         let d_sub_chinese = parse_domain("我的nas.example.com").unwrap();
         assert_eq!(d_sub_chinese.root_domain, "example.com");
         assert_eq!(d_sub_chinese.sub_domain, "xn--nas-st5fr61g");
+
+        // 冒号语法下的中文域名与子域名转码
+        let d_colon_chinese = parse_domain("我的nas:测试.cn").unwrap();
+        assert_eq!(d_colon_chinese.root_domain, "xn--0zwm56d.cn");
+        assert_eq!(d_colon_chinese.sub_domain, "xn--nas-st5fr61g");
+        assert_eq!(
+            d_colon_chinese.full_domain(),
+            "xn--nas-st5fr61g.xn--0zwm56d.cn"
+        );
     }
 
     #[test]
