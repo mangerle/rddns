@@ -81,37 +81,48 @@ impl DnsProvider for DynadotProvider {
             });
         }
 
-        if let Ok(res_json) = serde_json::from_str::<DynadotResp>(&body_text) {
-            if res_json.error_code != Some(-1) {
-                tracing::info!(
-                    "[{}] 成功更新域名 {} -> {}",
-                    self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult {
-                    domain: full_domain,
-                    record_type,
-                    target_ip: target_ip_str,
-                    status: SyncStatus::Updated,
-                    message: "记录更新成功".to_string(),
-                });
-            } else {
-                let err_msg = res_json.content.unwrap_or_default().join(", ");
-                return Err(DnsProviderError::ApiError {
-                    code: "-1".to_string(),
-                    message: format!("Dynadot 更新失败: {}", err_msg),
-                });
+        match serde_json::from_str::<DynadotResp>(&body_text) {
+            Ok(res_json) => {
+                if res_json.error_code != Some(-1) {
+                    tracing::info!(
+                        "[{}] 成功更新域名 {} -> {}",
+                        self.provider_name(),
+                        full_domain,
+                        target_ip_str
+                    );
+                    Ok(SyncRecordResult {
+                        domain: full_domain,
+                        record_type,
+                        target_ip: target_ip_str,
+                        status: SyncStatus::Updated,
+                        message: "记录更新成功".to_string(),
+                    })
+                } else {
+                    let err_msg = res_json.content.unwrap_or_default().join(", ");
+                    Err(DnsProviderError::ApiError {
+                        code: "-1".to_string(),
+                        message: format!("Dynadot 更新失败: {}", err_msg),
+                    })
+                }
+            }
+            Err(_) => {
+                if body_text.to_lowercase().contains("success")
+                    || body_text.to_lowercase().contains("ok")
+                {
+                    Ok(SyncRecordResult {
+                        domain: full_domain,
+                        record_type,
+                        target_ip: target_ip_str,
+                        status: SyncStatus::Updated,
+                        message: format!("Dynadot 更新成功: {}", body_text),
+                    })
+                } else {
+                    Err(DnsProviderError::ApiError {
+                        code: status.to_string(),
+                        message: format!("Dynadot 返回未知格式响应: {}", body_text),
+                    })
+                }
             }
         }
-
-        // 非 JSON 返回但 HTTP 200
-        Ok(SyncRecordResult {
-            domain: full_domain,
-            record_type,
-            target_ip: target_ip_str,
-            status: SyncStatus::Updated,
-            message: "记录更新请求已提交".to_string(),
-        })
     }
 }

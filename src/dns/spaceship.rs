@@ -160,13 +160,24 @@ impl DnsProvider for SpaceshipProvider {
                 })
                 .collect();
 
-            let _ = self
+            match self
                 .client
                 .delete(&domain_url)
                 .headers(self.build_headers())
                 .json(&del_payload)
                 .send()
-                .await;
+                .await
+            {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let text = resp.text().await.unwrap_or_default();
+                        tracing::warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Spaceship 删除旧解析记录网络请求失败: {}", e);
+                }
+            }
         }
 
         // 3. 调用 PUT 创建/覆盖新记录
