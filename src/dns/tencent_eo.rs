@@ -342,22 +342,71 @@ impl DnsProvider for TencentEoProvider {
             }
 
             let groups = og_resp.response.origin_groups.unwrap_or_default();
-            let matched_group =
-                groups
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| DnsProviderError::ApiError {
-                        code: "OriginGroupNotFound".to_string(),
-                        message: format!("未找到指定的 EdgeOne 源站组 (ZoneId: {})", zone_id),
-                    })?;
+            let matched_group = groups
+                .into_iter()
+                .find(|g| {
+                    if let Some(ref gid) = group_id_opt {
+                        g.group_id.eq_ignore_ascii_case(gid)
+                    } else if let Some(ref gname) = group_name_opt {
+                        g.name.eq_ignore_ascii_case(gname)
+                    } else {
+                        true
+                    }
+                })
+                .ok_or_else(|| DnsProviderError::ApiError {
+                    code: "OriginGroupNotFound".to_string(),
+                    message: format!(
+                        "未找到指定的 EdgeOne 源站组 (ZoneId: {}, GroupId: {:?}, GroupName: {:?})",
+                        zone_id, group_id_opt, group_name_opt
+                    ),
+                })?;
 
-            // 检查源站记录是否已包含该 IP 且权重一致
+            // 检查源站记录并安全合并（避免覆盖清空组内其它已有源站）
             let current_records = matched_group.records.unwrap_or_default();
-            let is_already_matched = current_records
-                .iter()
-                .any(|r| r.record == target_ip_str && r.weight.unwrap_or(100) == weight_val);
+            let mut updated_records = Vec::new();
+            let mut matched_existing = false;
 
-            if is_already_matched && current_records.len() == 1 {
+            for r in &current_records {
+                if r.record == target_ip_str {
+                    matched_existing = true;
+                    updated_records.push(json!({
+                        "Record": target_ip_str,
+                        "Type": r.record_type,
+                        "Weight": weight_val
+                    }));
+                } else {
+                    // 保留组内其它源站记录
+                    updated_records.push(json!({
+                        "Record": r.record,
+                        "Type": r.record_type,
+                        "Weight": r.weight.unwrap_or(100)
+                    }));
+                }
+            }
+
+            if !matched_existing {
+                if current_records.len() <= 1 {
+                    updated_records = vec![json!({
+                        "Record": target_ip_str,
+                        "Type": "IP_DOMAIN",
+                        "Weight": weight_val
+                    })];
+                } else {
+                    updated_records.push(json!({
+                        "Record": target_ip_str,
+                        "Type": "IP_DOMAIN",
+                        "Weight": weight_val
+                    }));
+                }
+            }
+
+            let is_unchanged = matched_existing
+                && current_records.len() == updated_records.len()
+                && current_records
+                    .iter()
+                    .any(|r| r.record == target_ip_str && r.weight.unwrap_or(100) == weight_val);
+
+            if is_unchanged {
                 tracing::info!(
                     "[{}] EdgeOne 源站组 [{}] 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
@@ -379,13 +428,7 @@ impl DnsProvider for TencentEoProvider {
                 "GroupId": matched_group.group_id,
                 "Name": matched_group.name,
                 "Type": "GENERAL",
-                "Records": [
-                    {
-                        "Record": target_ip_str,
-                        "Type": "IP_DOMAIN",
-                        "Weight": weight_val
-                    }
-                ]
+                "Records": updated_records
             });
 
             let act_resp: TeoActionResp = self
