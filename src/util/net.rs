@@ -8,13 +8,23 @@ static CUSTOM_REGEX_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Option<Reg
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
-    if let Some(cached) = CUSTOM_REGEX_CACHE.read().get(pattern) {
-        return cached.clone();
+    {
+        let cache = CUSTOM_REGEX_CACHE.read();
+        if let Some(cached) = cache.get(pattern) {
+            return cached.clone();
+        }
     }
     let compiled = Regex::new(pattern).ok();
     let mut cache = CUSTOM_REGEX_CACHE.write();
+    // 双重检查锁定 (DCL)
+    if let Some(cached) = cache.get(pattern) {
+        return cached.clone();
+    }
     if cache.len() >= 128 {
-        cache.clear();
+        let keys_to_remove: Vec<String> = cache.keys().take(64).cloned().collect();
+        for k in keys_to_remove {
+            cache.remove(&k);
+        }
     }
     cache.insert(pattern.to_string(), compiled.clone());
     compiled
