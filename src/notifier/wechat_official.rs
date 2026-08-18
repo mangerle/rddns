@@ -169,9 +169,9 @@ impl WechatOfficialNotifier {
             "content": { "value": &details_str, "color": "#173177" },
 
             // 微信类目新规范模板变量 (thing / time / phrase)
-            "thing1": { "value": &event.task_name, "color": "#173177" },
-            "thing2": { "value": if domains_str.len() > 20 { domains_str[..20].to_string() } else { domains_str.clone() }, "color": "#173177" },
-            "thing3": { "value": if ip_combined.len() > 20 { ip_combined[..20].to_string() } else { ip_combined.clone() }, "color": "#173177" },
+            "thing1": { "value": event.task_name.chars().take(20).collect::<String>(), "color": "#173177" },
+            "thing2": { "value": domains_str.chars().take(20).collect::<String>(), "color": "#173177" },
+            "thing3": { "value": ip_combined.chars().take(20).collect::<String>(), "color": "#173177" },
             "character_string1": { "value": &ipv4_str, "color": "#173177" },
             "character_string2": { "value": &domains_str, "color": "#173177" },
             "time1": { "value": &time_str, "color": "#173177" },
@@ -243,5 +243,54 @@ impl Notifier for WechatOfficialNotifier {
 
         tracing::info!("[{}] 模板消息推送成功", self.channel_name());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::WechatOfficialConfig;
+    use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
+    use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
+    use chrono::Local;
+
+    #[test]
+    fn test_wechat_template_utf8_truncation() {
+        let config = WechatOfficialConfig {
+            enabled: true,
+            app_id: "test".to_string(),
+            app_secret: "test".to_string(),
+            template_id: "test".to_string(),
+            to_user: "openid".to_string(),
+            url: None,
+            template_data: None,
+        };
+        let notifier = WechatOfficialNotifier::new(config);
+
+        let event = NotificationEvent {
+            overall_status: NotificationOverallStatus::Failed,
+            title: "测试标题".to_string(),
+            task_name: "超长中文任务名称测试——这是一个超过二十个汉字的特殊任务名字".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: false,
+            results: vec![SyncRecordResult {
+                domain: "超长中文域名测试.测试.中国.com".to_string(),
+                record_type: crate::dns::trait_def::DnsRecordType::A,
+                target_ip: "未知".to_string(),
+                status: SyncStatus::Failed,
+                message: "错误信息".to_string(),
+            }],
+            timestamp: Local::now(),
+        };
+
+        let data = notifier.build_template_data(&event);
+        let thing1 = data["thing1"]["value"].as_str().unwrap();
+        let thing2 = data["thing2"]["value"].as_str().unwrap();
+        let thing3 = data["thing3"]["value"].as_str().unwrap();
+
+        assert_eq!(thing1.chars().count(), 20);
+        assert!(thing2.chars().count() <= 20);
+        assert!(thing3.chars().count() <= 20);
     }
 }
