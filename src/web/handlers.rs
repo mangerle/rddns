@@ -76,9 +76,23 @@ fn merge_sensitive_credentials(new_conf: &mut AppConfig, old_conf: &AppConfig) {
         new_auth.password_hash = old_auth.password_hash.clone();
     }
 
-    // 2. DNS 任务提供商凭据
+    // 2. DNS 任务提供商凭据 (优先按任务名称精确匹配，防止任务重排或删除时按索引错位)
+    let old_tasks_len = old_conf.dns_tasks.len();
+    let new_tasks_len = new_conf.dns_tasks.len();
     for (i, new_task) in new_conf.dns_tasks.iter_mut().enumerate() {
-        if let Some(old_task) = old_conf.dns_tasks.get(i) {
+        let old_task_opt = old_conf
+            .dns_tasks
+            .iter()
+            .find(|t| t.name == new_task.name)
+            .or_else(|| {
+                if old_tasks_len == new_tasks_len {
+                    old_conf.dns_tasks.get(i)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(old_task) = old_task_opt {
             match (&mut new_task.provider, &old_task.provider) {
                 (
                     crate::config::model::ProviderConfig::Cloudflare {
@@ -774,4 +788,81 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     Json(ApiResponse::ok(
         "已在后台启动自动更新，下载替换完成后请重启服务",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{DnsTaskConfig, ProviderConfig};
+
+    #[test]
+    fn test_merge_sensitive_credentials_by_task_name() {
+        let old_conf = AppConfig {
+            dns_tasks: vec![
+                DnsTaskConfig {
+                    name: "任务1".to_string(),
+                    provider: ProviderConfig::Cloudflare {
+                        api_token: Some("real_token_1".to_string()),
+                        api_key: None,
+                        email: None,
+                    },
+                    ..Default::default()
+                },
+                DnsTaskConfig {
+                    name: "任务2".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "ak2".to_string(),
+                        access_key_secret: "real_secret_2".to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        // 新配置调整了任务顺序，并且包含掩码
+        let mut new_conf = AppConfig {
+            dns_tasks: vec![
+                DnsTaskConfig {
+                    name: "任务2".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "ak2".to_string(),
+                        access_key_secret: "******".to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+                DnsTaskConfig {
+                    name: "任务1".to_string(),
+                    provider: ProviderConfig::Cloudflare {
+                        api_token: Some("******".to_string()),
+                        api_key: None,
+                        email: None,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        merge_sensitive_credentials(&mut new_conf, &old_conf);
+
+        // 验证任务2准确保留了自身的 secret，而不是因为排在第0个就被赋给任务1的 token
+        if let ProviderConfig::AliDns {
+            ref access_key_secret,
+            ..
+        } = new_conf.dns_tasks[0].provider
+        {
+            assert_eq!(access_key_secret, "real_secret_2");
+        } else {
+            panic!("类型不匹配");
+        }
+
+        if let ProviderConfig::Cloudflare { ref api_token, .. } = new_conf.dns_tasks[1].provider {
+            assert_eq!(api_token.as_deref(), Some("real_token_1"));
+        } else {
+            panic!("类型不匹配");
+        }
+    }
 }
