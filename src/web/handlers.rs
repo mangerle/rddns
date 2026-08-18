@@ -472,12 +472,16 @@ pub async fn save_config_handler(
         }
     }
 
-    // 如果配置了自定义 DNS，热更新全局解析服务器
+    // 热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认)
     if let Some(ref dns_srv) = new_config.dns_server {
         let clean = dns_srv.trim();
         if !clean.is_empty() {
             crate::util::dns_resolver::set_custom_dns_server(clean.to_string());
+        } else {
+            crate::util::dns_resolver::clear_custom_dns_server();
         }
+    } else {
+        crate::util::dns_resolver::clear_custom_dns_server();
     }
 
     match state.config_manager.update_config(new_config) {

@@ -30,6 +30,12 @@ pub fn set_custom_dns_server(server: String) {
     }
 }
 
+/// 清空全局自定义 DNS 解析服务器（恢复系统默认解析）
+pub fn clear_custom_dns_server() {
+    tracing::info!("🌐 已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
+    *CUSTOM_DNS_SERVER.write() = None;
+}
+
 /// 获取全局自定义 DNS 解析服务器
 #[allow(dead_code)]
 pub fn get_custom_dns_server() -> Option<String> {
