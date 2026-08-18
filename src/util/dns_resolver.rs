@@ -1,10 +1,25 @@
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
 /// 全局自定义 DNS 递归解析服务器地址 (如 "223.5.5.5" 或 "1.1.1.1:53")
 static CUSTOM_DNS_SERVER: RwLock<Option<String>> = RwLock::new(None);
+
+/// DNS 缓存条目
+#[derive(Debug, Clone)]
+struct DnsCacheEntry {
+    ips: Vec<IpAddr>,
+    expires_at: Instant,
+}
+
+type DnsCacheKey = (String, String, u8);
+type DnsCacheMap = RwLock<HashMap<DnsCacheKey, DnsCacheEntry>>;
+
+/// 全局 DNS 解析内存缓存池 (Key: (dns_server, domain, qtype))
+static GLOBAL_DNS_CACHE: std::sync::LazyLock<DnsCacheMap> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// 设置全局自定义 DNS 解析服务器
 pub fn set_custom_dns_server(server: String) {
@@ -22,7 +37,7 @@ pub fn get_custom_dns_server() -> Option<String> {
 }
 
 /// 标准 DNS 记录类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(dead_code, clippy::upper_case_acronyms)]
 pub enum QueryRecordType {
     A = 1,
@@ -75,12 +90,12 @@ fn build_dns_query_packet(
     Ok(packet)
 }
 
-/// 解析 DNS 响应数据包提取 IP 列表
+/// 解析 DNS 响应数据包提取 IP 列表与最小 TTL (秒)
 fn parse_dns_response_packet(
     buf: &[u8],
     query_id: u16,
     qtype: QueryRecordType,
-) -> Result<Vec<IpAddr>, String> {
+) -> Result<(Vec<IpAddr>, u32), String> {
     if buf.len() < 12 {
         return Err("DNS 响应包长度过短".to_string());
     }
@@ -123,6 +138,7 @@ fn parse_dns_response_packet(
     }
 
     let mut ips = Vec::new();
+    let mut min_ttl = 300u32;
 
     // 解析 Answer 部分
     for _ in 0..ancount {
@@ -150,7 +166,12 @@ fn parse_dns_response_packet(
 
         let atype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
         // let aclass = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]);
-        // let ttl = u32::from_be_bytes([buf[offset + 4], buf[offset + 5], buf[offset + 6], buf[offset + 7]]);
+        let ttl = u32::from_be_bytes([
+            buf[offset + 4],
+            buf[offset + 5],
+            buf[offset + 6],
+            buf[offset + 7],
+        ]);
         let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
         offset += 10;
 
@@ -159,6 +180,9 @@ fn parse_dns_response_packet(
         }
 
         if atype == (qtype as u16) {
+            if ttl > 0 && ttl < min_ttl {
+                min_ttl = ttl;
+            }
             if qtype == QueryRecordType::A && rdlength == 4 {
                 let ipv4 = Ipv4Addr::new(
                     buf[offset],
@@ -178,10 +202,10 @@ fn parse_dns_response_packet(
         offset += rdlength;
     }
 
-    Ok(ips)
+    Ok((ips, min_ttl.clamp(5, 3600)))
 }
 
-/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染)
+/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存)
 #[allow(dead_code)]
 pub async fn query_dns_server(
     server_addr: &str,
@@ -189,6 +213,16 @@ pub async fn query_dns_server(
     qtype: QueryRecordType,
     timeout_duration: Duration,
 ) -> Result<Vec<IpAddr>, String> {
+    let clean_domain = domain.trim().to_ascii_lowercase();
+    let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
+
+    // 1. 检查内存缓存是否有效
+    if let Some(entry) = GLOBAL_DNS_CACHE.read().get(&cache_key)
+        && Instant::now() < entry.expires_at
+    {
+        return Ok(entry.ips.clone());
+    }
+
     let target_server: SocketAddr = if let Ok(addr) = server_addr.parse() {
         addr
     } else if let Ok(ip) = server_addr.parse::<IpAddr>() {
@@ -198,7 +232,7 @@ pub async fn query_dns_server(
     };
 
     let query_id = fastrand::u16(1000..=65535);
-    let packet = build_dns_query_packet(domain, qtype, query_id)?;
+    let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
 
     // 绑定随机本地 UDP 端口
     let bind_addr = if target_server.is_ipv6() {
@@ -224,7 +258,20 @@ pub async fn query_dns_server(
         .map_err(|_| format!("DNS 查询超时 ({} 秒)", timeout_duration.as_secs()))?
         .map_err(|e| format!("接收 DNS 响应失败: {}", e))?;
 
-    parse_dns_response_packet(&buf[..len], query_id, qtype)
+    let (ips, ttl_secs) = parse_dns_response_packet(&buf[..len], query_id, qtype)?;
+
+    if !ips.is_empty() {
+        let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
+        GLOBAL_DNS_CACHE.write().insert(
+            cache_key,
+            DnsCacheEntry {
+                ips: ips.clone(),
+                expires_at,
+            },
+        );
+    }
+
+    Ok(ips)
 }
 
 #[cfg(test)]
