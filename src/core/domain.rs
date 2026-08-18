@@ -86,7 +86,20 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     }
 
     // 4. 检查冒号自定义子域名格式: "sub:domain.com"
-    if let Some((sub, root)) = domain_raw.split_once(':') {
+    // 注意：若冒号右侧为纯数字端口（如 "example.com:8080"），应视为端口号剥离，而非 sub:root 冒号语法
+    let (domain_cleaned, explicit_sub_root) =
+        if let Some((left, right)) = domain_raw.split_once(':') {
+            if right.parse::<u16>().is_ok() {
+                // 右侧为端口号，剥离端口后保留左侧作为真实域名
+                (left.trim(), None)
+            } else {
+                (domain_raw, Some((left, right)))
+            }
+        } else {
+            (domain_raw, None)
+        };
+
+    if let Some((sub, root)) = explicit_sub_root {
         let root_ascii = to_ascii_domain(root);
         if root_ascii.is_empty() {
             return None;
@@ -108,7 +121,7 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     }
 
     // 5. 若包含非 ASCII 字符（如中文域名），使用 IDNA Punycode 转码为 xn--... 形式
-    let domain_ascii = to_ascii_domain(domain_raw);
+    let domain_ascii = to_ascii_domain(domain_cleaned);
 
     let parts: Vec<&str> = domain_ascii.split('.').collect();
     if parts.len() < 2 {
@@ -313,6 +326,11 @@ mod tests {
         let d3 = parse_domain("*.example.com").unwrap();
         assert_eq!(d3.sub_domain, "*");
         assert_eq!(d3.root_domain, "example.com");
+
+        // 带端口的 URL 自动剥离端口 (不会与 sub:root 冒号语法混淆)
+        let d4 = parse_domain("http://nas.example.com:8080/dashboard").unwrap();
+        assert_eq!(d4.sub_domain, "nas");
+        assert_eq!(d4.root_domain, "example.com");
 
         // 注释行自动过滤
         assert!(parse_domain("# 这是一行注释").is_none());
