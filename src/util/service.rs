@@ -68,22 +68,7 @@ fn handle_windows_service(
         "install" => {
             println!("🔧 正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
 
-            // 1. 添加当前用户开机自启注册表项 (Run)
-            let _ = Command::new("reg.exe")
-                .args([
-                    "add",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                    "/v",
-                    SERVICE_NAME,
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    &run_cmd,
-                    "/f",
-                ])
-                .output();
-
-            // 2. 尝试创建 Windows 高权限计划任务 (登录自启与防休眠恢复)
+            // 优先尝试创建 Windows 高权限计划任务 (登录自启与防休眠恢复)
             let sch_out = Command::new("schtasks.exe")
                 .args([
                     "/create",
@@ -99,16 +84,38 @@ fn handle_windows_service(
                 ])
                 .output();
 
-            if let Ok(out) = sch_out
-                && !out.status.success()
-            {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if !stderr.is_empty() {
-                    println!(
-                        "ℹ️ 提示: 计划任务注册跳过 ({})，已通过用户注册表 Run 键配置开机自启",
-                        stderr.trim()
-                    );
-                }
+            let sch_success = match sch_out {
+                Ok(ref out) => out.status.success(),
+                Err(_) => false,
+            };
+
+            if sch_success {
+                // 计划任务注册成功，清理注册表 Run 项以杜绝双实例启动冲突
+                let _ = Command::new("reg.exe")
+                    .args([
+                        "delete",
+                        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                        "/v",
+                        SERVICE_NAME,
+                        "/f",
+                    ])
+                    .output();
+            } else {
+                // 降级为当前用户开机自启注册表项 (Run)
+                let _ = Command::new("reg.exe")
+                    .args([
+                        "add",
+                        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                        "/v",
+                        SERVICE_NAME,
+                        "/t",
+                        "REG_SZ",
+                        "/d",
+                        &run_cmd,
+                        "/f",
+                    ])
+                    .output();
+                println!("ℹ️ 提示: 计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
             }
 
             // 3. 立即拉起后台守护进程
