@@ -19,12 +19,81 @@ pub fn is_skip_verify() -> bool {
     SKIP_VERIFY.load(Ordering::SeqCst)
 }
 
-/// 创建预置安全/跳过证书策略的 Reqwest ClientBuilder
+use reqwest::dns::{Name, Resolve, Resolving};
+use std::sync::Arc;
+
+/// 全局应用 DNS 解析适配器，优先使用配置的自定义 DNS 递归解析服务器，失败时平滑回退
+#[derive(Debug, Clone, Default)]
+pub struct AppDnsResolver;
+
+impl Resolve for AppDnsResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let host = name.as_str();
+
+            // 若本身是 IP 地址字符串直接返回
+            if let Ok(ip) = host.parse::<IpAddr>() {
+                let addrs: Box<dyn Iterator<Item = std::net::SocketAddr> + Send> =
+                    Box::new(std::iter::once(std::net::SocketAddr::new(ip, 0)));
+                return Ok(addrs);
+            }
+
+            // 优先尝试使用用户配置的自定义递归 DNS 服务器解析
+            if let Some(custom_server) = crate::util::dns_resolver::get_custom_dns_server() {
+                let v4_fut = crate::util::dns_resolver::query_dns_server(
+                    &custom_server,
+                    host,
+                    crate::util::dns_resolver::QueryRecordType::A,
+                    Duration::from_secs(3),
+                );
+                let v6_fut = crate::util::dns_resolver::query_dns_server(
+                    &custom_server,
+                    host,
+                    crate::util::dns_resolver::QueryRecordType::AAAA,
+                    Duration::from_secs(3),
+                );
+
+                let (v4_res, v6_res) = tokio::join!(v4_fut, v6_fut);
+                let mut socket_addrs = Vec::new();
+                if let Ok(ips) = v4_res {
+                    for ip in ips {
+                        socket_addrs.push(std::net::SocketAddr::new(ip, 0));
+                    }
+                }
+                if let Ok(ips) = v6_res {
+                    for ip in ips {
+                        socket_addrs.push(std::net::SocketAddr::new(ip, 0));
+                    }
+                }
+
+                if !socket_addrs.is_empty() {
+                    let addrs: Box<dyn Iterator<Item = std::net::SocketAddr> + Send> =
+                        Box::new(socket_addrs.into_iter());
+                    return Ok(addrs);
+                }
+            }
+
+            // 回退到系统原生异步 DNS 解析
+            let host_with_port = format!("{}:0", host);
+            let mut resolved = tokio::net::lookup_host(&host_with_port).await?;
+            let mut list = Vec::new();
+            for addr in resolved.by_ref() {
+                list.push(addr);
+            }
+            let addrs: Box<dyn Iterator<Item = std::net::SocketAddr> + Send> =
+                Box::new(list.into_iter());
+            Ok(addrs)
+        })
+    }
+}
+
+/// 创建预置安全/跳过证书策略与自定义 DNS 的 Reqwest ClientBuilder
 pub fn create_http_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder();
     if is_skip_verify() {
         builder = builder.danger_accept_invalid_certs(true);
     }
+    builder = builder.dns_resolver(Arc::new(AppDnsResolver));
     builder
 }
 
