@@ -33,12 +33,13 @@ struct LogBufferInner {
 
 impl LogBuffer {
     pub fn new(capacity: usize) -> Self {
+        let real_capacity = capacity.clamp(1, 10000);
         let (sender, _) = broadcast::channel(100);
         Self {
             inner: Arc::new(RwLock::new(LogBufferInner {
-                capacity,
+                capacity: real_capacity,
                 counter: 0,
-                entries: VecDeque::with_capacity(capacity),
+                entries: VecDeque::with_capacity(real_capacity),
             })),
             sender,
         }
@@ -48,7 +49,7 @@ impl LogBuffer {
     pub fn push(&self, level: Level, target: &str, message: String) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let mut inner = self.inner.write();
-        inner.counter += 1;
+        inner.counter = inner.counter.wrapping_add(1);
         let entry = LogEntry {
             id: inner.counter,
             timestamp,
@@ -57,7 +58,7 @@ impl LogBuffer {
             message,
         };
 
-        if inner.entries.len() >= inner.capacity {
+        while inner.entries.len() >= inner.capacity {
             inner.entries.pop_front();
         }
         inner.entries.push_back(entry.clone());
