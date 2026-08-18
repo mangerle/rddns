@@ -204,16 +204,16 @@ impl TencentEoProvider {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
         headers.insert(HOST, HeaderValue::from_static(TEO_HOST));
-        headers.insert("X-TC-Action", HeaderValue::from_str(action).unwrap());
+        if let Ok(act_val) = HeaderValue::from_str(action) {
+            headers.insert("X-TC-Action", act_val);
+        }
         headers.insert("X-TC-Version", HeaderValue::from_static(TEO_VERSION));
-        headers.insert(
-            "X-TC-Timestamp",
-            HeaderValue::from_str(&timestamp.to_string()).unwrap(),
-        );
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&authorization).unwrap(),
-        );
+        if let Ok(ts_val) = HeaderValue::from_str(&timestamp.to_string()) {
+            headers.insert("X-TC-Timestamp", ts_val);
+        }
+        if let Ok(auth_val) = HeaderValue::from_str(&authorization) {
+            headers.insert("Authorization", auth_val);
+        }
 
         let resp = self
             .client

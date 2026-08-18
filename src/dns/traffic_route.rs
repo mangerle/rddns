@@ -152,18 +152,15 @@ impl TrafficRouteProvider {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static(VOLC_HOST));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            HeaderName::from_static("x-date"),
-            HeaderValue::from_str(&x_date).unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("x-content-sha256"),
-            HeaderValue::from_str(&x_content_sha256).unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("authorization"),
-            HeaderValue::from_str(&auth_header).unwrap(),
-        );
+        if let Ok(hv) = HeaderValue::from_str(&x_date) {
+            headers.insert(HeaderName::from_static("x-date"), hv);
+        }
+        if let Ok(hv) = HeaderValue::from_str(&x_content_sha256) {
+            headers.insert(HeaderName::from_static("x-content-sha256"), hv);
+        }
+        if let Ok(hv) = HeaderValue::from_str(&auth_header) {
+            headers.insert(HeaderName::from_static("authorization"), hv);
+        }
 
         let mut req = self.client.post(&url).headers(headers);
         if !body_str.is_empty() {

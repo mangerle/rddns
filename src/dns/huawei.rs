@@ -157,19 +157,18 @@ impl HuaweiDnsProvider {
         };
 
         let mut header_map = HeaderMap::new();
-        header_map.insert(HOST, HeaderValue::from_str(host).unwrap());
-        header_map.insert(
-            HeaderName::from_static("x-sdk-date"),
-            HeaderValue::from_str(&x_sdk_date).unwrap(),
-        );
-        header_map.insert(
-            HeaderName::from_static("x-sdk-content-sha256"),
-            HeaderValue::from_str(&body_hash).unwrap(),
-        );
-        header_map.insert(
-            HeaderName::from_static("authorization"),
-            HeaderValue::from_str(&auth_header_val).unwrap(),
-        );
+        if let Ok(hv) = HeaderValue::from_str(host) {
+            header_map.insert(HOST, hv);
+        }
+        if let Ok(hv) = HeaderValue::from_str(&x_sdk_date) {
+            header_map.insert(HeaderName::from_static("x-sdk-date"), hv);
+        }
+        if let Ok(hv) = HeaderValue::from_str(&body_hash) {
+            header_map.insert(HeaderName::from_static("x-sdk-content-sha256"), hv);
+        }
+        if let Ok(hv) = HeaderValue::from_str(&auth_header_val) {
+            header_map.insert(HeaderName::from_static("authorization"), hv);
+        }
         header_map.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/json;charset=utf-8"),
