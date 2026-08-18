@@ -163,10 +163,12 @@ pub async fn upgrade_self() -> Result<(), String> {
         return Err(format!("下载失败，HTTP 状态码: {}", download_resp.status()));
     }
 
-    let bytes = download_resp
+    let raw_bytes = download_resp
         .bytes()
         .await
         .map_err(|e| format!("读取下载数据失败: {}", e))?;
+
+    let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
 
     let current_exe = env::current_exe().map_err(|e| format!("获取当前程序路径失败: {}", e))?;
     let backup_exe: PathBuf = if let Some(ext) = current_exe.extension() {
@@ -183,10 +185,10 @@ pub async fn upgrade_self() -> Result<(), String> {
     fs::rename(&current_exe, &backup_exe)
         .map_err(|e| format!("备份当前运行程序失败 (可能缺少管理员写入权限): {}", e))?;
 
-    // 将下载的新文件写入当前程序路径
+    // 将解压/提取的新二进制文件写入当前程序路径
     let write_res = (|| -> Result<(), std::io::Error> {
         let mut file = fs::File::create(&current_exe)?;
-        file.write_all(&bytes)?;
+        file.write_all(&binary_bytes)?;
         file.flush()?;
 
         #[cfg(unix)]
@@ -214,6 +216,38 @@ pub async fn upgrade_self() -> Result<(), String> {
     Ok(())
 }
 
+/// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包与原始二进制)
+fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.starts_with(b"PK\x03\x04") || asset_name.ends_with(".zip") {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive =
+            zip::ZipArchive::new(cursor).map_err(|e| format!("解析 ZIP 压缩包失败: {}", e))?;
+
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("读取 ZIP 压缩文件条目失败: {}", e))?;
+            let entry_name = file.name().to_string();
+
+            // 寻找主程序文件 (如 rddns 或 rddns.exe)
+            if entry_name.ends_with("rddns.exe")
+                || entry_name.ends_with("rddns")
+                || entry_name == "rddns.exe"
+                || entry_name == "rddns"
+            {
+                let mut out = Vec::new();
+                std::io::copy(&mut file, &mut out)
+                    .map_err(|e| format!("解压可执行程序数据失败: {}", e))?;
+                return Ok(out);
+            }
+        }
+        return Err("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)".to_string());
+    }
+
+    // 若非 ZIP 归档，直接作为原始二进制返回
+    Ok(bytes.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +261,12 @@ mod tests {
         assert!(!is_newer_version("0.2.0", "0.2.0"));
         assert!(!is_newer_version("0.2.1", "0.2.0"));
         assert!(!is_newer_version("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn test_extract_binary_from_bytes_raw() {
+        let raw_data = b"binary_data_mock";
+        let extracted = extract_binary_from_bytes("rddns.exe", raw_data).unwrap();
+        assert_eq!(extracted, raw_data);
     }
 }
