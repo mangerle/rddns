@@ -243,7 +243,7 @@ pub fn restart_process() -> Result<(), std::io::Error> {
 
     // 延迟 1.5 秒后安全退出当前旧进程，确保日志与响应顺利发出
     tokio::spawn(async {
-        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         std::process::exit(0);
     });
 

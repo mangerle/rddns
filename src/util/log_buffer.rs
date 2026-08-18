@@ -110,6 +110,15 @@ impl LogVisitor {
 }
 
 impl tracing::field::Visit for LogVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = Some(value.to_string());
+        } else {
+            self.extra_fields
+                .push(format!("{}: {}", field.name(), value));
+        }
+    }
+
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             let s = format!("{:?}", value);
@@ -122,15 +131,6 @@ impl tracing::field::Visit for LogVisitor {
         } else {
             self.extra_fields
                 .push(format!("{}: {:?}", field.name(), value));
-        }
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.message = Some(value.to_string());
-        } else {
-            self.extra_fields
-                .push(format!("{}: {}", field.name(), value));
         }
     }
 }

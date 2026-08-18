@@ -541,4 +541,3 @@ mod tests {
         assert_eq!(state.check_counter, 0);
     }
 }
-

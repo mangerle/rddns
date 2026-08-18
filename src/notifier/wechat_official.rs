@@ -250,7 +250,7 @@ impl Notifier for WechatOfficialNotifier {
 mod tests {
     use super::*;
     use crate::config::model::WechatOfficialConfig;
-    use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
+    use crate::dns::trait_def::{SyncRecordResult, SyncStatus};
     use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
     use chrono::Local;
 

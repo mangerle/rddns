@@ -1,5 +1,5 @@
 use std::env;
-use std::io::{self, Error};
+use std::io::Error;
 use std::process::Command;
 
 /// 后台子进程标识环境变量
@@ -11,7 +11,7 @@ pub fn is_daemon_child() -> bool {
 }
 
 /// 将当前程序作为后台独立守护进程派生并脱离控制台
-pub fn run_as_daemon() -> Result<(), io::Error> {
+pub fn run_as_daemon() -> Result<(), Error> {
     let current_exe = env::current_exe()?;
     let args: Vec<String> = env::args()
         .skip(1)
