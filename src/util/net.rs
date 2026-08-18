@@ -79,21 +79,36 @@ pub fn is_global_unicast_ipv6(addr: &Ipv6Addr) -> bool {
     true
 }
 
-/// 判断 IPv4 是否为公网地址 (非私有/回环/链路本地/保留)
+/// 判断 IPv4 是否为运营商级 NAT (CGNAT 100.64.0.0/10, RFC 6598)
+pub fn is_cgnat_ipv4(addr: &Ipv4Addr) -> bool {
+    let octets = addr.octets();
+    octets[0] == 100 && (octets[1] & 0xc0) == 64
+}
+
+/// 判断 IPv4 是否为公网地址 (非私有/回环/链路本地/CGNAT/多播/保留/文档)
 pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
+    let octets = addr.octets();
     !(addr.is_private()
         || addr.is_loopback()
         || addr.is_link_local()
         || addr.is_broadcast()
         || addr.is_documentation()
-        || addr.is_unspecified())
+        || addr.is_unspecified()
+        || addr.is_multicast()
+        || is_cgnat_ipv4(addr)
+        || (octets[0] == 198 && (octets[1] & 0xfe) == 18)
+        || octets[0] >= 240)
 }
 
-/// 判断 IP 是否属于私有局域网或本地回环 (包括 RFC1918 私网, 127.0.0.1, ::1, fe80::, fd00::)
+/// 判断 IP 是否属于私有局域网、CGNAT 或本地回环 (包括 RFC1918 私网, 100.64.0.0/10, 127.0.0.1, ::1, fe80::, fd00::)
 pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || is_cgnat_ipv4(v4)
         }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || !is_global_unicast_ipv6(v6),
     }
@@ -279,5 +294,24 @@ mod tests {
         assert!(!is_private_or_loopback(
             &IpAddr::from_str("240e:390:800:100::1").unwrap()
         ));
+    }
+
+    #[test]
+    fn test_is_public_and_cgnat_ipv4() {
+        // CGNAT (100.64.0.0/10) 不应被判定为公网 IP
+        let cgnat1 = Ipv4Addr::from_str("100.64.0.1").unwrap();
+        let cgnat2 = Ipv4Addr::from_str("100.127.255.254").unwrap();
+        assert!(is_cgnat_ipv4(&cgnat1));
+        assert!(is_cgnat_ipv4(&cgnat2));
+        assert!(!is_public_ipv4(&cgnat1));
+        assert!(!is_public_ipv4(&cgnat2));
+
+        // 邻近边界公网 IP
+        let public1 = Ipv4Addr::from_str("100.63.255.255").unwrap();
+        let public2 = Ipv4Addr::from_str("100.128.0.1").unwrap();
+        assert!(!is_cgnat_ipv4(&public1));
+        assert!(!is_cgnat_ipv4(&public2));
+        assert!(is_public_ipv4(&public1));
+        assert!(is_public_ipv4(&public2));
     }
 }
