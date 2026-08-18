@@ -2024,6 +2024,17 @@
     let savedIpv4NetIf = '';
     let savedIpv6NetIf = '';
 
+    // HTML 安全字符转义函数
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     // 矢量 Sun / Moon 图标模板
     const SUN_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>`;
     const MOON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path></svg>`;
@@ -2405,6 +2416,11 @@
           customInput.value = selVal || '';
         }
       }
+      if (vType === 'ipv4') {
+        savedIpv4NetIf = getNetIfValue('ipv4') || '';
+      } else {
+        savedIpv6NetIf = getNetIfValue('ipv6') || '';
+      }
     }
 
     // 获取选定网卡名称值
@@ -2775,9 +2791,11 @@
 
     // 渲染 IP 获取途径表单
     function renderIpFields(vType) {
-      const sourceType = document.getElementById(`${vType}SourceType`)?.value || 'url';
+      const rawSource = document.getElementById(`${vType}SourceType`)?.value || 'url';
+      const sourceType = (rawSource === 'netInterface' || rawSource === 'net_interface') ? 'net_interface' : (rawSource === 'cmd' ? 'command' : rawSource);
       const fieldContainer = document.getElementById(`${vType}DynamicField`);
       if (!fieldContainer) return;
+
       if (sourceType === 'url') {
         const defaultUrls = vType === 'ipv4'
           ? 'https://api.ipify.org, https://myip.ipip.net/ip, https://ddns.oray.com/checkip'
@@ -2785,7 +2803,7 @@
         fieldContainer.innerHTML = `
           <label>探测 URL (多个接口用英文逗号分隔，失败自动回退)</label>
           <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
-      } else if (sourceType === 'netInterface') {
+      } else if (sourceType === 'net_interface') {
         const currentSaved = (vType === 'ipv4' ? savedIpv4NetIf : savedIpv6NetIf) || '';
         let optionsHtml = `<option value="">-- 请选择网卡设备 --</option>`;
         let matched = false;
@@ -2793,7 +2811,7 @@
         availableInterfaces.forEach(iface => {
           const isSelected = (iface.name === currentSaved);
           if (isSelected) matched = true;
-          optionsHtml += `<option value="${iface.name}" ${isSelected ? 'selected' : ''}>${iface.display_name}</option>`;
+          optionsHtml += `<option value="${escapeHtml(iface.name)}" ${isSelected ? 'selected' : ''}>${escapeHtml(iface.display_name || iface.name)}</option>`;
         });
 
         const isCustomSelected = (!matched && currentSaved);
@@ -2804,7 +2822,7 @@
           <select id="${vType}NetIfSelect" onchange="handleNetIfSelect('${vType}')">
             ${optionsHtml}
           </select>
-          <input type="text" id="${vType}NetIfCustom" placeholder="例如 eth0 或 以太网" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? currentSaved : ''}" />`;
+          <input type="text" id="${vType}NetIfCustom" placeholder="例如 eth0 或 以太网" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? escapeHtml(currentSaved) : ''}" />`;
       } else if (sourceType === 'command') {
         fieldContainer.innerHTML = `
           <label>执行命令 / 脚本</label>
@@ -3025,7 +3043,8 @@
       // 4. IPv4
       if (task.ipv4) {
         document.getElementById('ipv4Enable').checked = task.ipv4.enabled !== false;
-        document.getElementById('ipv4SourceType').value = task.ipv4.source_type || 'url';
+        const v4Src = (task.ipv4.source_type === 'netInterface' || task.ipv4.source_type === 'net_interface') ? 'net_interface' : (task.ipv4.source_type || 'url');
+        document.getElementById('ipv4SourceType').value = v4Src;
         savedIpv4NetIf = task.ipv4.net_interface || '';
         renderIpFields('ipv4');
         if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
@@ -3041,7 +3060,8 @@
       // 5. IPv6
       if (task.ipv6) {
         document.getElementById('ipv6Enable').checked = task.ipv6.enabled !== false;
-        document.getElementById('ipv6SourceType').value = task.ipv6.source_type || 'netInterface';
+        const v6Src = (task.ipv6.source_type === 'netInterface' || task.ipv6.source_type === 'net_interface') ? 'net_interface' : (task.ipv6.source_type || 'net_interface');
+        document.getElementById('ipv6SourceType').value = v6Src;
         savedIpv6NetIf = task.ipv6.net_interface || '';
         renderIpFields('ipv6');
         if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
@@ -3208,7 +3228,7 @@
         },
         ipv6: {
           enabled: true,
-          source_type: 'netInterface',
+          source_type: 'net_interface',
           url_endpoints: [],
           net_interface: null,
           cmd: null,
@@ -3306,7 +3326,7 @@
           provider: { type: 'cloudflare', api_token: '' },
           ttl: null,
           ipv4: { enabled: true, source_type: 'url', url_endpoints: ['https://api.ipify.org'], net_interface: null, cmd: null, regex: null, domains: [] },
-          ipv6: { enabled: true, source_type: 'netInterface', url_endpoints: [], net_interface: null, cmd: null, regex: null, domains: [] }
+          ipv6: { enabled: true, source_type: 'net_interface', url_endpoints: [], net_interface: null, cmd: null, regex: null, domains: [] }
         }];
       }
 

@@ -26,17 +26,24 @@ pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
             if let Ok(val) = HeaderValue::from_str(&mime_type) {
                 headers.insert(CONTENT_TYPE, val);
             }
-            if let Ok(etag) = HeaderValue::from_str(&format!(
+            if path.ends_with(".html") || path == "index.html" {
+                headers.insert(
+                    axum::http::header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+                );
+            } else if let Ok(etag) = HeaderValue::from_str(&format!(
                 "\"{}\"",
                 hex::encode(content.metadata.sha256_hash())
             )) {
                 headers.insert(ETAG, etag);
             }
 
-            Response::builder()
+            let mut resp = Response::builder()
                 .status(StatusCode::OK)
                 .body(Body::from(content.data))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            *resp.headers_mut() = headers;
+            resp
         }
         None => {
             // SPA Fallback 到 index.html
