@@ -38,6 +38,10 @@ struct CliArgs {
     #[arg(long = "noweb", default_value_t = false)]
     no_web: bool,
 
+    /// 自定义公共 DNS 递归解析服务器 (例如 223.5.5.5 或 1.1.1.1:53，用于抗 Local DNS 污染)
+    #[arg(long = "dns")]
+    dns: Option<String>,
+
     /// 跳过 HTTPS / TLS 证书有效性验证 (支持 --skip-verify / --skipVerify)
     #[arg(long = "skip-verify", alias = "skipVerify", default_value_t = false)]
     skip_verify: bool,
@@ -62,6 +66,11 @@ struct CliArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = CliArgs::parse();
+
+    // 如果配置了自定义 DNS 解析服务器
+    if let Some(ref dns_srv) = args.dns {
+        util::dns_resolver::set_custom_dns_server(dns_srv.clone());
+    }
 
     // 如果开启了跳过证书验证，配置全局 HTTP 策略
     if args.skip_verify {
@@ -133,9 +142,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "🚀 rddns 动态域名解析系统 v{} 正在启动",
         env!("CARGO_PKG_VERSION")
     );
-    tracing::info!("==========================================");
-
     let config_manager = Arc::new(ConfigManager::load_or_create(config_path)?);
+
+    // 初始化/覆盖自定义 DNS 解析服务器（优先级：CLI 参数 > 配置文件）
+    if let Some(ref dns_srv) = args.dns {
+        util::dns_resolver::set_custom_dns_server(dns_srv.clone());
+    } else if let Some(dns_srv) = config_manager
+        .get_config()
+        .dns_server
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        util::dns_resolver::set_custom_dns_server(dns_srv.trim().to_string());
+    }
 
     // 处理重置密码指令 (--reset-password / --resetPassword)
     if let Some(new_pwd) = args.reset_password {

@@ -1970,6 +1970,11 @@
                 <span class="switch-label">禁止公网访问 Web 界面</span>
               </label>
             </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label>自定义 DNS 递归解析服务器 (DNS Server) <span style="font-size:0.75rem;color:var(--text-muted);">(抗 Local DNS 缓存污染)</span></label>
+              <input type="text" id="sysDnsServer" placeholder="留空使用系统默认 DNS；推荐 223.5.5.5 或 1.1.1.1:53" />
+              <p class="form-tip">用于直接向指定公共 DNS 节点发起递归查询比对记录，防止本地运营商 DNS 劫持与缓存滞后</p>
+            </div>
           </div>
 
           <div class="card">
@@ -3256,6 +3261,7 @@
       document.getElementById('sysInterval').value = conf.interval_secs || 300;
       document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
       document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
+      document.getElementById('sysDnsServer').value = conf.dns_server || '';
 
       if (conf.auth) {
         document.getElementById('sysUsername').value = conf.auth.username;
@@ -3371,6 +3377,7 @@
             username: document.getElementById('sysUsername').value,
             password_hash: "******"
           } : null,
+          dns_server: document.getElementById('sysDnsServer')?.value?.trim() || null,
           dns_tasks: globalConfig.dns_tasks || [],
           notifications
         },

@@ -104,6 +104,14 @@ pub async fn save_config_handler(
         }
     }
 
+    // 如果配置了自定义 DNS，热更新全局解析服务器
+    if let Some(ref dns_srv) = new_config.dns_server {
+        let clean = dns_srv.trim();
+        if !clean.is_empty() {
+            crate::util::dns_resolver::set_custom_dns_server(clean.to_string());
+        }
+    }
+
     match state.config_manager.update_config(new_config) {
         Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
         Err(e) => (

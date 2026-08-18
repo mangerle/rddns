@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod daemon;
+pub mod dns_resolver;
 pub mod http;
 pub mod log_buffer;
 pub mod net;

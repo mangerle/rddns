@@ -28,6 +28,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub dns_tasks: Vec<DnsTaskConfig>,
 
+    /// 自定义公共 DNS 递归解析服务器 (如 "223.5.5.5", "1.1.1.1:53")，用于防 Local DNS 缓存污染
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_server: Option<String>,
+
     /// 通知渠道配置
     #[serde(default)]
     pub notifications: NotificationConfig,
@@ -57,6 +61,7 @@ impl Default for AppConfig {
             cache_times: default_cache_times(),
             not_allow_wan_access: default_not_allow_wan_access(),
             auth: None,
+            dns_server: None,
             dns_tasks: vec![DnsTaskConfig::default()],
             notifications: NotificationConfig::default(),
         }
