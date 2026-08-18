@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use std::time::Duration;
 
 pub struct EmailNotifier {
     config: EmailConfig,
@@ -29,21 +30,21 @@ impl EmailNotifier {
 
     /// 渲染现代响应式 HTML 邮件模板
     fn render_html(event: &NotificationEvent) -> String {
-        let (status_bg, status_color, status_border, status_title) = match event.overall_status {
-            NotificationOverallStatus::Success => ("#ecfdf5", "#065f46", "#a7f3d0", "同步成功"),
-            NotificationOverallStatus::Failed => ("#fef2f2", "#991b1b", "#fecaca", "同步失败"),
+        let (status_color, status_bg, status_border, status_title) = match event.overall_status {
+            NotificationOverallStatus::Success => ("#15803d", "#f0fdf4", "#bbf7d0", "全部同步成功"),
             NotificationOverallStatus::PartialSuccess => {
-                ("#fffbeb", "#92400e", "#fde68a", "部分解析失败")
+                ("#b45309", "#fffbeb", "#fde68a", "部分同步成功")
             }
+            NotificationOverallStatus::Failed => ("#b91c1c", "#fef2f2", "#fecaca", "同步出现错误"),
         };
 
         let mut table_rows = String::new();
         for r in &event.results {
             let (status_badge_bg, status_badge_color, status_text) = match r.status {
-                SyncStatus::Created => ("#ecfdf5", "#059669", "已新增"),
-                SyncStatus::Updated => ("#ecfdf5", "#059669", "已更新"),
-                SyncStatus::Unchanged => ("#f1f5f9", "#475569", "未变动"),
-                SyncStatus::Failed => ("#fef2f2", "#dc2626", "同步失败"),
+                SyncStatus::Created => ("#dcfce7", "#15803d", "新建"),
+                SyncStatus::Updated => ("#e0e7ff", "#4338ca", "更新"),
+                SyncStatus::Unchanged => ("#f1f5f9", "#475569", "保持"),
+                SyncStatus::Failed => ("#fee2e2", "#b91c1c", "失败"),
             };
 
             table_rows.push_str(&format!(
@@ -175,7 +176,7 @@ impl EmailNotifier {
             status_border = status_border,
             status_color = status_color,
             status_title = status_title,
-            task_name = event.task_name,
+            task_name = Self::escape_html(&event.task_name),
             time_str = time_str,
             ipv4_str = ipv4_str,
             ipv6_str = ipv6_str,
@@ -242,12 +243,14 @@ impl Notifier for EmailNotifier {
                 .map_err(|e| NotifyError::Email(format!("SMTP 连接配置失败: {}", e)))?
                 .port(self.config.smtp_port)
                 .credentials(creds)
+                .timeout(Some(Duration::from_secs(10)))
                 .build()
         } else {
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)
                 .map_err(|e| NotifyError::Email(format!("STARTTLS 连接配置失败: {}", e)))?
                 .port(self.config.smtp_port)
                 .credentials(creds)
+                .timeout(Some(Duration::from_secs(10)))
                 .build()
         };
 
@@ -280,7 +283,7 @@ mod tests {
         let event = NotificationEvent {
             overall_status: NotificationOverallStatus::Failed,
             title: "测试标题".to_string(),
-            task_name: "测试任务".to_string(),
+            task_name: "<任务&危险>".to_string(),
             ipv4: None,
             ipv6: None,
             ip_changed: false,
@@ -291,6 +294,8 @@ mod tests {
         let html = EmailNotifier::render_html(&event);
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;.com"));
         assert!(html.contains("&lt;API&gt; &amp; &quot;失败&quot;"));
+        assert!(html.contains("&lt;任务&amp;危险&gt;"));
         assert!(!html.contains("<script>"));
+        assert!(!html.contains("<任务&危险>"));
     }
 }
