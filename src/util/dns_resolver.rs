@@ -274,7 +274,13 @@ pub async fn query_dns_server(
 
     if !ips.is_empty() {
         let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
-        GLOBAL_DNS_CACHE.write().insert(
+        let mut cache = GLOBAL_DNS_CACHE.write();
+        // 若容量达到上限 (512 条)，主动清理已过期条目
+        if cache.len() >= 512 {
+            let now = Instant::now();
+            cache.retain(|_, entry| entry.expires_at > now);
+        }
+        cache.insert(
             cache_key,
             DnsCacheEntry {
                 ips: ips.clone(),

@@ -12,9 +12,11 @@ fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
         return cached.clone();
     }
     let compiled = Regex::new(pattern).ok();
-    CUSTOM_REGEX_CACHE
-        .write()
-        .insert(pattern.to_string(), compiled.clone());
+    let mut cache = CUSTOM_REGEX_CACHE.write();
+    if cache.len() >= 128 {
+        cache.clear();
+    }
+    cache.insert(pattern.to_string(), compiled.clone());
     compiled
 }
 
