@@ -47,15 +47,157 @@ impl<T> ApiResponse<T> {
     }
 }
 
-/// 获取当前配置
+/// 获取当前配置 (并对所有敏感凭据实施掩码保护)
 pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoResponse {
     let conf = state.config_manager.get_config();
     let mut clean_conf = (*conf).clone();
-    // 隐藏敏感哈希
-    if let Some(ref mut auth) = clean_conf.auth {
+    mask_sensitive_credentials_for_ui(&mut clean_conf);
+    Json(ApiResponse::ok(clean_conf))
+}
+
+/// 对配置数据中的所有敏感凭据（包括密码、Token、Secret）进行脱敏掩码化
+fn mask_sensitive_credentials_for_ui(conf: &mut AppConfig) {
+    if let Some(ref mut auth) = conf.auth {
         auth.password_hash = "******".to_string();
     }
-    Json(ApiResponse::ok(clean_conf))
+
+    for task in &mut conf.dns_tasks {
+        match &mut task.provider {
+            crate::config::model::ProviderConfig::Cloudflare {
+                api_token, api_key, ..
+            } => {
+                if let Some(t) = api_token
+                    && !t.is_empty()
+                {
+                    *t = "******".to_string();
+                }
+                if let Some(k) = api_key
+                    && !k.is_empty()
+                {
+                    *k = "******".to_string();
+                }
+            }
+            crate::config::model::ProviderConfig::AliDns {
+                access_key_secret, ..
+            }
+            | crate::config::model::ProviderConfig::TencentCloud {
+                secret_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::HuaweiCloud {
+                secret_access_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::Porkbun {
+                secret_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::GoDaddy {
+                api_secret: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::BaiduCloud {
+                secret_access_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::TrafficRoute {
+                secret_access_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::Spaceship {
+                api_secret: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::DnsLa {
+                api_secret: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::AliEsa {
+                access_key_secret, ..
+            }
+            | crate::config::model::ProviderConfig::EdgeOne {
+                secret_key: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::NowCn {
+                secret: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::Eranet {
+                secret: access_key_secret,
+                ..
+            }
+            | crate::config::model::ProviderConfig::TNetHk {
+                secret: access_key_secret,
+                ..
+            } => {
+                if !access_key_secret.is_empty() {
+                    *access_key_secret = "******".to_string();
+                }
+            }
+            crate::config::model::ProviderConfig::Dynv6 { token }
+            | crate::config::model::ProviderConfig::NameSilo { api_key: token }
+            | crate::config::model::ProviderConfig::Gcore { api_key: token }
+            | crate::config::model::ProviderConfig::NsOne { api_key: token }
+            | crate::config::model::ProviderConfig::Vercel { token, .. }
+            | crate::config::model::ProviderConfig::RainYun { api_key: token, .. }
+            | crate::config::model::ProviderConfig::NameCom {
+                api_token: token, ..
+            }
+            | crate::config::model::ProviderConfig::HipmDnsMgr {
+                api_token: token, ..
+            } => {
+                if !token.is_empty() {
+                    *token = "******".to_string();
+                }
+            }
+            crate::config::model::ProviderConfig::Namecheap { password }
+            | crate::config::model::ProviderConfig::Dynadot { password }
+            | crate::config::model::ProviderConfig::ClouDNS {
+                auth_password: password,
+                ..
+            } => {
+                if !password.is_empty() {
+                    *password = "******".to_string();
+                }
+            }
+            crate::config::model::ProviderConfig::Callback { .. } => {}
+        }
+    }
+
+    if let Some(ref mut wx) = conf.notifications.wechat_official
+        && !wx.app_secret.is_empty()
+    {
+        wx.app_secret = "******".to_string();
+    }
+    if let Some(ref mut wc) = conf.notifications.wecom
+        && let Some(ref mut s) = wc.corp_secret
+        && !s.is_empty()
+    {
+        *s = "******".to_string();
+    }
+    if let Some(ref mut tg) = conf.notifications.telegram
+        && !tg.bot_token.is_empty()
+    {
+        tg.bot_token = "******".to_string();
+    }
+    if let Some(ref mut dt) = conf.notifications.dingtalk
+        && let Some(ref mut s) = dt.secret
+        && !s.is_empty()
+    {
+        *s = "******".to_string();
+    }
+    if let Some(ref mut fs) = conf.notifications.feishu
+        && let Some(ref mut s) = fs.secret
+        && !s.is_empty()
+    {
+        *s = "******".to_string();
+    }
+    if let Some(ref mut em) = conf.notifications.email
+        && !em.password.is_empty()
+    {
+        em.password = "******".to_string();
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -880,5 +1022,51 @@ mod tests {
         } else {
             panic!("类型不匹配");
         }
+    }
+
+    #[test]
+    fn test_mask_sensitive_credentials_for_ui() {
+        let mut conf = AppConfig {
+            auth: Some(UserAuthConfig {
+                username: "admin".to_string(),
+                password_hash: "hashed_secret_pw".to_string(),
+            }),
+            dns_tasks: vec![DnsTaskConfig {
+                name: "test".to_string(),
+                provider: ProviderConfig::AliDns {
+                    access_key_id: "my_ak".to_string(),
+                    access_key_secret: "my_secret_key".to_string(),
+                    endpoint: None,
+                },
+                ..Default::default()
+            }],
+            notifications: NotificationConfig {
+                email: Some(crate::config::model::EmailConfig {
+                    smtp_server: "smtp.example.com".to_string(),
+                    smtp_port: 465,
+                    username: "user@example.com".to_string(),
+                    password: "email_secret_password".to_string(),
+                    from_address: "user@example.com".to_string(),
+                    to_addresses: vec!["to@example.com".to_string()],
+                    use_ssl: true,
+                    enabled: true,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        mask_sensitive_credentials_for_ui(&mut conf);
+
+        assert_eq!(conf.auth.unwrap().password_hash, "******");
+        if let ProviderConfig::AliDns {
+            access_key_secret, ..
+        } = &conf.dns_tasks[0].provider
+        {
+            assert_eq!(access_key_secret, "******");
+        } else {
+            panic!("Provider mismatch");
+        }
+        assert_eq!(conf.notifications.email.unwrap().password, "******");
     }
 }
