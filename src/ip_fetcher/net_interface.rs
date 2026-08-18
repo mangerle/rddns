@@ -36,7 +36,7 @@ impl IpFetcher for NetInterfaceIpFetcher {
         for addr in target_if.addr {
             if let Addr::V4(v4_addr) = addr {
                 let ip = v4_addr.ip;
-                if is_public_ipv4(&ip) || !ip.is_loopback() {
+                if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() {
                     candidates.push(ip);
                 }
             }
@@ -48,6 +48,8 @@ impl IpFetcher for NetInterfaceIpFetcher {
             }) {
                 return Ok(Some(ip));
             }
+        } else if let Some(&pub_ip) = candidates.iter().find(|ip| is_public_ipv4(ip)) {
+            return Ok(Some(pub_ip));
         } else if let Some(&first) = candidates.first() {
             return Ok(Some(first));
         }
