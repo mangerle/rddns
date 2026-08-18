@@ -772,6 +772,7 @@
 
     .sub-sidebar-header {
       height: 52px;
+      box-sizing: border-box;
       padding: 0 14px;
       background-color: var(--bg-card);
       border-bottom: 1px solid var(--border);
@@ -789,15 +790,17 @@
       align-items: center;
       gap: 6px;
       white-space: nowrap;
+      line-height: 1;
     }
 
     .sub-sidebar-badge {
       font-size: 0.72rem;
       background: var(--primary-light);
       color: var(--primary);
-      padding: 1px 6px;
+      padding: 2px 6px;
       border-radius: 4px;
       font-weight: 600;
+      line-height: 1;
     }
 
     .btn-add-task {
@@ -805,15 +808,17 @@
       color: #fff;
       border: none;
       border-radius: 6px;
-      padding: 4px 8px;
+      padding: 0 10px;
       font-size: 0.76rem;
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
       transition: all 0.2s ease;
-      height: 28px;
+      height: 30px;
+      box-sizing: border-box;
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -939,25 +944,34 @@
       align-items: center;
       gap: 8px;
       flex: 1;
-      min-width: 220px;
+      min-width: 200px;
+      height: 30px;
     }
     .task-name-edit-wrap label {
-      font-size: 0.84rem;
-      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      margin: 0;
+      padding: 0;
+      font-size: 0.85rem;
+      font-weight: 700;
       color: var(--text);
       white-space: nowrap;
+      height: 30px;
+      line-height: 1;
     }
     .task-name-edit-wrap input {
       background: var(--bg-input);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 6px 12px;
+      padding: 0 10px;
       border-radius: 6px;
       font-size: 0.86rem;
       font-weight: 600;
       outline: none;
       width: 180px;
-      height: 34px;
+      height: 30px;
+      box-sizing: border-box;
+      line-height: 28px;
       transition: border-color 0.2s ease;
     }
     .task-name-edit-wrap input:focus {
@@ -967,8 +981,23 @@
     .task-toolbar-actions {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       flex-shrink: 0;
+      height: 30px;
+    }
+    .task-toolbar-actions .switch-wrapper {
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      margin: 0;
+    }
+    .task-toolbar-actions .btn-outline {
+      height: 30px;
+      padding: 0 10px;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
 
     .btn-del-hover:hover {
