@@ -55,6 +55,11 @@ impl ConfigManager {
         self.current.read().clone()
     }
 
+    /// 获取配置文件路径引用
+    pub fn get_config_path(&self) -> &Path {
+        &self.file_path
+    }
+
     /// 订阅配置变更流（供后台调度器监听热重载）
     pub fn subscribe(&self) -> watch::Receiver<Arc<AppConfig>> {
         self.sender.subscribe()

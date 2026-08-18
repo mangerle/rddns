@@ -38,8 +38,8 @@ struct CliArgs {
     #[arg(long = "noweb", default_value_t = false)]
     no_web: bool,
 
-    /// 重置 Web 管理员密码并退出
-    #[arg(long = "reset-password")]
+    /// 重置 Web 管理员密码并退出 (支持 --reset-password / --resetPassword)
+    #[arg(long = "reset-password", alias = "resetPassword")]
     reset_password: Option<String>,
 
     /// 在后台静默运行 (守护进程模式)
@@ -125,8 +125,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config_manager = Arc::new(ConfigManager::load_or_create(config_path)?);
 
-    // 处理重置密码指令
+    // 处理重置密码指令 (--reset-password / --resetPassword)
     if let Some(new_pwd) = args.reset_password {
+        if new_pwd.trim().is_empty() {
+            eprintln!("❌ 重置密码失败：新密码不能为空！");
+            std::process::exit(1);
+        }
         let mut conf = (*config_manager.get_config()).clone();
         let hash = bcrypt::hash(&new_pwd, bcrypt::DEFAULT_COST)?;
         let username = conf
@@ -139,7 +143,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             password_hash: hash,
         });
         config_manager.update_config(conf)?;
-        println!("✅ 用户 [{}] 的密码已成功重置！", username);
+        println!("==========================================");
+        println!("✅ 管理员密码重置成功！");
+        println!("👤 管理员账号: {}", username);
+        println!("🔑 新登录密码: {}", new_pwd);
+        println!(
+            "📁 配置文件:   {}",
+            config_manager.get_config_path().display()
+        );
+        println!("==========================================");
         return Ok(());
     }
 
