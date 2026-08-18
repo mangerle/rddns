@@ -65,10 +65,17 @@ impl Notifier for CustomWebhookNotifier {
             let mut header_map = HeaderMap::new();
             for (k, v) in hdrs {
                 let rendered_v = Self::replace_template(v, event, false);
-                if let (Ok(hk), Ok(hv)) =
-                    (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v))
-                {
-                    header_map.insert(hk, hv);
+                match (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v)) {
+                    (Ok(hk), Ok(hv)) => {
+                        header_map.insert(hk, hv);
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "⚠️ Webhook 自定义 Header [{}: {}] 格式不合法，已跳过",
+                            k,
+                            rendered_v
+                        );
+                    }
                 }
             }
             req = req.headers(header_map);
