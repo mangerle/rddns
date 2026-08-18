@@ -12,11 +12,15 @@ use std::time::Duration;
 
 const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 
+use parking_lot::RwLock;
+use std::collections::HashMap;
+
 /// 雨云 (RainYun) DNS 提供商
 pub struct RainYunProvider {
     api_key: String,
     domain_id: Option<String>,
     client: Client,
+    domain_cache: RwLock<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +67,7 @@ impl RainYunProvider {
             api_key,
             domain_id: domain_id.filter(|d| !d.trim().is_empty()),
             client,
+            domain_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -75,10 +80,14 @@ impl RainYunProvider {
         headers
     }
 
-    /// 获取或自动根据根域名查询 Domain ID
+    /// 获取或自动根据根域名查询 Domain ID (优先从内存缓存读取)
     async fn get_domain_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
         if let Some(ref did) = self.domain_id {
             return Ok(did.clone());
+        }
+
+        if let Some(cached_id) = self.domain_cache.read().get(root_domain).cloned() {
+            return Ok(cached_id);
         }
 
         // 自动查询域名列表
@@ -111,7 +120,11 @@ impl RainYunProvider {
                 .find(|d| d.domain.eq_ignore_ascii_case(root_domain));
 
             if let Some(m) = matched {
-                return Ok(m.id.to_string());
+                let did_str = m.id.to_string();
+                self.domain_cache
+                    .write()
+                    .insert(root_domain.to_string(), did_str.clone());
+                return Ok(did_str);
             }
         }
 

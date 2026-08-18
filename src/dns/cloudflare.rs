@@ -12,11 +12,15 @@ use std::time::Duration;
 
 const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
+use parking_lot::RwLock;
+use std::collections::HashMap;
+
 pub struct CloudflareProvider {
     client: Client,
     api_token: Option<String>,
     api_key: Option<String>,
     email: Option<String>,
+    zone_cache: RwLock<HashMap<String, String>>,
 }
 
 impl CloudflareProvider {
@@ -47,6 +51,7 @@ impl CloudflareProvider {
             api_token,
             api_key,
             email,
+            zone_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -72,8 +77,12 @@ impl CloudflareProvider {
         headers
     }
 
-    /// 查询根域名对应的 Zone ID
+    /// 查询根域名对应的 Zone ID (优先从内存缓存读取)
     async fn get_zone_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        if let Some(cached_id) = self.zone_cache.read().get(root_domain).cloned() {
+            return Ok(cached_id);
+        }
+
         let url = format!("{}/zones?name={}&status=active", CF_API_BASE, root_domain);
         let resp = self
             .client
@@ -100,6 +109,10 @@ impl CloudflareProvider {
             .result
             .and_then(|zones| zones.into_iter().next())
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
+
+        self.zone_cache
+            .write()
+            .insert(root_domain.to_string(), zone.id.clone());
 
         Ok(zone.id)
     }
