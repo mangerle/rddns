@@ -2686,7 +2686,8 @@
               <label>SecretKey</label>
               <input type="password" id="eoSecretKey" placeholder="腾讯云 API SecretKey" />
             </div>
-          </div>`;
+          </div>
+          <p class="form-tip">💡 提示：支持普通 DNS 解析同步，亦支持动态源站组更新。如需同步源站组，可在下方域名中追加参数，例如 <code>yourdomain.com?GroupId=og-xxxx</code> 或 <code>yourdomain.com?OriginGroupName=MyOrigin</code></p>`;
       } else if (type === 'nowcn') {
         container.innerHTML = `
           <div class="grid-2">

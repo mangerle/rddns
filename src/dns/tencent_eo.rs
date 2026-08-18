@@ -92,6 +92,41 @@ struct TeoActionResp {
     response: TeoActionRespData,
 }
 
+#[derive(Debug, Deserialize)]
+struct TeoOriginRecord {
+    #[serde(rename = "Record")]
+    record: String,
+    #[serde(rename = "Type")]
+    #[allow(dead_code)]
+    record_type: String,
+    #[serde(rename = "Weight")]
+    weight: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeoOriginGroup {
+    #[serde(rename = "GroupId")]
+    group_id: String,
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Records")]
+    records: Option<Vec<TeoOriginRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeoOriginGroupRespData {
+    #[serde(rename = "OriginGroups")]
+    origin_groups: Option<Vec<TeoOriginGroup>>,
+    #[serde(rename = "Error")]
+    error: Option<TeoError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeoOriginGroupResp {
+    #[serde(rename = "Response")]
+    response: TeoOriginGroupRespData,
+}
+
 impl TencentEoProvider {
     pub fn new(secret_id: String, secret_key: String) -> Result<Self, DnsProviderError> {
         if secret_id.trim().is_empty() || secret_key.trim().is_empty() {
@@ -251,7 +286,130 @@ impl DnsProvider for TencentEoProvider {
         // 1. 获取 Zone ID
         let zone_id = self.get_zone_id(&domain.root_domain).await?;
 
-        // 2. 查询解析记录
+        // 2. 判断是否为源站组 (OriginGroup) 更新模式 (通过域名后缀参数 ?GroupId=og-xxx 或 ?OriginGroupName=xxx)
+        let is_origin_group = domain.custom_params.contains_key("GroupId")
+            || domain.custom_params.contains_key("group_id")
+            || domain.custom_params.contains_key("OriginGroupName")
+            || domain.custom_params.contains_key("origin_group_name");
+
+        if is_origin_group {
+            let group_id_opt = domain
+                .custom_params
+                .get("GroupId")
+                .or_else(|| domain.custom_params.get("group_id"))
+                .cloned();
+            let group_name_opt = domain
+                .custom_params
+                .get("OriginGroupName")
+                .or_else(|| domain.custom_params.get("origin_group_name"))
+                .cloned();
+
+            let weight_val = domain
+                .custom_params
+                .get("Weight")
+                .or_else(|| domain.custom_params.get("weight"))
+                .and_then(|w| w.parse::<u32>().ok())
+                .unwrap_or(100);
+
+            // 查询源站组列表
+            let mut og_filters = Vec::new();
+            if let Some(ref gid) = group_id_opt {
+                og_filters.push(json!({"Name": "origin-group-id", "Values": [gid]}));
+            } else if let Some(ref gname) = group_name_opt {
+                og_filters.push(json!({"Name": "origin-group-name", "Values": [gname]}));
+            }
+
+            let og_describe_payload = json!({
+                "ZoneId": zone_id,
+                "Filters": og_filters
+            });
+
+            let og_resp: TeoOriginGroupResp = self
+                .request_tc3_api("DescribeOriginGroup", og_describe_payload)
+                .await?;
+
+            if let Some(err) = og_resp.response.error {
+                return Err(DnsProviderError::ApiError {
+                    code: err.code,
+                    message: format!("查询 EdgeOne 源站组失败: {}", err.message),
+                });
+            }
+
+            let groups = og_resp.response.origin_groups.unwrap_or_default();
+            let matched_group =
+                groups
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| DnsProviderError::ApiError {
+                        code: "OriginGroupNotFound".to_string(),
+                        message: format!("未找到指定的 EdgeOne 源站组 (ZoneId: {})", zone_id),
+                    })?;
+
+            // 检查源站记录是否已包含该 IP 且权重一致
+            let current_records = matched_group.records.unwrap_or_default();
+            let is_already_matched = current_records
+                .iter()
+                .any(|r| r.record == target_ip_str && r.weight.unwrap_or(100) == weight_val);
+
+            if is_already_matched && current_records.len() == 1 {
+                tracing::info!(
+                    "[{}] EdgeOne 源站组 [{}] 记录未变化 ({}), 跳过更新",
+                    self.provider_name(),
+                    matched_group.name,
+                    target_ip_str
+                );
+                return Ok(SyncRecordResult {
+                    domain: full_domain,
+                    record_type,
+                    target_ip: target_ip_str,
+                    status: SyncStatus::Unchanged,
+                    message: "EdgeOne 源站组记录一致，无需更新".to_string(),
+                });
+            }
+
+            // 执行修改源站组 (ModifyOriginGroup)
+            let modify_og_payload = json!({
+                "ZoneId": zone_id,
+                "GroupId": matched_group.group_id,
+                "Name": matched_group.name,
+                "Type": "GENERAL",
+                "Records": [
+                    {
+                        "Record": target_ip_str,
+                        "Type": "IP_DOMAIN",
+                        "Weight": weight_val
+                    }
+                ]
+            });
+
+            let act_resp: TeoActionResp = self
+                .request_tc3_api("ModifyOriginGroup", modify_og_payload)
+                .await?;
+
+            if let Some(err) = act_resp.response.error {
+                return Err(DnsProviderError::ApiError {
+                    code: err.code,
+                    message: format!("修改 EdgeOne 源站组失败: {}", err.message),
+                });
+            }
+
+            tracing::info!(
+                "[{}] 成功同步 EdgeOne 源站组 [{}] -> IP: {}",
+                self.provider_name(),
+                matched_group.name,
+                target_ip_str
+            );
+
+            return Ok(SyncRecordResult {
+                domain: full_domain,
+                record_type,
+                target_ip: target_ip_str,
+                status: SyncStatus::Updated,
+                message: format!("成功更新 EdgeOne 源站组 [{}]", matched_group.name),
+            });
+        }
+
+        // 3. 常规 DNS 解析记录查询与同步
         let describe_payload = json!({
             "ZoneId": zone_id,
             "Filters": [
