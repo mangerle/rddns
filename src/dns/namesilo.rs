@@ -65,12 +65,18 @@ impl DnsProvider for NameSiloProvider {
         };
 
         // 1. 查询现有解析记录
-        let list_url = format!(
-            "{}/dnsListRecords?version=1&type=xml&key={}&domain={}",
-            NAMESILO_API_BASE, self.api_key, domain.root_domain
-        );
-
-        let list_resp = self.client.get(&list_url).send().await?;
+        let list_url = format!("{}/dnsListRecords", NAMESILO_API_BASE);
+        let list_resp = self
+            .client
+            .get(&list_url)
+            .query(&[
+                ("version", "1"),
+                ("type", "xml"),
+                ("key", &self.api_key),
+                ("domain", &domain.root_domain),
+            ])
+            .send()
+            .await?;
         let list_xml = list_resp.text().await?;
 
         if !Self::is_success_code(&list_xml) {
@@ -121,18 +127,22 @@ impl DnsProvider for NameSiloProvider {
             }
 
             // 更新记录
-            let update_url = format!(
-                "{}/dnsUpdateRecord?version=1&type=xml&key={}&domain={}&rrid={}&rrhost={}&rrvalue={}&rrttl={}",
-                NAMESILO_API_BASE,
-                self.api_key,
-                domain.root_domain,
-                record_id,
-                sub_host,
-                target_ip_str,
-                ttl_val
-            );
-
-            let update_resp = self.client.get(&update_url).send().await?;
+            let update_url = format!("{}/dnsUpdateRecord", NAMESILO_API_BASE);
+            let update_resp = self
+                .client
+                .get(&update_url)
+                .query(&[
+                    ("version", "1"),
+                    ("type", "xml"),
+                    ("key", &self.api_key),
+                    ("domain", &domain.root_domain),
+                    ("rrid", &record_id),
+                    ("rrhost", sub_host),
+                    ("rrvalue", &target_ip_str),
+                    ("rrttl", &ttl_val),
+                ])
+                .send()
+                .await?;
             let update_xml = update_resp.text().await?;
 
             if Self::is_success_code(&update_xml) {
@@ -159,18 +169,23 @@ impl DnsProvider for NameSiloProvider {
             }
         } else {
             // 创建记录
-            let add_url = format!(
-                "{}/dnsAddRecord?version=1&type=xml&key={}&domain={}&rrhost={}&rrtype={}&rrvalue={}&rrttl={}",
-                NAMESILO_API_BASE,
-                self.api_key,
-                domain.root_domain,
-                sub_host,
-                record_type,
-                target_ip_str,
-                ttl_val
-            );
-
-            let add_resp = self.client.get(&add_url).send().await?;
+            let add_url = format!("{}/dnsAddRecord", NAMESILO_API_BASE);
+            let rec_type_str = record_type.to_string();
+            let add_resp = self
+                .client
+                .get(&add_url)
+                .query(&[
+                    ("version", "1"),
+                    ("type", "xml"),
+                    ("key", &self.api_key),
+                    ("domain", &domain.root_domain),
+                    ("rrhost", sub_host),
+                    ("rrtype", &rec_type_str),
+                    ("rrvalue", &target_ip_str),
+                    ("rrttl", &ttl_val),
+                ])
+                .send()
+                .await?;
             let add_xml = add_resp.text().await?;
 
             if Self::is_success_code(&add_xml) {
