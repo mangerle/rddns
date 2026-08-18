@@ -191,8 +191,10 @@ fn parse_dns_response_packet(
         }
 
         if atype == (qtype as u16) {
-            if ttl > 0 && ttl < min_ttl {
-                min_ttl = ttl;
+            // RFC 2181: 若 TTL 最高位为 1 (大于 2^31 - 1)，应视为 0
+            let valid_ttl = if ttl <= 0x7FFFFFFF { ttl } else { 0 };
+            if valid_ttl < min_ttl {
+                min_ttl = valid_ttl;
             }
             if qtype == QueryRecordType::A && rdlength == 4 {
                 let ipv4 = Ipv4Addr::new(
