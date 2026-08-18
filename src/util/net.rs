@@ -98,6 +98,8 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
         || addr.is_unspecified()
         || addr.is_multicast()
         || is_cgnat_ipv4(addr)
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0) // IETF Protocol Assignments (RFC 6890)
+        || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99) // 6to4 Relay Anycast (RFC 7526)
         || (octets[0] == 198 && (octets[1] & 0xfe) == 18)
         || octets[0] >= 240)
 }
@@ -111,6 +113,8 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || is_cgnat_ipv4(v4)
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0)
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 88 && v4.octets()[2] == 99)
         }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || !is_global_unicast_ipv6(v6),
     }
@@ -315,5 +319,11 @@ mod tests {
         assert!(!is_cgnat_ipv4(&public2));
         assert!(is_public_ipv4(&public1));
         assert!(is_public_ipv4(&public2));
+
+        // 保留段 RFC 6890 / RFC 7526 排除验证
+        let ietf_reserved = Ipv4Addr::from_str("192.0.0.1").unwrap();
+        let relay_6to4 = Ipv4Addr::from_str("192.88.99.1").unwrap();
+        assert!(!is_public_ipv4(&ietf_reserved));
+        assert!(!is_public_ipv4(&relay_6to4));
     }
 }
