@@ -30,6 +30,26 @@ impl UrlIpFetcher {
             client,
         }
     }
+    async fn read_limited_text(resp: reqwest::Response) -> Result<String, FetchError> {
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(FetchError::Other(format!(
+                "接口返回异常 HTTP 状态码: {}",
+                status
+            )));
+        }
+        let bytes = resp.bytes().await.map_err(FetchError::Http)?;
+        const MAX_RESPONSE_BYTES: usize = 65536;
+        if bytes.len() > MAX_RESPONSE_BYTES {
+            return Err(FetchError::Other(format!(
+                "响应体体积超过限制 ({} 字节 > {} 字节)",
+                bytes.len(),
+                MAX_RESPONSE_BYTES
+            )));
+        }
+        String::from_utf8(bytes.to_vec())
+            .map_err(|e| FetchError::Other(format!("响应内容非合法 UTF-8 文本: {}", e)))
+    }
 }
 
 #[async_trait]
@@ -42,7 +62,7 @@ impl IpFetcher for UrlIpFetcher {
         let mut last_err = None;
         for endpoint in &self.endpoints {
             match self.client.get(endpoint).send().await {
-                Ok(resp) => match resp.text().await {
+                Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => {
                         if let Some(ip) = extract_ipv4(&body, self.regex.as_deref()) {
                             tracing::debug!("从接口 {} 成功获取到 IPv4: {}", endpoint, ip);
@@ -53,8 +73,8 @@ impl IpFetcher for UrlIpFetcher {
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("读取接口 {} 响应体失败: {}", endpoint, e);
-                        last_err = Some(FetchError::Http(e));
+                        tracing::debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        last_err = Some(e);
                     }
                 },
                 Err(e) => {
@@ -76,7 +96,7 @@ impl IpFetcher for UrlIpFetcher {
         let mut last_err = None;
         for endpoint in &self.endpoints {
             match self.client.get(endpoint).send().await {
-                Ok(resp) => match resp.text().await {
+                Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => {
                         if let Some(ip) = extract_ipv6(&body, self.regex.as_deref()) {
                             tracing::debug!("从接口 {} 成功获取到 IPv6: {}", endpoint, ip);
@@ -87,8 +107,8 @@ impl IpFetcher for UrlIpFetcher {
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("读取接口 {} 响应体失败: {}", endpoint, e);
-                        last_err = Some(FetchError::Http(e));
+                        tracing::debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        last_err = Some(e);
                     }
                 },
                 Err(e) => {
