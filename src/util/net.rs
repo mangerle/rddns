@@ -1,9 +1,12 @@
 use regex::Regex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// IPv4 正则提取器（匹配常见 IPv4 地址文本）
+/// IPv4 正则提取器（严谨匹配四段点分十进制 IPv4 地址文本）
 static IPV4_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}").expect("编译 IPv4 正则表达式失败")
+    Regex::new(
+        r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
+    )
+    .expect("编译 IPv4 正则表达式失败")
 });
 
 /// 判断 IPv6 地址是否为全球可路由的单播地址 (Global Unicast Address)
@@ -218,6 +221,10 @@ mod tests {
             extract_ipv4(sample, None),
             Some(Ipv4Addr::new(114, 114, 114, 114))
         );
+
+        // 包含长数字串、版本号干扰时，依然精准匹配真实 IPv4
+        let noisy = "error_id=12345678, code=999999, ip: 223.5.5.5, ver=1.2.3.4";
+        assert_eq!(extract_ipv4(noisy, None), Some(Ipv4Addr::new(223, 5, 5, 5)));
     }
 
     #[test]
