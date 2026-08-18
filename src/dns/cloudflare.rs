@@ -96,7 +96,31 @@ impl CloudflareProvider {
             .send()
             .await?;
 
-        let data: CfApiResponse<Vec<CfZone>> = resp.json().await?;
+        let status = resp.status();
+        let body_text = resp.text().await?;
+
+        if !status.is_success() {
+            if let Ok(err_data) = serde_json::from_str::<CfApiResponse<Vec<CfZone>>>(&body_text) {
+                let msg = err_data
+                    .errors
+                    .into_iter()
+                    .map(|e| e.message)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !msg.is_empty() {
+                    return Err(DnsProviderError::ApiError {
+                        code: format!("CloudflareZoneError ({})", status),
+                        message: msg,
+                    });
+                }
+            }
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: body_text,
+            });
+        }
+
+        let data: CfApiResponse<Vec<CfZone>> = serde_json::from_str(&body_text)?;
         if !data.success {
             let msg = data
                 .errors
@@ -140,7 +164,31 @@ impl CloudflareProvider {
             .send()
             .await?;
 
-        let data: CfApiResponse<Vec<CfRecord>> = resp.json().await?;
+        let status = resp.status();
+        let body_text = resp.text().await?;
+
+        if !status.is_success() {
+            if let Ok(err_data) = serde_json::from_str::<CfApiResponse<Vec<CfRecord>>>(&body_text) {
+                let msg = err_data
+                    .errors
+                    .into_iter()
+                    .map(|e| e.message)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                if !msg.is_empty() {
+                    return Err(DnsProviderError::ApiError {
+                        code: format!("CloudflareRecordError ({})", status),
+                        message: msg,
+                    });
+                }
+            }
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: body_text,
+            });
+        }
+
+        let data: CfApiResponse<Vec<CfRecord>> = serde_json::from_str(&body_text)?;
         if !data.success {
             let msg = data
                 .errors
@@ -218,7 +266,31 @@ impl DnsProvider for CloudflareProvider {
                 .send()
                 .await?;
 
-            let result: CfApiResponse<CfRecord> = resp.json().await?;
+            let status = resp.status();
+            let body_text = resp.text().await?;
+
+            if !status.is_success() {
+                if let Ok(err_data) = serde_json::from_str::<CfApiResponse<CfRecord>>(&body_text) {
+                    let msg = err_data
+                        .errors
+                        .into_iter()
+                        .map(|e| e.message)
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if !msg.is_empty() {
+                        return Err(DnsProviderError::ApiError {
+                            code: format!("CloudflareUpdateFailed ({})", status),
+                            message: msg,
+                        });
+                    }
+                }
+                return Err(DnsProviderError::ApiError {
+                    code: status.to_string(),
+                    message: body_text,
+                });
+            }
+
+            let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
             if result.success {
                 tracing::info!(
                     "[{}] 成功更新域名 {} -> {}",
@@ -264,7 +336,31 @@ impl DnsProvider for CloudflareProvider {
                 .send()
                 .await?;
 
-            let result: CfApiResponse<CfRecord> = resp.json().await?;
+            let status = resp.status();
+            let body_text = resp.text().await?;
+
+            if !status.is_success() {
+                if let Ok(err_data) = serde_json::from_str::<CfApiResponse<CfRecord>>(&body_text) {
+                    let msg = err_data
+                        .errors
+                        .into_iter()
+                        .map(|e| e.message)
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    if !msg.is_empty() {
+                        return Err(DnsProviderError::ApiError {
+                            code: format!("CloudflareCreateFailed ({})", status),
+                            message: msg,
+                        });
+                    }
+                }
+                return Err(DnsProviderError::ApiError {
+                    code: status.to_string(),
+                    message: body_text,
+                });
+            }
+
+            let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
             if result.success {
                 tracing::info!(
                     "[{}] 成功创建域名 {} -> {}",
