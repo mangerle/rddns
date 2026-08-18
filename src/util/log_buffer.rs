@@ -89,30 +89,41 @@ impl BufferLogLayer {
     }
 }
 
+#[derive(Default)]
 struct LogVisitor {
-    message: String,
+    message: Option<String>,
+    extra_fields: Vec<String>,
+}
+
+impl LogVisitor {
+    fn finish(self) -> String {
+        let msg = self.message.unwrap_or_default();
+        if self.extra_fields.is_empty() {
+            msg
+        } else if msg.is_empty() {
+            self.extra_fields.join(", ")
+        } else {
+            format!("{} [{}]", msg, self.extra_fields.join(", "))
+        }
+    }
 }
 
 impl tracing::field::Visit for LogVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
-            self.message = format!("{:?}", value).trim_matches('"').to_string();
-        } else if self.message.is_empty() {
-            self.message = format!("{}: {:?}", field.name(), value);
+            self.message = Some(format!("{:?}", value).trim_matches('"').to_string());
         } else {
-            self.message
-                .push_str(&format!(", {}: {:?}", field.name(), value));
+            self.extra_fields
+                .push(format!("{}: {:?}", field.name(), value));
         }
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         if field.name() == "message" {
-            self.message = value.to_string();
-        } else if self.message.is_empty() {
-            self.message = format!("{}: {}", field.name(), value);
+            self.message = Some(value.to_string());
         } else {
-            self.message
-                .push_str(&format!(", {}: {}", field.name(), value));
+            self.extra_fields
+                .push(format!("{}: {}", field.name(), value));
         }
     }
 }
@@ -120,14 +131,42 @@ impl tracing::field::Visit for LogVisitor {
 impl<S: Subscriber> Layer<S> for BufferLogLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let metadata = event.metadata();
-        let mut visitor = LogVisitor {
-            message: String::new(),
-        };
+        let mut visitor = LogVisitor::default();
         event.record(&mut visitor);
 
-        if !visitor.message.is_empty() {
+        let final_message = visitor.finish();
+        if !final_message.is_empty() {
             self.buffer
-                .push(*metadata.level(), metadata.target(), visitor.message);
+                .push(*metadata.level(), metadata.target(), final_message);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_buffer_capacity() {
+        let buffer = LogBuffer::new(3);
+        buffer.push(Level::INFO, "test", "msg 1".to_string());
+        buffer.push(Level::INFO, "test", "msg 2".to_string());
+        buffer.push(Level::INFO, "test", "msg 3".to_string());
+        buffer.push(Level::INFO, "test", "msg 4".to_string());
+
+        let recent = buffer.get_recent();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].message, "msg 2");
+        assert_eq!(recent[2].message, "msg 4");
+    }
+
+    #[test]
+    fn test_log_visitor_finish() {
+        let mut visitor = LogVisitor::default();
+        visitor.message = Some("操作成功".to_string());
+        visitor.extra_fields.push("task: demo".to_string());
+        visitor.extra_fields.push("cost_ms: 12".to_string());
+
+        assert_eq!(visitor.finish(), "操作成功 [task: demo, cost_ms: 12]");
     }
 }
