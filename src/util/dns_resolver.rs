@@ -243,7 +243,7 @@ pub async fn query_dns_server(
         return Err(format!("无法解析 DNS 服务器地址 [{}]", server_addr));
     };
 
-    let query_id = fastrand::u16(1000..=65535);
+    let query_id = fastrand::u16(..);
     let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
 
     // 绑定随机本地 UDP 端口
@@ -265,10 +265,17 @@ pub async fn query_dns_server(
     let mut buf = [0u8; 512];
     let recv_fut = socket.recv_from(&mut buf);
 
-    let (len, _) = tokio::time::timeout(timeout_duration, recv_fut)
+    let (len, src_addr) = tokio::time::timeout(timeout_duration, recv_fut)
         .await
         .map_err(|_| format!("DNS 查询超时 ({} 秒)", timeout_duration.as_secs()))?
         .map_err(|e| format!("接收 DNS 响应失败: {}", e))?;
+
+    if src_addr != target_server {
+        return Err(format!(
+            "DNS 响应来源地址不匹配: 期望 {}, 实际 {}",
+            target_server, src_addr
+        ));
+    }
 
     let (ips, ttl_secs) = parse_dns_response_packet(&buf[..len], query_id, qtype)?;
 
