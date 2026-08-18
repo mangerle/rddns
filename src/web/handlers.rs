@@ -781,16 +781,24 @@ pub async fn get_version_handler() -> impl IntoResponse {
     }
 }
 
-/// 触发在线自动更新
+/// 触发在线自动更新并平滑热重启
 pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     tokio::spawn(async {
-        if let Err(e) = crate::util::update::upgrade_self().await {
-            tracing::error!("在线自动更新失败: {}", e);
+        match crate::util::update::upgrade_self().await {
+            Ok(()) => {
+                tracing::info!("🎉 自动更新完成，正在平滑重启服务以加载新版本...");
+                if let Err(e) = crate::util::update::restart_process() {
+                    tracing::error!("重启服务失败，请手动重启: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("在线自动更新失败: {}", e);
+            }
         }
     });
 
     Json(ApiResponse::ok(
-        "已在后台启动自动更新，下载替换完成后请重启服务",
+        "已在后台启动自动更新，文件下载替换完成后将自动平滑重启服务",
     ))
 }
 

@@ -216,6 +216,40 @@ pub async fn upgrade_self() -> Result<(), String> {
     Ok(())
 }
 
+/// 重启当前程序进程以加载新升级的二进制文件
+pub fn restart_process() -> Result<(), std::io::Error> {
+    let current_exe = env::current_exe()?;
+    let args: Vec<String> = env::args().skip(1).collect();
+    let mut cmd = std::process::Command::new(&current_exe);
+    cmd.args(&args);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::process::Stdio;
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+    }
+
+    cmd.spawn()?;
+
+    // 延迟 1.5 秒后安全退出当前旧进程，确保日志与响应顺利发出
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+        std::process::exit(0);
+    });
+
+    Ok(())
+}
+
 /// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包、Tar.gz 归档与原始二进制)
 fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     // 1. 处理 ZIP 归档
