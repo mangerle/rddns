@@ -142,6 +142,12 @@ impl DnsProvider for AliDnsProvider {
         let rr = domain.sub_domain_or_at().to_string();
         let root_domain = domain.root_domain.clone();
         let ttl_val = ttl.unwrap_or(600).max(1);
+        let record_line = domain
+            .custom_params
+            .get("Line")
+            .or_else(|| domain.custom_params.get("line"))
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
 
         // 1. 查询现有解析记录列表 (使用 DescribeSubDomainRecords 精确检索，规避 20 条记录的分页截断)
         let list_resp: AliDescribeRecordsResponse = self
@@ -159,10 +165,16 @@ impl DnsProvider for AliDnsProvider {
             .and_then(|dr| dr.record)
             .unwrap_or_default();
 
-        // 找到 RR 与 Type 匹配的记录
+        // 找到 RR、Type 与 Line 匹配的记录
         let matched_record = records.into_iter().find(|r| {
-            r.rr.eq_ignore_ascii_case(&rr)
-                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+            let rr_match = r.rr.eq_ignore_ascii_case(&rr);
+            let type_match = r.record_type.eq_ignore_ascii_case(&record_type.to_string());
+            let line_match = if let Some(ref l) = r.line {
+                l.eq_ignore_ascii_case(&record_line)
+            } else {
+                record_line.eq_ignore_ascii_case("default")
+            };
+            rr_match && type_match && line_match
         });
 
         if let Some(existing) = matched_record {
@@ -192,6 +204,7 @@ impl DnsProvider for AliDnsProvider {
                         ("Type", record_type.to_string()),
                         ("Value", target_ip_str.clone()),
                         ("TTL", ttl_val.to_string()),
+                        ("Line", record_line),
                     ],
                 )
                 .await?;
@@ -220,6 +233,7 @@ impl DnsProvider for AliDnsProvider {
                         ("Type", record_type.to_string()),
                         ("Value", target_ip_str.clone()),
                         ("TTL", ttl_val.to_string()),
+                        ("Line", record_line),
                     ],
                 )
                 .await?;
@@ -235,7 +249,7 @@ impl DnsProvider for AliDnsProvider {
                 record_type,
                 target_ip: target_ip_str,
                 status: SyncStatus::Created,
-                message: "记录添加成功".to_string(),
+                message: "记录创建成功".to_string(),
             })
         }
     }
@@ -261,6 +275,7 @@ struct AliRecordItem {
     #[serde(rename = "Type")]
     record_type: String,
     value: String,
+    line: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
