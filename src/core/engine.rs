@@ -292,6 +292,15 @@ impl DdnsEngine {
 
     /// 启动引擎后台主循环
     pub async fn run_loop(mut self, cancel_token: CancellationToken) {
+        // 开机网络探测：在后台异步探测网络就绪（最大等待 120 秒），若收到退出信号可提前退出
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                tracing::info!("收到停止信号，DDNS 调度引擎平滑退出");
+                return;
+            }
+            _ = crate::util::wait_internet::wait_for_internet(120, 3) => {}
+        }
+
         let mut config_rx = self.config_manager.subscribe();
         let initial_conf = self.config_manager.get_config();
         let mut current_interval = Duration::from_secs(initial_conf.interval_secs.max(5));

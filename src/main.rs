@@ -197,10 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cancel_token = CancellationToken::new();
 
-    // 3. 开机自启网络就绪探测（最大等待 120 秒，每 3 秒重试一次，规避开机未拨号完成时的大量网络异常）
-    util::wait_internet::wait_for_internet(120, 3).await;
-
-    // 4. 初始化 DDNS 调度引擎
+    // 3. 初始化 DDNS 调度引擎 (网络探测将在引擎后台异步执行，避免阻塞 Web 界面启动)
     let (engine, trigger_tx) = DdnsEngine::new(config_manager.clone());
     let engine_token = cancel_token.clone();
     let engine_handle = tokio::spawn(async move {
