@@ -97,28 +97,63 @@ pub fn create_http_client_builder() -> reqwest::ClientBuilder {
     builder
 }
 
-/// 根据指定网卡设备名称寻找出站 IP 地址
-pub fn find_interface_ip(iface_name: &str) -> Option<IpAddr> {
+/// 根据指定网卡设备名称寻找出站 IPv4 地址 (排除 Loopback 与未指定地址)
+pub fn find_interface_ipv4(iface_name: &str) -> Option<std::net::Ipv4Addr> {
     if let Ok(interfaces) = NetworkInterface::show() {
         for iface in interfaces {
             if iface.name.eq_ignore_ascii_case(iface_name) {
-                // 优先选择第一个有效 IP
+                let mut fallback = None;
                 for addr in iface.addr {
-                    match addr {
-                        Addr::V4(v4) => {
-                            if !v4.ip.is_loopback() {
-                                return Some(IpAddr::V4(v4.ip));
-                            }
+                    if let Addr::V4(v4) = addr
+                        && !v4.ip.is_loopback()
+                        && !v4.ip.is_unspecified()
+                    {
+                        if crate::util::net::is_public_ipv4(&v4.ip) {
+                            return Some(v4.ip);
                         }
-                        Addr::V6(v6) => {
-                            if !v6.ip.is_loopback() {
-                                return Some(IpAddr::V6(v6.ip));
-                            }
+                        if fallback.is_none() {
+                            fallback = Some(v4.ip);
                         }
                     }
                 }
+                if fallback.is_some() {
+                    return fallback;
+                }
             }
         }
+    }
+    None
+}
+
+/// 根据指定网卡设备名称寻找出站 IPv6 地址 (必须为全球单播地址，过滤 Link-Local 与 ULA)
+pub fn find_interface_ipv6(iface_name: &str) -> Option<std::net::Ipv6Addr> {
+    if let Ok(interfaces) = NetworkInterface::show() {
+        for iface in interfaces {
+            if iface.name.eq_ignore_ascii_case(iface_name) {
+                let mut v6_candidates = Vec::new();
+                for addr in iface.addr {
+                    if let Addr::V6(v6) = addr
+                        && crate::util::net::is_global_unicast_ipv6(&v6.ip)
+                    {
+                        v6_candidates.push(v6.ip);
+                    }
+                }
+                if let Some(best) = crate::util::net::select_best_ipv6(&v6_candidates) {
+                    return Some(best);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 根据指定网卡设备名称寻找最佳出站 IP 地址 (优先有效 IPv4，其次全球单播 IPv6，严格过滤 fe80:: 链路本地地址)
+pub fn find_interface_ip(iface_name: &str) -> Option<IpAddr> {
+    if let Some(v4) = find_interface_ipv4(iface_name) {
+        return Some(IpAddr::V4(v4));
+    }
+    if let Some(v6) = find_interface_ipv6(iface_name) {
+        return Some(IpAddr::V6(v6));
     }
     None
 }
