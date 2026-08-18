@@ -46,6 +46,10 @@ impl DdnsEngine {
 
         let mut join_set = tokio::task::JoinSet::new();
         for task in config.dns_tasks.clone() {
+            if !task.enabled {
+                tracing::debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
+                continue;
+            }
             let config_clone = config.clone();
             let dispatcher_clone = dispatcher.clone();
             let state_manager = self.state_manager.clone();
@@ -72,6 +76,11 @@ impl DdnsEngine {
         state_manager: &StateManager,
         force_sync: bool,
     ) {
+        if !task.enabled {
+            tracing::debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
+            return;
+        }
+
         if !task.provider.is_configured() {
             tracing::info!(
                 "[{}] 未配置有效的 DNS 服务商认证凭据，跳过同步（请访问 Web 界面 http://localhost:9876 完成配置）",
@@ -488,3 +497,48 @@ impl DdnsEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{IpFetchConfig, IpSourceType, ProviderConfig};
+
+    #[tokio::test]
+    async fn test_disabled_task_skipped_in_run_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+
+        config_manager
+            .update_config(AppConfig {
+                dns_tasks: vec![DnsTaskConfig {
+                    name: "已关闭的任务".to_string(),
+                    enabled: false,
+                    provider: ProviderConfig::Cloudflare {
+                        api_token: Some("dummy_token".to_string()),
+                        api_key: None,
+                        email: None,
+                    },
+                    ipv4: IpFetchConfig {
+                        enabled: true,
+                        source_type: IpSourceType::Url,
+                        url_endpoints: vec!["https://api.ipify.org".to_string()],
+                        domains: vec!["test.example.com".to_string()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let (engine, _tx) = DdnsEngine::new(config_manager.clone());
+        engine.run_once(false).await;
+
+        // 验证由于任务被禁用，state_manager 中不应存在该任务的状态记录（从未执行 process_task）
+        let state = engine.state_manager.get_task_state("已关闭的任务");
+        assert_eq!(state.last_sync_time, None);
+        assert_eq!(state.check_counter, 0);
+    }
+}
+

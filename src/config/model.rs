@@ -83,6 +83,10 @@ pub struct DnsTaskConfig {
     #[serde(default = "default_task_name")]
     pub name: String,
 
+    /// 是否启用此任务（默认 true 启用）
+    #[serde(default = "default_task_enabled")]
+    pub enabled: bool,
+
     /// DNS 服务商配置
     pub provider: ProviderConfig,
 
@@ -115,10 +119,15 @@ fn default_task_name() -> String {
     "默认任务".to_string()
 }
 
+fn default_task_enabled() -> bool {
+    true
+}
+
 impl Default for DnsTaskConfig {
     fn default() -> Self {
         Self {
             name: default_task_name(),
+            enabled: default_task_enabled(),
             provider: ProviderConfig::Cloudflare {
                 api_token: None,
                 api_key: None,
