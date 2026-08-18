@@ -199,8 +199,14 @@ impl DnsProvider for TencentCloudProvider {
         };
 
         let matched = records.into_iter().find(|r| {
-            r.name.eq_ignore_ascii_case(&sub_domain)
-                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+            let name_match = r.name.eq_ignore_ascii_case(&sub_domain);
+            let type_match = r.record_type.eq_ignore_ascii_case(&record_type.to_string());
+            let line_match = if let Some(ref l) = r.line {
+                l.eq_ignore_ascii_case(&record_line)
+            } else {
+                true
+            };
+            name_match && type_match && line_match
         });
 
         if let Some(existing) = matched {
@@ -314,4 +320,6 @@ struct TcRecordItem {
     record_type: String,
     #[serde(rename = "Value")]
     value: String,
+    #[serde(rename = "Line")]
+    line: Option<String>,
 }
