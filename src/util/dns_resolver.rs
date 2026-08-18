@@ -143,6 +143,10 @@ fn parse_dns_response_packet(
     }
 
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
+    let tc = (flags & 0x0200) != 0;
+    if tc {
+        tracing::warn!("DNS 响应报文被服务器截断 (TC=1)，可能仅包含部分 IP 记录");
+    }
     let rcode = flags & 0x000F;
     if rcode != 0 {
         return Err(format!("DNS 解析服务器返回错误码 (RCODE={})", rcode));
@@ -167,14 +171,9 @@ fn parse_dns_response_packet(
 
     // 解析 Answer 部分
     for _ in 0..ancount {
-        if offset >= buf.len() {
-            break;
-        }
-
         skip_dns_name(buf, &mut offset)?;
-
         if offset + 10 > buf.len() {
-            return Err("DNS Answer 记录头部被截断".to_string());
+            return Err("DNS Answer 区段被截断".to_string());
         }
 
         let atype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
@@ -218,19 +217,18 @@ fn parse_dns_response_packet(
 }
 
 /// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存)
-#[allow(dead_code)]
 pub async fn query_dns_server(
     server_addr: &str,
     domain: &str,
     qtype: QueryRecordType,
     timeout_duration: Duration,
 ) -> Result<Vec<IpAddr>, String> {
-    let clean_domain = domain.trim().to_ascii_lowercase();
+    let clean_domain = domain.trim_end_matches('.').to_lowercase();
     let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
 
-    // 1. 检查内存缓存是否有效
+    // 1. 检查全局内存缓存
     if let Some(entry) = GLOBAL_DNS_CACHE.read().get(&cache_key)
-        && Instant::now() < entry.expires_at
+        && entry.expires_at > Instant::now()
     {
         return Ok(entry.ips.clone());
     }
@@ -243,9 +241,6 @@ pub async fn query_dns_server(
         return Err(format!("无法解析 DNS 服务器地址 [{}]", server_addr));
     };
 
-    let query_id = fastrand::u16(..);
-    let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
-
     // 绑定随机本地 UDP 端口
     let bind_addr = if target_server.is_ipv6() {
         "[::]:0"
@@ -253,50 +248,73 @@ pub async fn query_dns_server(
         "0.0.0.0:0"
     };
 
-    let socket = UdpSocket::bind(bind_addr)
-        .await
-        .map_err(|e| format!("绑定本地 UDP 失败: {}", e))?;
+    let mut last_err = None;
+    for attempt in 1..=2 {
+        let query_id = fastrand::u16(..);
+        let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
 
-    socket
-        .send_to(&packet, target_server)
-        .await
-        .map_err(|e| format!("向 DNS 服务器 {} 发送查询失败: {}", target_server, e))?;
+        let socket = match UdpSocket::bind(bind_addr).await {
+            Ok(s) => s,
+            Err(e) => return Err(format!("绑定本地 UDP 失败: {}", e)),
+        };
 
-    let mut buf = [0u8; 512];
-    let recv_fut = socket.recv_from(&mut buf);
-
-    let (len, src_addr) = tokio::time::timeout(timeout_duration, recv_fut)
-        .await
-        .map_err(|_| format!("DNS 查询超时 ({} 秒)", timeout_duration.as_secs()))?
-        .map_err(|e| format!("接收 DNS 响应失败: {}", e))?;
-
-    if src_addr != target_server {
-        return Err(format!(
-            "DNS 响应来源地址不匹配: 期望 {}, 实际 {}",
-            target_server, src_addr
-        ));
-    }
-
-    let (ips, ttl_secs) = parse_dns_response_packet(&buf[..len], query_id, qtype)?;
-
-    if !ips.is_empty() {
-        let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
-        let mut cache = GLOBAL_DNS_CACHE.write();
-        // 若容量达到上限 (512 条)，主动清理已过期条目
-        if cache.len() >= 512 {
-            let now = Instant::now();
-            cache.retain(|_, entry| entry.expires_at > now);
+        if let Err(e) = socket.send_to(&packet, target_server).await {
+            last_err = Some(format!(
+                "向 DNS 服务器 {} 发送查询失败: {}",
+                target_server, e
+            ));
+            continue;
         }
-        cache.insert(
-            cache_key,
-            DnsCacheEntry {
-                ips: ips.clone(),
-                expires_at,
-            },
-        );
+
+        let mut buf = [0u8; 512];
+        let recv_fut = socket.recv_from(&mut buf);
+
+        let (len, src_addr) = match tokio::time::timeout(timeout_duration, recv_fut).await {
+            Ok(Ok((l, addr))) => (l, addr),
+            Ok(Err(e)) => {
+                last_err = Some(format!("接收 DNS 响应失败: {}", e));
+                continue;
+            }
+            Err(_) => {
+                last_err = Some(format!("DNS 查询超时 (第 {} 次尝试)", attempt));
+                continue;
+            }
+        };
+
+        if src_addr != target_server {
+            last_err = Some(format!(
+                "DNS 响应来源地址不匹配: 期望 {}, 实际 {}",
+                target_server, src_addr
+            ));
+            continue;
+        }
+
+        match parse_dns_response_packet(&buf[..len], query_id, qtype) {
+            Ok((ips, ttl_secs)) => {
+                if !ips.is_empty() {
+                    let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
+                    let mut cache = GLOBAL_DNS_CACHE.write();
+                    if cache.len() >= 512 {
+                        let now = Instant::now();
+                        cache.retain(|_, entry| entry.expires_at > now);
+                    }
+                    cache.insert(
+                        cache_key,
+                        DnsCacheEntry {
+                            ips: ips.clone(),
+                            expires_at,
+                        },
+                    );
+                }
+                return Ok(ips);
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
     }
 
-    Ok(ips)
+    Err(last_err.unwrap_or_else(|| "DNS 查询失败".to_string()))
 }
 
 #[cfg(test)]
