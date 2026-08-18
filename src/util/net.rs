@@ -78,6 +78,17 @@ pub fn is_global_unicast_ipv6(addr: &Ipv6Addr) -> bool {
         return false;
     }
 
+    // 排除过渡与隧道前缀 (6to4 2002::/16, Teredo 2001::/32, NAT64 64:ff9b::/96)
+    if segments[0] == 0x2002 {
+        return false;
+    }
+    if segments[0] == 0x2001 && segments[1] == 0 {
+        return false;
+    }
+    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+        return false;
+    }
+
     true
 }
 
@@ -238,6 +249,14 @@ mod tests {
 
         let loopback = Ipv6Addr::from_str("::1").unwrap();
         assert!(!is_global_unicast_ipv6(&loopback));
+
+        // 6to4, Teredo, NAT64 排除验证
+        let six_to_four = Ipv6Addr::from_str("2002:c000:201::1").unwrap();
+        let teredo = Ipv6Addr::from_str("2001:0000:4136:e378:8000:63bf:3fff:fdd2").unwrap();
+        let nat64 = Ipv6Addr::from_str("64:ff9b::192.0.2.33").unwrap();
+        assert!(!is_global_unicast_ipv6(&six_to_four));
+        assert!(!is_global_unicast_ipv6(&teredo));
+        assert!(!is_global_unicast_ipv6(&nat64));
     }
 
     #[test]
