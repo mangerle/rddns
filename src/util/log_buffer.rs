@@ -168,10 +168,10 @@ mod tests {
 
     #[test]
     fn test_log_visitor_finish() {
-        let mut visitor = LogVisitor::default();
-        visitor.message = Some("操作成功".to_string());
-        visitor.extra_fields.push("task: demo".to_string());
-        visitor.extra_fields.push("cost_ms: 12".to_string());
+        let visitor = LogVisitor {
+            message: Some("操作成功".to_string()),
+            extra_fields: vec!["task: demo".to_string(), "cost_ms: 12".to_string()],
+        };
 
         assert_eq!(visitor.finish(), "操作成功 [task: demo, cost_ms: 12]");
     }
