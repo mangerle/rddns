@@ -24,14 +24,18 @@ pub struct TencentCloudProvider {
 }
 
 impl TencentCloudProvider {
-    pub fn new(secret_id: String, secret_key: String) -> Result<Self, DnsProviderError> {
+    pub fn new(
+        secret_id: String,
+        secret_key: String,
+        http_interface: Option<&str>,
+    ) -> Result<Self, DnsProviderError> {
         if secret_id.trim().is_empty() || secret_key.trim().is_empty() {
             return Err(DnsProviderError::MissingCredentials(
                 "腾讯云 DNSPod 需要配置 SecretId 与 SecretKey".to_string(),
             ));
         }
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()?;
 

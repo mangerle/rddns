@@ -43,7 +43,7 @@ struct NsOneRecordReq<'a> {
 }
 
 impl NsOneProvider {
-    pub fn new(api_key: String) -> Result<Self, DnsProviderError> {
+    pub fn new(api_key: String, http_interface: Option<&str>) -> Result<Self, DnsProviderError> {
         if api_key.trim().is_empty() {
             return Err(DnsProviderError::MissingCredentials(
                 "IBM NS1 Connect 需要配置 API Key (Secret)".to_string(),
@@ -58,7 +58,7 @@ impl NsOneProvider {
         auth_val.set_sensitive(true);
         headers.insert("X-NSONE-Key", auth_val);
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .default_headers(headers)
             .build()?;

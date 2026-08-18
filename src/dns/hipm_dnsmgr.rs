@@ -42,7 +42,11 @@ struct DnsMgrRecordItem {
 }
 
 impl HipmDnsMgrProvider {
-    pub fn new(endpoint: Option<String>, api_token: String) -> Result<Self, DnsProviderError> {
+    pub fn new(
+        endpoint: Option<String>,
+        api_token: String,
+        http_interface: Option<&str>,
+    ) -> Result<Self, DnsProviderError> {
         if api_token.trim().is_empty() {
             return Err(DnsProviderError::MissingCredentials(
                 "HiPM DNSMgr 需要配置 API Token (Secret)".to_string(),
@@ -66,7 +70,7 @@ impl HipmDnsMgrProvider {
         auth_val.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_val);
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .default_headers(headers)
             .build()?;

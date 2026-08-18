@@ -51,36 +51,42 @@ impl NowcnProvider {
     pub fn new_nowcn(
         access_instance_id: String,
         secret_key: String,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         Self::new(
             access_instance_id,
             secret_key,
             NOWCN_ENDPOINT.to_string(),
             "时代互联 (NowCN)",
+            http_interface,
         )
     }
 
     pub fn new_eranet(
         access_instance_id: String,
         secret_key: String,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         Self::new(
             access_instance_id,
             secret_key,
             ERANET_ENDPOINT.to_string(),
             "时代互联国际版 (Eranet)",
+            http_interface,
         )
     }
 
     pub fn new_tnethk(
         access_instance_id: String,
         secret_key: String,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         Self::new(
             access_instance_id,
             secret_key,
             TNETHK_ENDPOINT.to_string(),
             "TNetHK",
+            http_interface,
         )
     }
 
@@ -89,6 +95,7 @@ impl NowcnProvider {
         secret_key: String,
         endpoint: String,
         provider_name: &'static str,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         if access_instance_id.trim().is_empty() || secret_key.trim().is_empty() {
             return Err(DnsProviderError::MissingCredentials(format!(
@@ -97,7 +104,7 @@ impl NowcnProvider {
             )));
         }
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()?;
 

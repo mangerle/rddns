@@ -168,7 +168,7 @@ impl DdnsEngine {
 
         // 3. 构建 DNS 提供商驱动
         let dns_provider: Arc<dyn crate::dns::trait_def::DnsProvider> =
-            match create_dns_provider(&task.provider) {
+            match create_dns_provider(&task.provider, task.http_interface.as_deref()) {
                 Ok(p) => p,
                 Err(e) => {
                     tracing::error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);

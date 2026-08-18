@@ -25,6 +25,7 @@ impl AliDnsProvider {
         access_key_id: String,
         access_key_secret: String,
         endpoint: Option<String>,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         if access_key_id.trim().is_empty() || access_key_secret.trim().is_empty() {
             return Err(DnsProviderError::MissingCredentials(
@@ -36,7 +37,7 @@ impl AliDnsProvider {
             .filter(|e| !e.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ALIDNS_ENDPOINT.to_string());
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()?;
 

@@ -55,7 +55,12 @@ struct HwErrorResponse {
 }
 
 impl HuaweiDnsProvider {
-    pub fn new(ak: String, sk: String, endpoint: Option<String>) -> Self {
+    pub fn new(
+        ak: String,
+        sk: String,
+        endpoint: Option<String>,
+        http_interface: Option<&str>,
+    ) -> Self {
         let ep = endpoint
             .unwrap_or_default()
             .trim()
@@ -67,7 +72,7 @@ impl HuaweiDnsProvider {
             ep
         };
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();

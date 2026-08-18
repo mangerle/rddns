@@ -24,8 +24,9 @@ impl CallbackProvider {
         method: String,
         headers: Option<HashMap<String, String>>,
         body: Option<String>,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()?;
 

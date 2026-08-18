@@ -36,8 +36,8 @@ struct NameComListResp {
 }
 
 impl NameComProvider {
-    pub fn new(username: String, api_token: String) -> Self {
-        let client = crate::util::http::create_http_client_builder()
+    pub fn new(username: String, api_token: String, http_interface: Option<&str>) -> Self {
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();

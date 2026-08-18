@@ -28,6 +28,7 @@ impl CloudflareProvider {
         api_token: Option<String>,
         api_key: Option<String>,
         email: Option<String>,
+        http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
         let has_token = api_token
             .as_ref()
@@ -44,7 +45,7 @@ impl CloudflareProvider {
             ));
         }
 
-        let client = crate::util::http::create_http_client_builder()
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()?;
 

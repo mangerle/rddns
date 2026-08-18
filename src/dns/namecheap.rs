@@ -16,8 +16,8 @@ pub struct NamecheapProvider {
 }
 
 impl NamecheapProvider {
-    pub fn new(password: String) -> Self {
-        let client = crate::util::http::create_http_client_builder()
+    pub fn new(password: String, http_interface: Option<&str>) -> Self {
+        let client = crate::util::http::create_task_http_client_builder(http_interface)
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_default();
