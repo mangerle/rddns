@@ -270,7 +270,9 @@ struct AliDomainRecordsWrapper {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct AliRecordItem {
+    #[serde(alias = "RecordId", alias = "RecordID")]
     record_id: String,
+    #[serde(rename = "RR", alias = "Rr", alias = "rr")]
     rr: String,
     #[serde(rename = "Type")]
     record_type: String,
@@ -283,4 +285,48 @@ struct AliRecordItem {
 struct AliErrorResponse {
     code: String,
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ali_describe_subdomain_records_deserialization() {
+        let sample_json = r#"{
+            "TotalCount": 1,
+            "PageSize": 20,
+            "RequestId": "2B4C5F74-B32D-4E10-91D0-1234567890AB",
+            "PageNumber": 1,
+            "DomainRecords": {
+                "Record": [
+                    {
+                        "Status": "ENABLE",
+                        "Type": "A",
+                        "Weight": 1,
+                        "Value": "1.2.3.4",
+                        "TTL": 600,
+                        "RecordId": "999888777",
+                        "RR": "@",
+                        "DomainName": "mangerle.asia",
+                        "Locked": false,
+                        "Line": "default"
+                    }
+                ]
+            }
+        }"#;
+
+        let parsed: AliDescribeRecordsResponse = serde_json::from_str(sample_json)
+            .expect("阿里云 DescribeSubDomainRecords 响应反序列化失败");
+        let records = parsed
+            .domain_records
+            .and_then(|dr| dr.record)
+            .expect("缺少 Record 列表");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].record_id, "999888777");
+        assert_eq!(records[0].rr, "@");
+        assert_eq!(records[0].record_type, "A");
+        assert_eq!(records[0].value, "1.2.3.4");
+        assert_eq!(records[0].line.as_deref(), Some("default"));
+    }
 }
