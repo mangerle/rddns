@@ -49,9 +49,14 @@ impl CommandIpFetcher {
                 output.status.code(),
                 stderr
             );
+            return Err(FetchError::Other(format!(
+                "命令执行退出码异常 ({:?}): {}",
+                output.status.code(),
+                stderr.trim()
+            )));
         }
 
-        Ok(format!("{}\n{}", stdout, stderr))
+        Ok(stdout)
     }
 }
 
