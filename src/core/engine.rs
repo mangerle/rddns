@@ -5,9 +5,11 @@ use crate::core::state::StateManager;
 use crate::dns::create_dns_provider;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
-use crate::notifier::dispatcher::NotificationDispatcher;
+use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use chrono::Local;
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +21,7 @@ pub struct DdnsEngine {
     config_manager: Arc<ConfigManager>,
     state_manager: StateManager,
     trigger_receiver: mpsc::Receiver<()>,
+    error_trackers: ErrorTrackerMap,
 }
 
 impl DdnsEngine {
@@ -28,6 +31,7 @@ impl DdnsEngine {
             config_manager,
             state_manager: StateManager::new(),
             trigger_receiver: rx,
+            error_trackers: Arc::new(RwLock::new(HashMap::new())),
         };
         (engine, tx)
     }
@@ -35,7 +39,10 @@ impl DdnsEngine {
     /// 执行单次全量任务检查与同步
     pub async fn run_once(&self, force_cloud_sync: bool) {
         let config = self.config_manager.get_config();
-        let dispatcher = NotificationDispatcher::new(config.notifications.clone());
+        let dispatcher = NotificationDispatcher::new_with_trackers(
+            config.notifications.clone(),
+            self.error_trackers.clone(),
+        );
 
         for task in &config.dns_tasks {
             self.process_task(task, &config, &dispatcher, force_cloud_sync)

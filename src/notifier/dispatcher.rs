@@ -15,22 +15,29 @@ use std::time::{Duration, Instant};
 
 /// 错误告警状态跟踪（用于防风暴抑制）
 #[derive(Debug, Clone)]
-struct ErrorTracker {
-    last_error_summary: String,
-    last_notified_at: Instant,
-    suppressed_count: u32,
+pub struct ErrorTracker {
+    pub last_error_summary: String,
+    pub last_notified_at: Instant,
+    pub suppressed_count: u32,
 }
+
+pub type ErrorTrackerMap = Arc<RwLock<HashMap<String, ErrorTracker>>>;
 
 /// 通知分发器
 #[derive(Clone)]
 pub struct NotificationDispatcher {
     notifiers: Vec<Arc<dyn Notifier>>,
     config: NotificationConfig,
-    error_trackers: Arc<RwLock<HashMap<String, ErrorTracker>>>,
+    error_trackers: ErrorTrackerMap,
 }
 
 impl NotificationDispatcher {
     pub fn new(config: NotificationConfig) -> Self {
+        Self::new_with_trackers(config, Arc::new(RwLock::new(HashMap::new())))
+    }
+
+    /// 支持传入外部持久化的错误跟踪器（供 Engine 跨周期保留冷却状态）
+    pub fn new_with_trackers(config: NotificationConfig, trackers: ErrorTrackerMap) -> Self {
         let mut notifiers: Vec<Arc<dyn Notifier>> = Vec::new();
 
         if let Some(ref wx) = config.wechat_official
@@ -77,7 +84,7 @@ impl NotificationDispatcher {
         Self {
             notifiers,
             config,
-            error_trackers: Arc::new(RwLock::new(HashMap::new())),
+            error_trackers: trackers,
         }
     }
 
