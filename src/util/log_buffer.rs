@@ -111,7 +111,13 @@ impl LogVisitor {
 impl tracing::field::Visit for LogVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
-            self.message = Some(format!("{:?}", value).trim_matches('"').to_string());
+            let s = format!("{:?}", value);
+            let cleaned = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+                &s[1..s.len() - 1]
+            } else {
+                &s
+            };
+            self.message = Some(cleaned.to_string());
         } else {
             self.extra_fields
                 .push(format!("{}: {:?}", field.name(), value));
