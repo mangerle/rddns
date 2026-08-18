@@ -42,11 +42,16 @@ pub fn create_ip_fetcher(
         }
         IpSourceType::Command => {
             if let Some(ref cmd) = config.cmd {
-                Some(Arc::new(CommandIpFetcher::new(
-                    cmd.clone(),
-                    config.regex.clone(),
-                    10,
-                )))
+                if !cmd.trim().is_empty() {
+                    Some(Arc::new(CommandIpFetcher::new(
+                        cmd.trim().to_string(),
+                        config.regex.clone(),
+                        10,
+                    )))
+                } else {
+                    tracing::warn!("配置为命令获取但指定的命令为空");
+                    None
+                }
             } else {
                 tracing::warn!("配置为命令获取但未指定命令");
                 None
