@@ -585,6 +585,16 @@ pub async fn save_config_handler(
 ) -> impl IntoResponse {
     let mut new_config = payload.config;
 
+    // 校验任务名称非空
+    for task in &new_config.dns_tasks {
+        if task.name.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()>::err("任务名称不能为空".to_string())),
+            );
+        }
+    }
+
     // 如果用户提交了新密码，生成 bcrypt 哈希
     if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
@@ -900,10 +910,19 @@ pub async fn login_auth_handler(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    let username = req.username.trim();
+    let password = req.password.trim();
+    if username.is_empty() || password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err("用户名和密码不能为空".to_string())),
+        );
+    }
+
     let config = state.config_manager.get_config();
     if let Some(ref auth) = config.auth {
-        if req.username == auth.username
-            && bcrypt::verify(&req.password, &auth.password_hash).unwrap_or(false)
+        if username == auth.username
+            && bcrypt::verify(password, &auth.password_hash).unwrap_or(false)
         {
             return (StatusCode::OK, Json(ApiResponse::ok("登录成功")));
         }
