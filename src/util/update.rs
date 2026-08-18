@@ -262,13 +262,17 @@ fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
             let mut file = archive
                 .by_index(i)
                 .map_err(|e| format!("读取 ZIP 压缩文件条目失败: {}", e))?;
-            let entry_name = file.name().to_string();
+
+            if file.is_dir() {
+                continue;
+            }
+
+            let entry_name = file.name().replace('\\', "/");
+            let file_name = entry_name.split('/').next_back().unwrap_or(&entry_name);
 
             // 寻找主程序文件 (如 rddns 或 rddns.exe)
-            if entry_name.ends_with("rddns.exe")
-                || entry_name.ends_with("rddns")
-                || entry_name == "rddns.exe"
-                || entry_name == "rddns"
+            if file_name.eq_ignore_ascii_case("rddns.exe")
+                || file_name.eq_ignore_ascii_case("rddns")
             {
                 let mut out = Vec::new();
                 std::io::copy(&mut file, &mut out)
@@ -290,14 +294,18 @@ fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
 
         if let Ok(entries) = archive.entries() {
             for mut entry in entries.flatten() {
+                if entry.header().entry_type().is_dir() {
+                    continue;
+                }
+
                 let entry_path = entry
                     .path()
-                    .map(|p| p.to_string_lossy().to_string())
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_default();
-                if entry_path.ends_with("rddns.exe")
-                    || entry_path.ends_with("rddns")
-                    || entry_path == "rddns.exe"
-                    || entry_path == "rddns"
+                let file_name = entry_path.split('/').next_back().unwrap_or(&entry_path);
+
+                if file_name.eq_ignore_ascii_case("rddns.exe")
+                    || file_name.eq_ignore_ascii_case("rddns")
                 {
                     let mut out = Vec::new();
                     std::io::copy(&mut entry, &mut out)
