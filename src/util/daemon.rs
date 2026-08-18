@@ -1,5 +1,5 @@
+use anyhow::{Context, Result};
 use std::env;
-use std::io::Error;
 use std::process::Command;
 
 /// 后台子进程标识环境变量
@@ -11,8 +11,8 @@ pub fn is_daemon_child() -> bool {
 }
 
 /// 将当前程序作为后台独立守护进程派生并脱离控制台
-pub fn run_as_daemon() -> Result<(), Error> {
-    let current_exe = env::current_exe()?;
+pub fn run_as_daemon() -> Result<()> {
+    let current_exe = env::current_exe().context("获取当前程序执行路径失败")?;
     let args: Vec<String> = env::args()
         .skip(1)
         .filter(|arg| arg != "-d" && arg != "--daemon")
@@ -41,9 +41,7 @@ pub fn run_as_daemon() -> Result<(), Error> {
             .process_group(0);
     }
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| Error::other(format!("派生后台守护进程失败: {}", e)))?;
+    let child = cmd.spawn().context("派生后台守护进程失败")?;
 
     println!("==========================================");
     println!("🚀 RDDNS 已成功在后台静默运行！");

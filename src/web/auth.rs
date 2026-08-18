@@ -12,17 +12,18 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
     let config = state.config_manager.get_config();
 
     // 如果未配置用户认证凭据：所有受保护接口直接拦截，强制要求先初始化管理员账号
-    if config.auth.is_none() {
-        return Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .body(axum::body::Body::from(
-                r#"{"success":false,"message":"🛡️ 系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
-            ))
-            .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
-    }
-
-    let auth_conf = config.auth.as_ref().unwrap();
+    let auth_conf = match config.auth.as_ref() {
+        Some(conf) => conf,
+        None => {
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .body(axum::body::Body::from(
+                    r#"{"success":false,"message":"🛡️ 系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
+                ))
+                .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
+        }
+    };
 
     // 1. 尝试从 Authorization Header 提取
     let mut auth_raw = None;

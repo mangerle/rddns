@@ -18,6 +18,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use axum::response::Response;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
@@ -47,6 +49,55 @@ impl<T> ApiResponse<T> {
             message,
             data: None,
         }
+    }
+}
+
+/// 统一 Web API 错误封装 (支持通过 ? 运算符自动转化并输出标准 ApiResponse 响应)
+#[derive(Debug)]
+pub struct AppError {
+    pub status: StatusCode,
+    pub message: String,
+}
+
+impl AppError {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, msg)
+    }
+
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, msg)
+    }
+
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, msg)
+    }
+
+    pub fn internal(err: impl std::fmt::Display) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        tracing::error!("Web API 请求失败 [{}]: {}", self.status, self.message);
+        (self.status, Json(ApiResponse::<()>::err(self.message))).into_response()
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        let anyhow_err = err.into();
+        Self::internal(format!("{:#}", anyhow_err))
     }
 }
 
@@ -446,16 +497,13 @@ pub fn merge_notification_credentials(
 pub async fn save_config_handler(
     State(state): State<AppState>,
     Json(payload): Json<SaveConfigRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<ApiResponse<()>>, AppError> {
     let mut new_config = payload.config;
 
     // 校验任务名称非空
     for task in &new_config.dns_tasks {
         if task.name.trim().is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<()>::err("任务名称不能为空".to_string())),
-            );
+            return Err(AppError::bad_request("任务名称不能为空"));
         }
     }
 
@@ -463,25 +511,17 @@ pub async fn save_config_handler(
     if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
     {
-        match bcrypt::hash(pwd.trim(), bcrypt::DEFAULT_COST) {
-            Ok(hash) => {
-                let username = new_config
-                    .auth
-                    .as_ref()
-                    .map(|a| a.username.clone())
-                    .unwrap_or_else(|| "admin".to_string());
-                new_config.auth = Some(UserAuthConfig {
-                    username,
-                    password_hash: hash,
-                });
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiResponse::<()>::err(format!("密码哈希失败: {}", e))),
-                );
-            }
-        }
+        let hash = bcrypt::hash(pwd.trim(), bcrypt::DEFAULT_COST)
+            .map_err(|e| AppError::internal(format!("密码哈希失败: {}", e)))?;
+        let username = new_config
+            .auth
+            .as_ref()
+            .map(|a| a.username.clone())
+            .unwrap_or_else(|| "admin".to_string());
+        new_config.auth = Some(UserAuthConfig {
+            username,
+            password_hash: hash,
+        });
     }
 
     // 热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认)
@@ -496,21 +536,16 @@ pub async fn save_config_handler(
         crate::util::dns_resolver::clear_custom_dns_server();
     }
 
-    let save_result = state
+    state
         .config_manager
         .modify_config::<_, crate::config::storage::ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
             merge_sensitive_credentials(&mut to_save, old_config);
             Ok(to_save)
-        });
+        })
+        .map_err(|e| AppError::internal(format!("保存配置失败: {}", e)))?;
 
-    match save_result {
-        Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::<()>::err(format!("保存配置失败: {}", e))),
-        ),
-    }
+    Ok(Json(ApiResponse::ok(())))
 }
 
 /// 手动触发立即全量同步
@@ -753,20 +788,16 @@ pub async fn init_auth_handler(
     headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<AuthInitRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<ApiResponse<&'static str>>, AppError> {
     // 1. 来源 IP 校验：仅允许本地回环和私网局域网初始化，禁止公网直接初始化
     if !crate::util::net::is_private_or_loopback(&peer_addr.ip()) {
         tracing::warn!(
             "🛡️ [安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
             peer_addr.ip()
         );
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::err(
-                "出于安全保护，禁止从公网(WAN)初始化管理员账号，请从本机(127.0.0.1)或内网局域网访问！"
-                    .to_string(),
-            )),
-        );
+        return Err(AppError::forbidden(
+            "出于安全保护，禁止从公网(WAN)初始化管理员账号，请从本机(127.0.0.1)或内网局域网访问！",
+        ));
     }
 
     // 2. 防范 Drive-by 跨站请求伪造 (CSRF) 攻击
@@ -774,12 +805,9 @@ pub async fn init_auth_handler(
         && fetch_site == "cross-site"
     {
         tracing::warn!("🛡️ [安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::err(
-                "出于安全保护，禁止跨站请求发起账号初始化！".to_string(),
-            )),
-        );
+        return Err(AppError::forbidden(
+            "出于安全保护，禁止跨站请求发起账号初始化！",
+        ));
     }
 
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
@@ -798,36 +826,23 @@ pub async fn init_auth_handler(
                 origin,
                 host_header
             );
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ApiResponse::err(
-                    "出于安全保护，禁止跨站请求发起账号初始化！".to_string(),
-                )),
-            );
+            return Err(AppError::forbidden(
+                "出于安全保护，禁止跨站请求发起账号初始化！",
+            ));
         }
     }
 
     let username = req.username.trim();
     let password = req.password.trim();
     if username.is_empty() || password.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err("用户名和密码不能为空".to_string())),
-        );
+        return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
-    let hash = match bcrypt::hash(password, bcrypt::DEFAULT_COST) {
-        Ok(h) => h,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::err(format!("密码加密失败: {}", e))),
-            );
-        }
-    };
+    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| AppError::internal(format!("密码加密失败: {}", e)))?;
 
     let user_str = username.to_string();
-    let init_result = state
+    state
         .config_manager
         .modify_config::<_, crate::config::storage::ConfigError>(|current_conf| {
             if current_conf.auth.is_some() {
@@ -841,21 +856,11 @@ pub async fn init_auth_handler(
                 password_hash: hash,
             });
             Ok(updated)
-        });
+        })
+        .map_err(|e| AppError::bad_request(format!("初始化管理员账号失败: {}", e)))?;
 
-    match init_result {
-        Ok(_) => {
-            tracing::info!("管理员账号 [{}] 已成功初始化", username);
-            (
-                StatusCode::OK,
-                Json(ApiResponse::ok("管理员账号初始化成功")),
-            )
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err(format!("初始化管理员账号失败: {}", e))),
-        ),
-    }
+    tracing::info!("管理员账号 [{}] 已成功初始化", username);
+    Ok(Json(ApiResponse::ok("管理员账号初始化成功")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -868,14 +873,11 @@ pub struct LoginRequest {
 pub async fn login_auth_handler(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<ApiResponse<&'static str>>, AppError> {
     let username = req.username.trim();
     let password = req.password.trim();
     if username.is_empty() || password.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err("用户名和密码不能为空".to_string())),
-        );
+        return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
     let config = state.config_manager.get_config();
@@ -883,26 +885,19 @@ pub async fn login_auth_handler(
         if username == auth.username
             && bcrypt::verify(password, &auth.password_hash).unwrap_or(false)
         {
-            return (StatusCode::OK, Json(ApiResponse::ok("登录成功")));
+            return Ok(Json(ApiResponse::ok("登录成功")));
         }
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ApiResponse::err("用户名或密码错误".to_string())),
-        );
+        return Err(AppError::unauthorized("用户名或密码错误"));
     }
     // 未设置密码时视为成功
-    (
-        StatusCode::OK,
-        Json(ApiResponse::ok("系统未设置密码，直接放行")),
-    )
+    Ok(Json(ApiResponse::ok("系统未设置密码，直接放行")))
 }
 
 /// 获取系统版本与更新信息
-pub async fn get_version_handler() -> impl IntoResponse {
-    match crate::util::update::check_version().await {
-        Ok(info) => Json(ApiResponse::ok(info)),
-        Err(err) => Json(ApiResponse::err(err)),
-    }
+pub async fn get_version_handler()
+-> Result<Json<ApiResponse<crate::util::update::VersionInfo>>, AppError> {
+    let info = crate::util::update::check_version().await?;
+    Ok(Json(ApiResponse::ok(info)))
 }
 
 /// 触发在线自动更新并平滑热重启
@@ -912,11 +907,11 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
             Ok(()) => {
                 tracing::info!("🎉 自动更新完成，正在平滑重启服务以加载新版本...");
                 if let Err(e) = crate::util::update::restart_process() {
-                    tracing::error!("重启服务失败，请手动重启: {}", e);
+                    tracing::error!("重启服务失败，请手动重启: {:#}", e);
                 }
             }
             Err(e) => {
-                tracing::error!("在线自动更新失败: {}", e);
+                tracing::error!("在线自动更新失败: {:#}", e);
             }
         }
     });

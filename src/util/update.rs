@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -58,29 +59,26 @@ pub fn is_newer_version(current: &str, latest: &str) -> bool {
 }
 
 /// 检查 GitHub Releases 最新版本信息
-pub async fn check_version() -> Result<VersionInfo, String> {
+pub async fn check_version() -> Result<VersionInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
     let client = crate::util::http::create_http_client_builder()
         .timeout(Duration::from_secs(10))
         .user_agent(format!("RDDNS-Updater/v{}", current_version))
         .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+        .context("创建 HTTP 客户端失败")?;
 
     let resp = client
         .get(GITHUB_API_LATEST)
         .send()
         .await
-        .map_err(|e| format!("连接 GitHub API 失败: {}", e))?;
+        .context("连接 GitHub API 失败")?;
 
     if !resp.status().is_success() {
-        return Err(format!("GitHub API 响应异常: HTTP {}", resp.status()));
+        bail!("GitHub API 响应异常: HTTP {}", resp.status());
     }
 
-    let release: GithubRelease = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析 Release 信息失败: {}", e))?;
+    let release: GithubRelease = resp.json().await.context("解析 Release 信息失败")?;
 
     let latest_ver_clean = release.tag_name.trim_start_matches('v').to_string();
     let has_update = is_newer_version(&current_version, &latest_ver_clean);
@@ -97,7 +95,7 @@ pub async fn check_version() -> Result<VersionInfo, String> {
 }
 
 /// 执行原地一键热升级（下载最新发布包 -> 解压 -> 安全备份替换 -> 重启进程）
-pub async fn upgrade_self() -> Result<(), String> {
+pub async fn upgrade_self() -> Result<()> {
     tracing::info!(
         "🔍 正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
         env!("CARGO_PKG_VERSION")
@@ -108,18 +106,15 @@ pub async fn upgrade_self() -> Result<(), String> {
         .timeout(Duration::from_secs(60))
         .user_agent(format!("RDDNS-Updater/v{}", current_version))
         .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+        .context("创建 HTTP 客户端失败")?;
 
     let resp = client
         .get(GITHUB_API_LATEST)
         .send()
         .await
-        .map_err(|e| format!("获取 Release 下载列表失败: {}", e))?;
+        .context("获取 Release 下载列表失败")?;
 
-    let release: GithubRelease = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析 Release 资产失败: {}", e))?;
+    let release: GithubRelease = resp.json().await.context("解析 Release 资产失败")?;
 
     let target_os = env::consts::OS;
     let target_arch = env::consts::ARCH;
@@ -145,10 +140,12 @@ pub async fn upgrade_self() -> Result<(), String> {
     let asset = match matched_asset {
         Some(a) => a,
         None => {
-            return Err(format!(
+            bail!(
                 "未在 Release 中找到适配当前系统架构 ({}-{}) 的安装包，请手动访问: {}",
-                target_os, target_arch, release.html_url
-            ));
+                target_os,
+                target_arch,
+                release.html_url
+            );
         }
     };
 
@@ -157,20 +154,17 @@ pub async fn upgrade_self() -> Result<(), String> {
         .get(&asset.browser_download_url)
         .send()
         .await
-        .map_err(|e| format!("下载安装包失败: {}", e))?;
+        .context("下载安装包失败")?;
 
     if !download_resp.status().is_success() {
-        return Err(format!("下载失败，HTTP 状态码: {}", download_resp.status()));
+        bail!("下载失败，HTTP 状态码: {}", download_resp.status());
     }
 
-    let raw_bytes = download_resp
-        .bytes()
-        .await
-        .map_err(|e| format!("读取下载数据失败: {}", e))?;
+    let raw_bytes = download_resp.bytes().await.context("读取下载数据失败")?;
 
     let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
 
-    let current_exe = env::current_exe().map_err(|e| format!("获取当前程序路径失败: {}", e))?;
+    let current_exe = env::current_exe().context("获取当前程序路径失败")?;
     let backup_exe: PathBuf = if let Some(ext) = current_exe.extension() {
         current_exe.with_extension(format!("{}.old", ext.to_string_lossy()))
     } else {
@@ -183,7 +177,7 @@ pub async fn upgrade_self() -> Result<(), String> {
 
     println!("🔄 正在执行二进制文件热替换...");
     fs::rename(&current_exe, &backup_exe)
-        .map_err(|e| format!("备份当前运行程序失败 (可能缺少管理员写入权限): {}", e))?;
+        .context("备份当前运行程序失败 (可能缺少管理员写入权限)")?;
 
     // 将解压/提取的新二进制文件写入当前程序路径
     let write_res = (|| -> Result<(), std::io::Error> {
@@ -205,7 +199,7 @@ pub async fn upgrade_self() -> Result<(), String> {
     if let Err(err) = write_res {
         // 回滚备份
         let _ = fs::rename(&backup_exe, &current_exe);
-        return Err(format!("写入新版本失败，已恢复原版本: {}", err));
+        bail!("写入新版本失败，已恢复原版本: {}", err);
     }
 
     println!("==========================================");
@@ -217,8 +211,8 @@ pub async fn upgrade_self() -> Result<(), String> {
 }
 
 /// 重启当前程序进程以加载新升级的二进制文件
-pub fn restart_process() -> Result<(), std::io::Error> {
-    let current_exe = env::current_exe()?;
+pub fn restart_process() -> Result<()> {
+    let current_exe = env::current_exe().context("获取当前程序路径失败")?;
     let args: Vec<String> = env::args().skip(1).collect();
     let mut cmd = std::process::Command::new(&current_exe);
     cmd.args(&args);
@@ -239,7 +233,7 @@ pub fn restart_process() -> Result<(), std::io::Error> {
             .stderr(Stdio::null());
     }
 
-    cmd.spawn()?;
+    cmd.spawn().context("派生重启进程失败")?;
 
     // 延迟 1.5 秒后安全退出当前旧进程，确保日志与响应顺利发出
     tokio::spawn(async {
@@ -251,17 +245,14 @@ pub fn restart_process() -> Result<(), std::io::Error> {
 }
 
 /// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包、Tar.gz 归档与原始二进制)
-fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
     // 1. 处理 ZIP 归档
     if bytes.starts_with(b"PK\x03\x04") || asset_name.ends_with(".zip") {
         let cursor = std::io::Cursor::new(bytes);
-        let mut archive =
-            zip::ZipArchive::new(cursor).map_err(|e| format!("解析 ZIP 压缩包失败: {}", e))?;
+        let mut archive = zip::ZipArchive::new(cursor).context("解析 ZIP 压缩包失败")?;
 
         for i in 0..archive.len() {
-            let mut file = archive
-                .by_index(i)
-                .map_err(|e| format!("读取 ZIP 压缩文件条目失败: {}", e))?;
+            let mut file = archive.by_index(i).context("读取 ZIP 压缩文件条目失败")?;
 
             if file.is_dir() {
                 continue;
@@ -275,12 +266,11 @@ fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
                 || file_name.eq_ignore_ascii_case("rddns")
             {
                 let mut out = Vec::new();
-                std::io::copy(&mut file, &mut out)
-                    .map_err(|e| format!("解压可执行程序数据失败: {}", e))?;
+                std::io::copy(&mut file, &mut out).context("解压可执行程序数据失败")?;
                 return Ok(out);
             }
         }
-        return Err("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)".to_string());
+        bail!("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
     }
 
     // 2. 处理 Tar.gz / Tgz 归档 (Gzip 魔数 0x1F, 0x8B)
@@ -308,13 +298,12 @@ fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
                     || file_name.eq_ignore_ascii_case("rddns")
                 {
                     let mut out = Vec::new();
-                    std::io::copy(&mut entry, &mut out)
-                        .map_err(|e| format!("解压 Tar.gz 可执行程序失败: {}", e))?;
+                    std::io::copy(&mut entry, &mut out).context("解压 Tar.gz 可执行程序失败")?;
                     return Ok(out);
                 }
             }
         }
-        return Err("Tar.gz 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)".to_string());
+        bail!("Tar.gz 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
     }
 
     // 若非已知归档，直接作为原始二进制返回

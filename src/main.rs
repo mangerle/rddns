@@ -6,6 +6,7 @@ mod notifier;
 mod util;
 mod web;
 
+use anyhow::{Context, Result};
 use clap::Parser;
 use config::model::UserAuthConfig;
 use config::storage::ConfigManager;
@@ -64,7 +65,7 @@ struct CliArgs {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let args = CliArgs::parse();
 
     // 如果配置了自定义 DNS 解析服务器
@@ -80,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 如果指定了 -u 则执行自动升级并退出
     if args.upgrade {
         if let Err(e) = util::update::upgrade_self().await {
-            eprintln!("❌ 自动升级失败: {}", e);
+            eprintln!("❌ 自动升级失败: {:#}", e);
             std::process::exit(1);
         }
         return Ok(());
@@ -88,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 如果指定了 -d 且当前不是派生的后台子进程，则启动独立守护进程并退出当前父终端
     if args.daemon && !util::daemon::is_daemon_child() {
-        util::daemon::run_as_daemon()?;
+        util::daemon::run_as_daemon().context("启动守护进程失败")?;
         return Ok(());
     }
 
@@ -122,7 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 处理系统服务管理指令 (-s install/uninstall/restart/status...)
     if let Some(ref action) = args.service {
-        util::service::handle_service_command(action, &config_path)?;
+        util::service::handle_service_command(action, &config_path)
+            .context("执行系统服务管理指令失败")?;
         return Ok(());
     }
 
@@ -142,7 +144,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "🚀 rddns 动态域名解析系统 v{} 正在启动",
         env!("CARGO_PKG_VERSION")
     );
-    let config_manager = Arc::new(ConfigManager::load_or_create(config_path)?);
+    let config_manager =
+        Arc::new(ConfigManager::load_or_create(config_path).context("加载或初始化配置文件失败")?);
 
     // 初始化/覆盖自定义 DNS 解析服务器（优先级：CLI 参数 > 配置文件）
     if let Some(ref dns_srv) = args.dns {
@@ -163,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
         let mut conf = (*config_manager.get_config()).clone();
-        let hash = bcrypt::hash(&new_pwd, bcrypt::DEFAULT_COST)?;
+        let hash = bcrypt::hash(&new_pwd, bcrypt::DEFAULT_COST).context("生成密码哈希失败")?;
         let username = conf
             .auth
             .as_ref()
@@ -173,7 +176,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             username: username.clone(),
             password_hash: hash,
         });
-        config_manager.update_config(conf)?;
+        config_manager
+            .update_config(conf)
+            .context("保存新密码至配置文件失败")?;
         println!("==========================================");
         println!("✅ 管理员密码重置成功！");
         println!("👤 管理员账号: {}", username);

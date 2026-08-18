@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -12,16 +13,15 @@ const SERVICE_DISPLAY_NAME: &str = "RDDNS Dynamic DNS Service";
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
 
 /// 处理系统服务管理命令 (install | uninstall | start | stop | restart | status)
-pub fn handle_service_command(
-    action: &str,
-    config_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let current_exe = env::current_exe()?;
+pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
+    let current_exe = env::current_exe().context("获取当前程序可执行路径失败")?;
     let abs_exe = current_exe.canonicalize().unwrap_or(current_exe.clone());
     let abs_config = if config_path.is_relative() {
         match config_path.canonicalize() {
             Ok(p) => p,
-            Err(_) => env::current_dir()?.join(config_path),
+            Err(_) => env::current_dir()
+                .context("获取当前工作目录失败")?
+                .join(config_path),
         }
     } else {
         config_path.to_path_buf()
@@ -46,20 +46,14 @@ pub fn handle_service_command(
 
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
-        return Err(
-            format!("当前操作系统平台暂不支持自动注册系统服务，请手动配置系统守护进程").into(),
-        );
+        bail!("当前操作系统平台暂不支持自动注册系统服务，请手动配置系统守护进程");
     }
 
     Ok(())
 }
 
 #[cfg(windows)]
-fn handle_windows_service(
-    action: &str,
-    exe_path: &Path,
-    config_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
     let exe_str = exe_path.to_string_lossy();
     let cfg_str = config_path.to_string_lossy();
     let run_cmd = format!("\"{}\" -c \"{}\" -d", exe_str, cfg_str);
@@ -177,14 +171,15 @@ fn handle_windows_service(
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 spawn_cmd.creation_flags(CREATE_NO_WINDOW);
             }
-            spawn_cmd.spawn()?;
+            spawn_cmd.spawn().context("启动后台守护进程失败")?;
             println!("✅ [{}] 后台进程已成功启动！", SERVICE_NAME);
         }
         "stop" => {
             println!("🛑 正在停止 [{}] 后台守护进程...", SERVICE_NAME);
             let out = Command::new("taskkill.exe")
                 .args(["/f", "/im", "rddns.exe"])
-                .output()?;
+                .output()
+                .context("执行 taskkill 停止进程失败")?;
             let stdout = String::from_utf8_lossy(&out.stdout);
             println!("{}", stdout.trim());
         }
@@ -201,14 +196,15 @@ fn handle_windows_service(
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 spawn_cmd.creation_flags(CREATE_NO_WINDOW);
             }
-            spawn_cmd.spawn()?;
+            spawn_cmd.spawn().context("重启后台守护进程失败")?;
             println!("✅ [{}] 后台守护进程已完成重启！", SERVICE_NAME);
         }
         "status" => {
             println!("🔎 正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
             let out = Command::new("tasklist.exe")
                 .args(["/fi", "IMAGENAME eq rddns.exe"])
-                .output()?;
+                .output()
+                .context("查询进程列表失败")?;
             println!("{}", String::from_utf8_lossy(&out.stdout));
 
             let reg_out = Command::new("reg.exe")
@@ -228,22 +224,17 @@ fn handle_windows_service(
             }
         }
         _ => {
-            return Err(format!(
+            bail!(
                 "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
                 action
-            )
-            .into());
+            );
         }
     }
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn handle_linux_service(
-    action: &str,
-    exe_path: &Path,
-    config_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_linux_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
     let service_file_path = "/etc/systemd/system/rddns.service";
 
     match action {
@@ -274,17 +265,21 @@ WantedBy=multi-user.target
                 config_path.display()
             );
 
-            fs::write(service_file_path, service_content)?;
+            fs::write(service_file_path, service_content).context("写入 systemd 服务文件失败")?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(service_file_path, fs::Permissions::from_mode(0o644));
             }
             println!("🔄 正在重载 systemd 守护进程并启用自启服务...");
-            Command::new("systemctl").args(["daemon-reload"]).status()?;
+            Command::new("systemctl")
+                .args(["daemon-reload"])
+                .status()
+                .context("重载 systemd 失败")?;
             Command::new("systemctl")
                 .args(["enable", "--now", SERVICE_NAME])
-                .status()?;
+                .status()
+                .context("启用 systemd 服务失败")?;
 
             println!("==========================================");
             println!("✅ RDDNS systemd 服务已成功安装并启动！");
@@ -300,7 +295,7 @@ WantedBy=multi-user.target
                 .args(["disable", "--now", SERVICE_NAME])
                 .status();
             if Path::new(service_file_path).exists() {
-                fs::remove_file(service_file_path)?;
+                fs::remove_file(service_file_path).context("删除 systemd 服务文件失败")?;
             }
             let _ = Command::new("systemctl").args(["daemon-reload"]).status();
             println!("✅ [{}] systemd 服务已成功卸载！", SERVICE_NAME);
@@ -308,43 +303,42 @@ WantedBy=multi-user.target
         "start" => {
             Command::new("systemctl")
                 .args(["start", SERVICE_NAME])
-                .status()?;
+                .status()
+                .context("启动 systemd 服务失败")?;
             println!("✅ [{}] 服务已启动", SERVICE_NAME);
         }
         "stop" => {
             Command::new("systemctl")
                 .args(["stop", SERVICE_NAME])
-                .status()?;
+                .status()
+                .context("停止 systemd 服务失败")?;
             println!("🛑 [{}] 服务已停止", SERVICE_NAME);
         }
         "restart" => {
             Command::new("systemctl")
                 .args(["restart", SERVICE_NAME])
-                .status()?;
+                .status()
+                .context("重启 systemd 服务失败")?;
             println!("✅ [{}] 服务已重启", SERVICE_NAME);
         }
         "status" => {
             Command::new("systemctl")
                 .args(["status", SERVICE_NAME])
-                .status()?;
+                .status()
+                .context("查询 systemd 状态失败")?;
         }
         _ => {
-            return Err(format!(
+            bail!(
                 "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
                 action
-            )
-            .into());
+            );
         }
     }
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn handle_macos_service(
-    action: &str,
-    exe_path: &Path,
-    config_path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
     let plist_path = "/Library/LaunchDaemons/com.mangerle.rddns.plist";
 
     match action {
@@ -378,7 +372,7 @@ fn handle_macos_service(
                 config_path.display()
             );
 
-            fs::write(plist_path, plist_content)?;
+            fs::write(plist_path, plist_content).context("写入 launchd plist 失败")?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -386,7 +380,8 @@ fn handle_macos_service(
             }
             Command::new("launchctl")
                 .args(["load", "-w", plist_path])
-                .status()?;
+                .status()
+                .context("加载 launchd 服务失败")?;
 
             println!("==========================================");
             println!("✅ RDDNS macOS launchd 服务已成功安装并启动！");
@@ -398,19 +393,21 @@ fn handle_macos_service(
                 .args(["unload", "-w", plist_path])
                 .status();
             if Path::new(plist_path).exists() {
-                fs::remove_file(plist_path)?;
+                fs::remove_file(plist_path).context("删除 launchd plist 文件失败")?;
             }
             println!("✅ RDDNS macOS launchd 服务已成功卸载！");
         }
         "start" => {
             Command::new("launchctl")
                 .args(["start", "com.mangerle.rddns"])
-                .status()?;
+                .status()
+                .context("启动 launchd 服务失败")?;
         }
         "stop" => {
             Command::new("launchctl")
                 .args(["stop", "com.mangerle.rddns"])
-                .status()?;
+                .status()
+                .context("停止 launchd 服务失败")?;
         }
         "restart" => {
             let _ = Command::new("launchctl")
@@ -418,19 +415,20 @@ fn handle_macos_service(
                 .status();
             Command::new("launchctl")
                 .args(["start", "com.mangerle.rddns"])
-                .status()?;
+                .status()
+                .context("重启 launchd 服务失败")?;
         }
         "status" => {
             Command::new("launchctl")
                 .args(["list", "com.mangerle.rddns"])
-                .status()?;
+                .status()
+                .context("查询 launchd 状态失败")?;
         }
         _ => {
-            return Err(format!(
+            bail!(
                 "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
                 action
-            )
-            .into());
+            );
         }
     }
     Ok(())

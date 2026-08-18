@@ -1,3 +1,4 @@
+use anyhow::{Result, anyhow, bail};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -52,11 +53,7 @@ pub enum QueryRecordType {
 
 /// 构造标准 DNS 查询请求数据包 (UDP 格式)
 #[allow(dead_code)]
-fn build_dns_query_packet(
-    domain: &str,
-    qtype: QueryRecordType,
-    query_id: u16,
-) -> Result<Vec<u8>, String> {
+fn build_dns_query_packet(domain: &str, qtype: QueryRecordType, query_id: u16) -> Result<Vec<u8>> {
     let mut packet = Vec::with_capacity(64);
 
     // 1. Header (12 字节)
@@ -76,12 +73,12 @@ fn build_dns_query_packet(
     // 2. Question Section: QNAME
     let clean_domain = domain.trim_end_matches('.');
     if clean_domain.is_empty() {
-        return Err("域名不能为空".to_string());
+        bail!("域名不能为空");
     }
 
     for label in clean_domain.split('.') {
         if label.is_empty() || label.len() > 63 {
-            return Err(format!("域名标签不合法: [{}]", label));
+            bail!("域名标签不合法: [{}]", label);
         }
         packet.push(label.len() as u8);
         packet.extend_from_slice(label.as_bytes());
@@ -97,12 +94,12 @@ fn build_dns_query_packet(
 }
 
 /// 安全跳过 DNS 域名标签或压缩指针 (带越界与防死循环保护)
-fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<(), String> {
+fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<()> {
     let mut steps = 0;
     while *offset < buf.len() {
         steps += 1;
         if steps > 128 {
-            return Err("DNS 域名解析嵌套层级超出限制".to_string());
+            bail!("DNS 域名解析嵌套层级超出限制");
         }
         let len = buf[*offset] as usize;
         if len == 0 {
@@ -111,17 +108,17 @@ fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<(), String> {
         }
         if (len & 0xC0) == 0xC0 {
             if *offset + 2 > buf.len() {
-                return Err("DNS 压缩指针截断".to_string());
+                bail!("DNS 压缩指针截断");
             }
             *offset += 2;
             return Ok(());
         }
         if *offset + 1 + len > buf.len() {
-            return Err("DNS 域名 Label 长度超出数据包边界".to_string());
+            bail!("DNS 域名 Label 长度超出数据包边界");
         }
         *offset += 1 + len;
     }
-    Err("DNS 域名数据包意外截断".to_string())
+    bail!("DNS 域名数据包意外截断")
 }
 
 /// 解析 DNS 响应数据包提取 IP 列表与最小 TTL (秒)
@@ -129,17 +126,14 @@ fn parse_dns_response_packet(
     buf: &[u8],
     query_id: u16,
     qtype: QueryRecordType,
-) -> Result<(Vec<IpAddr>, u32), String> {
+) -> Result<(Vec<IpAddr>, u32)> {
     if buf.len() < 12 {
-        return Err("DNS 响应包长度过短".to_string());
+        bail!("DNS 响应包长度过短");
     }
 
     let resp_id = u16::from_be_bytes([buf[0], buf[1]]);
     if resp_id != query_id {
-        return Err(format!(
-            "DNS 响应 ID 不匹配: 期望 {}, 实际 {}",
-            query_id, resp_id
-        ));
+        bail!("DNS 响应 ID 不匹配: 期望 {}, 实际 {}", query_id, resp_id);
     }
 
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
@@ -149,7 +143,7 @@ fn parse_dns_response_packet(
     }
     let rcode = flags & 0x000F;
     if rcode != 0 {
-        return Err(format!("DNS 解析服务器返回错误码 (RCODE={})", rcode));
+        bail!("DNS 解析服务器返回错误码 (RCODE={})", rcode);
     }
 
     let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
@@ -161,7 +155,7 @@ fn parse_dns_response_packet(
     for _ in 0..qdcount {
         skip_dns_name(buf, &mut offset)?;
         if offset + 4 > buf.len() {
-            return Err("DNS Question 区段被截断".to_string());
+            bail!("DNS Question 区段被截断");
         }
         offset += 4; // QTYPE (2B) + QCLASS (2B)
     }
@@ -173,7 +167,7 @@ fn parse_dns_response_packet(
     for _ in 0..ancount {
         skip_dns_name(buf, &mut offset)?;
         if offset + 10 > buf.len() {
-            return Err("DNS Answer 区段被截断".to_string());
+            bail!("DNS Answer 区段被截断");
         }
 
         let atype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
@@ -187,7 +181,7 @@ fn parse_dns_response_packet(
         offset += 10;
 
         if offset + rdlength > buf.len() {
-            return Err("DNS Answer RDATA 数据区被截断".to_string());
+            bail!("DNS Answer RDATA 数据区被截断");
         }
 
         if atype == (qtype as u16) {
@@ -224,7 +218,7 @@ pub async fn query_dns_server(
     domain: &str,
     qtype: QueryRecordType,
     timeout_duration: Duration,
-) -> Result<Vec<IpAddr>, String> {
+) -> Result<Vec<IpAddr>> {
     let clean_domain = domain.trim_end_matches('.').to_lowercase();
     let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
 
@@ -240,7 +234,7 @@ pub async fn query_dns_server(
     } else if let Ok(ip) = server_addr.parse::<IpAddr>() {
         SocketAddr::new(ip, 53)
     } else {
-        return Err(format!("无法解析 DNS 服务器地址 [{}]", server_addr));
+        bail!("无法解析 DNS 服务器地址 [{}]", server_addr);
     };
 
     // 绑定随机本地 UDP 端口
@@ -257,13 +251,14 @@ pub async fn query_dns_server(
 
         let socket = match UdpSocket::bind(bind_addr).await {
             Ok(s) => s,
-            Err(e) => return Err(format!("绑定本地 UDP 失败: {}", e)),
+            Err(e) => bail!("绑定本地 UDP 失败: {}", e),
         };
 
         if let Err(e) = socket.send_to(&packet, target_server).await {
-            last_err = Some(format!(
+            last_err = Some(anyhow!(
                 "向 DNS 服务器 {} 发送查询失败: {}",
-                target_server, e
+                target_server,
+                e
             ));
             continue;
         }
@@ -274,19 +269,20 @@ pub async fn query_dns_server(
         let (len, src_addr) = match tokio::time::timeout(timeout_duration, recv_fut).await {
             Ok(Ok((l, addr))) => (l, addr),
             Ok(Err(e)) => {
-                last_err = Some(format!("接收 DNS 响应失败: {}", e));
+                last_err = Some(anyhow!("接收 DNS 响应失败: {}", e));
                 continue;
             }
             Err(_) => {
-                last_err = Some(format!("DNS 查询超时 (第 {} 次尝试)", attempt));
+                last_err = Some(anyhow!("DNS 查询超时 (第 {} 次尝试)", attempt));
                 continue;
             }
         };
 
         if src_addr != target_server {
-            last_err = Some(format!(
+            last_err = Some(anyhow!(
                 "DNS 响应来源地址不匹配: 期望 {}, 实际 {}",
-                target_server, src_addr
+                target_server,
+                src_addr
             ));
             continue;
         }
@@ -316,7 +312,7 @@ pub async fn query_dns_server(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| "DNS 查询失败".to_string()))
+    Err(last_err.unwrap_or_else(|| anyhow!("DNS 查询失败")))
 }
 
 #[cfg(test)]

@@ -9,7 +9,10 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// 计算 HMAC-SHA1 并返回 Base64 编码字符串（阿里云 POP 签名规范）
 pub fn hmac_sha1_base64(key: &[u8], data: &[u8]) -> String {
-    let mut mac = HmacSha1::new_from_slice(key).expect("HMAC 密钥初始化失败");
+    let mut mac = match HmacSha1::new_from_slice(key) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
     mac.update(data);
     let result = mac.finalize();
     BASE64_STANDARD.encode(result.into_bytes())
@@ -17,7 +20,10 @@ pub fn hmac_sha1_base64(key: &[u8], data: &[u8]) -> String {
 
 /// 计算 HMAC-SHA256 并返回原始字节数组（腾讯云 TC3 签名计算步骤）
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC 密钥初始化失败");
+    let mut mac = match HmacSha256::new_from_slice(key) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }
