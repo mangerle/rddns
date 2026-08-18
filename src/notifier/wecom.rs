@@ -71,6 +71,19 @@ impl WeComNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(errcode) = v.get("errcode").and_then(|c| c.as_i64())
+                && errcode != 0
+            {
+                let errmsg = v
+                    .get("errmsg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("未知错误");
+                return Err(NotifyError::Provider(format!(
+                    "企业微信机器人业务错误 [code: {}]: {}",
+                    errcode, errmsg
+                )));
+            }
             tracing::info!("[{}] 机器人通知发送成功", self.channel_name());
             Ok(())
         } else {
@@ -123,7 +136,8 @@ impl WeComNotifier {
         );
 
         let description = format!(
-            "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
+            "<div class=\"gray\">{}</div><div class=\"normal\">任务：{}</div><div class=\"normal\">IPv4：{}</div><div class=\"normal\">IPv6：{}</div><div class=\"normal\">域名：{}</div>\n\n{}",
+            event.timestamp.format("%Y-%m-%d %H:%M:%S"),
             event.task_name,
             event
                 .ipv4
@@ -134,7 +148,7 @@ impl WeComNotifier {
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "无".to_string()),
             event.domains_comma_separated(),
-            event.timestamp.format("%Y-%m-%d %H:%M:%S")
+            event.format_details_text()
         );
 
         let payload = json!({
@@ -154,6 +168,19 @@ impl WeComNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(errcode) = v.get("errcode").and_then(|c| c.as_i64())
+                && errcode != 0
+            {
+                let errmsg = v
+                    .get("errmsg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("未知错误");
+                return Err(NotifyError::Provider(format!(
+                    "企业微信应用消息业务错误 [code: {}]: {}",
+                    errcode, errmsg
+                )));
+            }
             tracing::info!("[{}] 应用消息发送成功", self.channel_name());
             Ok(())
         } else {

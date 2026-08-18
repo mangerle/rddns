@@ -90,6 +90,16 @@ impl Notifier for FeishuNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(code) = v.get("code").and_then(|c| c.as_i64())
+                && code != 0
+            {
+                let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("未知错误");
+                return Err(NotifyError::Provider(format!(
+                    "飞书接口业务错误 [code: {}]: {}",
+                    code, msg
+                )));
+            }
             tracing::info!("[{}] 飞书消息发送成功", self.channel_name());
             Ok(())
         } else {

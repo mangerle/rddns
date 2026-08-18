@@ -89,6 +89,19 @@ impl Notifier for DingTalkNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body)
+                && let Some(errcode) = v.get("errcode").and_then(|c| c.as_i64())
+                && errcode != 0
+            {
+                let errmsg = v
+                    .get("errmsg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("未知错误");
+                return Err(NotifyError::Provider(format!(
+                    "钉钉接口业务错误 [code: {}]: {}",
+                    errcode, errmsg
+                )));
+            }
             tracing::info!("[{}] 钉钉消息发送成功", self.channel_name());
             Ok(())
         } else {
