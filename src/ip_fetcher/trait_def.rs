@@ -12,6 +12,10 @@ pub enum FetchError {
     Timeout,
     #[error("未找到指定的网卡: {0}")]
     InterfaceNotFound(String),
+    #[error("未能从接口响应中提取到有效的 IPv4 地址 (接口返回: {0})")]
+    NoValidIpv4(String),
+    #[error("未能从接口响应中提取到有效的 IPv6 地址 (接口返回: {0})")]
+    NoValidIpv6(String),
     #[error("从响应中未能提取到合法的 IP 地址: {0}")]
     NoValidIp(String),
     #[error("其他提取错误: {0}")]

@@ -49,7 +49,7 @@ impl IpFetcher for UrlIpFetcher {
                             return Ok(Some(ip));
                         } else {
                             tracing::debug!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
-                            last_err = Some(FetchError::NoValidIp(body));
+                            last_err = Some(FetchError::NoValidIpv4(body));
                         }
                     }
                     Err(e) => {
@@ -83,7 +83,7 @@ impl IpFetcher for UrlIpFetcher {
                             return Ok(Some(ip));
                         } else {
                             tracing::debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
-                            last_err = Some(FetchError::NoValidIp(body));
+                            last_err = Some(FetchError::NoValidIpv6(body));
                         }
                     }
                     Err(e) => {
