@@ -44,13 +44,14 @@ impl Resolve for AppDnsResolver {
                     &custom_server,
                     host,
                     crate::util::dns_resolver::QueryRecordType::A,
-                    Duration::from_secs(3),
+                    Duration::from_secs(2),
                 );
+                // AAAA 记录设置较短超时 (500ms)，避免无 IPv6 环境拖慢整个 HTTP 客户端
                 let v6_fut = crate::util::dns_resolver::query_dns_server(
                     &custom_server,
                     host,
                     crate::util::dns_resolver::QueryRecordType::AAAA,
-                    Duration::from_secs(3),
+                    Duration::from_millis(500),
                 );
 
                 let (v4_res, v6_res) = tokio::join!(v4_fut, v6_fut);
