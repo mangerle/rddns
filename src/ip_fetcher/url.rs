@@ -1,5 +1,5 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
-use crate::util::net::{extract_ipv4, extract_ipv6};
+use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6};
 use async_trait::async_trait;
 use reqwest::Client;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -99,8 +99,24 @@ impl IpFetcher for UrlIpFetcher {
                 Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => {
                         if let Some(ip) = extract_ipv6(&body, self.regex.as_deref()) {
-                            tracing::debug!("从接口 {} 成功获取到 IPv6: {}", endpoint, ip);
-                            return Ok(Some(ip));
+                            if is_global_unicast_ipv6(&ip) {
+                                tracing::debug!(
+                                    "从接口 {} 成功获取到全球单播 IPv6: {}",
+                                    endpoint,
+                                    ip
+                                );
+                                return Ok(Some(ip));
+                            } else {
+                                tracing::debug!(
+                                    "接口 {} 返回的 IPv6 非公网全球单播地址: {}",
+                                    endpoint,
+                                    ip
+                                );
+                                last_err = Some(FetchError::NoValidIpv6(format!(
+                                    "非全球单播 IPv6: {}",
+                                    ip
+                                )));
+                            }
                         } else {
                             tracing::debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
                             last_err = Some(FetchError::NoValidIpv6(body));
