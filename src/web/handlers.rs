@@ -64,42 +64,396 @@ pub struct SaveConfigRequest {
     pub new_password: Option<String>,
 }
 
+/// 合并新旧配置中的敏感凭据 (如果新配置包含 "******" 占位符则保留旧凭据)
+fn merge_sensitive_credentials(new_conf: &mut AppConfig, old_conf: &AppConfig) {
+    let is_masked = |s: &str| s.trim() == "******";
+
+    // 1. 管理员密码哈希
+    if let Some(new_auth) = &mut new_conf.auth
+        && is_masked(&new_auth.password_hash)
+        && let Some(old_auth) = &old_conf.auth
+    {
+        new_auth.password_hash = old_auth.password_hash.clone();
+    }
+
+    // 2. DNS 任务提供商凭据
+    for (i, new_task) in new_conf.dns_tasks.iter_mut().enumerate() {
+        if let Some(old_task) = old_conf.dns_tasks.get(i) {
+            match (&mut new_task.provider, &old_task.provider) {
+                (
+                    crate::config::model::ProviderConfig::Cloudflare {
+                        api_token: new_t,
+                        api_key: new_k,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::Cloudflare {
+                        api_token: old_t,
+                        api_key: old_k,
+                        ..
+                    },
+                ) => {
+                    if new_t.as_deref().map(is_masked).unwrap_or(false) {
+                        *new_t = old_t.clone();
+                    }
+                    if new_k.as_deref().map(is_masked).unwrap_or(false) {
+                        *new_k = old_k.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::AliDns {
+                        access_key_secret: new_s,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::AliDns {
+                        access_key_secret: old_s,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::TencentCloud {
+                        secret_key: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::TencentCloud {
+                        secret_key: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::HuaweiCloud {
+                        secret_access_key: new_s,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::HuaweiCloud {
+                        secret_access_key: old_s,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Porkbun {
+                        secret_key: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::Porkbun {
+                        secret_key: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::GoDaddy {
+                        api_secret: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::GoDaddy {
+                        api_secret: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Dynv6 { token: new_t },
+                    crate::config::model::ProviderConfig::Dynv6 { token: old_t },
+                ) => {
+                    if is_masked(new_t) {
+                        *new_t = old_t.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::BaiduCloud {
+                        secret_access_key: new_s,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::BaiduCloud {
+                        secret_access_key: old_s,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::TrafficRoute {
+                        secret_access_key: new_s,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::TrafficRoute {
+                        secret_access_key: old_s,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Namecheap { password: new_p },
+                    crate::config::model::ProviderConfig::Namecheap { password: old_p },
+                ) => {
+                    if is_masked(new_p) {
+                        *new_p = old_p.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::NameSilo { api_key: new_k },
+                    crate::config::model::ProviderConfig::NameSilo { api_key: old_k },
+                ) => {
+                    if is_masked(new_k) {
+                        *new_k = old_k.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Spaceship {
+                        api_secret: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::Spaceship {
+                        api_secret: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Dynadot { password: new_p },
+                    crate::config::model::ProviderConfig::Dynadot { password: old_p },
+                ) => {
+                    if is_masked(new_p) {
+                        *new_p = old_p.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Vercel { token: new_t, .. },
+                    crate::config::model::ProviderConfig::Vercel { token: old_t, .. },
+                ) => {
+                    if is_masked(new_t) {
+                        *new_t = old_t.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::RainYun { api_key: new_k, .. },
+                    crate::config::model::ProviderConfig::RainYun { api_key: old_k, .. },
+                ) => {
+                    if is_masked(new_k) {
+                        *new_k = old_k.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::ClouDNS {
+                        auth_password: new_p,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::ClouDNS {
+                        auth_password: old_p,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_p) {
+                        *new_p = old_p.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Gcore { api_key: new_k },
+                    crate::config::model::ProviderConfig::Gcore { api_key: old_k },
+                ) => {
+                    if is_masked(new_k) {
+                        *new_k = old_k.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::NameCom {
+                        api_token: new_t, ..
+                    },
+                    crate::config::model::ProviderConfig::NameCom {
+                        api_token: old_t, ..
+                    },
+                ) => {
+                    if is_masked(new_t) {
+                        *new_t = old_t.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::DnsLa {
+                        api_secret: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::DnsLa {
+                        api_secret: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::AliEsa {
+                        access_key_secret: new_s,
+                        ..
+                    },
+                    crate::config::model::ProviderConfig::AliEsa {
+                        access_key_secret: old_s,
+                        ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::EdgeOne {
+                        secret_key: new_s, ..
+                    },
+                    crate::config::model::ProviderConfig::EdgeOne {
+                        secret_key: old_s, ..
+                    },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::NowCn { secret: new_s, .. },
+                    crate::config::model::ProviderConfig::NowCn { secret: old_s, .. },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::Eranet { secret: new_s, .. },
+                    crate::config::model::ProviderConfig::Eranet { secret: old_s, .. },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::TNetHk { secret: new_s, .. },
+                    crate::config::model::ProviderConfig::TNetHk { secret: old_s, .. },
+                ) => {
+                    if is_masked(new_s) {
+                        *new_s = old_s.clone();
+                    }
+                }
+                (
+                    crate::config::model::ProviderConfig::NsOne { api_key: new_k },
+                    crate::config::model::ProviderConfig::NsOne { api_key: old_k },
+                ) if is_masked(new_k) => {
+                    *new_k = old_k.clone();
+                }
+                (
+                    crate::config::model::ProviderConfig::HipmDnsMgr {
+                        api_token: new_t, ..
+                    },
+                    crate::config::model::ProviderConfig::HipmDnsMgr {
+                        api_token: old_t, ..
+                    },
+                ) if is_masked(new_t) => {
+                    *new_t = old_t.clone();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 3. 通知渠道敏感凭据
+    if let (Some(new_wx), Some(old_wx)) = (
+        &mut new_conf.notifications.wechat_official,
+        &old_conf.notifications.wechat_official,
+    ) && is_masked(&new_wx.app_secret)
+    {
+        new_wx.app_secret = old_wx.app_secret.clone();
+    }
+
+    if let (Some(new_wc), Some(old_wc)) = (
+        &mut new_conf.notifications.wecom,
+        &old_conf.notifications.wecom,
+    ) && new_wc
+        .corp_secret
+        .as_deref()
+        .map(is_masked)
+        .unwrap_or(false)
+    {
+        new_wc.corp_secret = old_wc.corp_secret.clone();
+    }
+
+    if let (Some(new_tg), Some(old_tg)) = (
+        &mut new_conf.notifications.telegram,
+        &old_conf.notifications.telegram,
+    ) && is_masked(&new_tg.bot_token)
+    {
+        new_tg.bot_token = old_tg.bot_token.clone();
+    }
+
+    if let (Some(new_dt), Some(old_dt)) = (
+        &mut new_conf.notifications.dingtalk,
+        &old_conf.notifications.dingtalk,
+    ) && new_dt.secret.as_deref().map(is_masked).unwrap_or(false)
+    {
+        new_dt.secret = old_dt.secret.clone();
+    }
+
+    if let (Some(new_fs), Some(old_fs)) = (
+        &mut new_conf.notifications.feishu,
+        &old_conf.notifications.feishu,
+    ) && new_fs.secret.as_deref().map(is_masked).unwrap_or(false)
+    {
+        new_fs.secret = old_fs.secret.clone();
+    }
+
+    if let (Some(new_em), Some(old_em)) = (
+        &mut new_conf.notifications.email,
+        &old_conf.notifications.email,
+    ) && is_masked(&new_em.password)
+    {
+        new_em.password = old_em.password.clone();
+    }
+}
+
 /// 保存更新配置
 pub async fn save_config_handler(
     State(state): State<AppState>,
     Json(payload): Json<SaveConfigRequest>,
 ) -> impl IntoResponse {
     let mut new_config = payload.config;
+    let old_config = state.config_manager.get_config();
+
+    // 合并保留脱敏掩码对应的历史真实凭据
+    merge_sensitive_credentials(&mut new_config, &old_config);
 
     // 如果用户提交了新密码，生成 bcrypt 哈希
-    if let Some(ref pwd) = payload.new_password {
-        if !pwd.trim().is_empty() {
-            match bcrypt::hash(pwd.trim(), bcrypt::DEFAULT_COST) {
-                Ok(hash) => {
-                    let username = new_config
-                        .auth
-                        .as_ref()
-                        .map(|a| a.username.clone())
-                        .unwrap_or_else(|| "admin".to_string());
-                    new_config.auth = Some(UserAuthConfig {
-                        username,
-                        password_hash: hash,
-                    });
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ApiResponse::<()>::err(format!("密码哈希失败: {}", e))),
-                    );
-                }
+    if let Some(ref pwd) = payload.new_password
+        && !pwd.trim().is_empty()
+    {
+        match bcrypt::hash(pwd.trim(), bcrypt::DEFAULT_COST) {
+            Ok(hash) => {
+                let username = new_config
+                    .auth
+                    .as_ref()
+                    .map(|a| a.username.clone())
+                    .unwrap_or_else(|| "admin".to_string());
+                new_config.auth = Some(UserAuthConfig {
+                    username,
+                    password_hash: hash,
+                });
             }
-        }
-    } else if let Some(ref auth) = new_config.auth {
-        // 保留原密码哈希（如果传入的是占位符）
-        if auth.password_hash == "******" {
-            let current = state.config_manager.get_config();
-            if let Some(ref cur_auth) = current.auth {
-                new_config.auth = Some(cur_auth.clone());
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()>::err(format!("密码哈希失败: {}", e))),
+                );
             }
         }
     }
