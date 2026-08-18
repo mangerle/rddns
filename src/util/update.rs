@@ -216,8 +216,9 @@ pub async fn upgrade_self() -> Result<(), String> {
     Ok(())
 }
 
-/// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包与原始二进制)
+/// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包、Tar.gz 归档与原始二进制)
 fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    // 1. 处理 ZIP 归档
     if bytes.starts_with(b"PK\x03\x04") || asset_name.ends_with(".zip") {
         let cursor = std::io::Cursor::new(bytes);
         let mut archive =
@@ -244,7 +245,37 @@ fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, 
         return Err("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)".to_string());
     }
 
-    // 若非 ZIP 归档，直接作为原始二进制返回
+    // 2. 处理 Tar.gz / Tgz 归档 (Gzip 魔数 0x1F, 0x8B)
+    if bytes.starts_with(&[0x1f, 0x8b])
+        || asset_name.ends_with(".tar.gz")
+        || asset_name.ends_with(".tgz")
+    {
+        let cursor = std::io::Cursor::new(bytes);
+        let gz_decoder = flate2::read::GzDecoder::new(cursor);
+        let mut archive = tar::Archive::new(gz_decoder);
+
+        if let Ok(entries) = archive.entries() {
+            for mut entry in entries.flatten() {
+                let entry_path = entry
+                    .path()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if entry_path.ends_with("rddns.exe")
+                    || entry_path.ends_with("rddns")
+                    || entry_path == "rddns.exe"
+                    || entry_path == "rddns"
+                {
+                    let mut out = Vec::new();
+                    std::io::copy(&mut entry, &mut out)
+                        .map_err(|e| format!("解压 Tar.gz 可执行程序失败: {}", e))?;
+                    return Ok(out);
+                }
+            }
+        }
+        return Err("Tar.gz 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)".to_string());
+    }
+
+    // 若非已知归档，直接作为原始二进制返回
     Ok(bytes.to_vec())
 }
 
@@ -268,5 +299,29 @@ mod tests {
         let raw_data = b"binary_data_mock";
         let extracted = extract_binary_from_bytes("rddns.exe", raw_data).unwrap();
         assert_eq!(extracted, raw_data);
+    }
+
+    #[test]
+    fn test_extract_binary_from_tar_gz() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        // 构造一个包含 rddns 二进制文件的 mock tar.gz
+        let mut tar_builder = tar::Builder::new(Vec::new());
+        let mock_content = b"#!/bin/sh\necho rddns";
+        let mut header = tar::Header::new_gnu();
+        header.set_path("rddns").unwrap();
+        header.set_size(mock_content.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        tar_builder.append(&header, &mock_content[..]).unwrap();
+        let tar_data = tar_builder.into_inner().unwrap();
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&tar_data).unwrap();
+        let gz_data = encoder.finish().unwrap();
+
+        let extracted = extract_binary_from_bytes("rddns-linux-amd64.tar.gz", &gz_data).unwrap();
+        assert_eq!(extracted, mock_content);
     }
 }
