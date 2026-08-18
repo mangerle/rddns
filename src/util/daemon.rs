@@ -33,10 +33,12 @@ pub fn run_as_daemon() -> Result<(), io::Error> {
 
     #[cfg(unix)]
     {
+        use std::os::unix::process::CommandExt;
         use std::process::Stdio;
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .process_group(0);
     }
 
     let child = cmd
