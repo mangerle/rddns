@@ -91,6 +91,7 @@ pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> 
                 return Some(ip);
             }
         }
+        return None;
     }
 
     for mat in IPV4_REGEX.find_iter(text) {
@@ -103,7 +104,7 @@ pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> 
 }
 
 /// 从字符串文本中提取合法的 IPv6 地址
-/// 若指定了 custom_regex 则优先使用自定义正则表达式筛选目标 IPv6
+/// 若指定了 custom_regex 则使用自定义正则表达式筛选目标 IPv6 (不匹配则返回 None)
 pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> {
     if let Some(pattern) = custom_regex
         && let Ok(re) = Regex::new(pattern)
@@ -116,6 +117,7 @@ pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> 
                 }
             }
         }
+        return None;
     }
 
     // 默认按照空格/换行/逗号/JSON括号分词提取

@@ -1438,8 +1438,9 @@
                 <div class="form-group" id="ipv6DynamicField"></div>
               </div>
               <div class="form-group">
-                <label>提取正则表达式 (可选)</label>
-                <input type="text" id="ipv6Regex" placeholder="例如从多 IP 中匹配固定前缀" />
+                <label>匹配规则 / 正则表达式 (可选)</label>
+                <input type="text" id="ipv6Regex" placeholder="支持正则或序号语法，例如 @1 选第1个、@2 选第2个IPv6" />
+                <p class="form-tip">支持填入正则表达式筛选前缀，或输入 <code>@1</code>、<code>@2</code> 快捷指定网卡第 N 个全球单播地址</p>
               </div>
               <div class="form-group">
                 <label>解析的 IPv6 域名列表 (一行一个)</label>
