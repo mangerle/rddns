@@ -32,6 +32,7 @@ impl CommandIpFetcher {
             c.args(["-c", &self.cmd]);
             c
         };
+        command.kill_on_drop(true);
 
         let output_fut = command.output();
         let output = tokio::time::timeout(self.timeout, output_fut)
@@ -78,5 +79,30 @@ impl IpFetcher for CommandIpFetcher {
         } else {
             Err(FetchError::NoValidIp(text))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_command_ip_fetcher_success() {
+        let fetcher = CommandIpFetcher::new("echo 1.2.3.4".to_string(), None, 5);
+        let ip = fetcher.fetch_ipv4().await.unwrap();
+        assert_eq!(ip, Some(Ipv4Addr::new(1, 2, 3, 4)));
+    }
+
+    #[tokio::test]
+    async fn test_command_ip_fetcher_timeout_and_kill() {
+        // 测试命令超时场景
+        let cmd = if cfg!(target_os = "windows") {
+            "ping -n 5 127.0.0.1 >nul"
+        } else {
+            "sleep 5"
+        };
+        let fetcher = CommandIpFetcher::new(cmd.to_string(), None, 1);
+        let res = fetcher.fetch_ipv4().await;
+        assert!(matches!(res, Err(FetchError::Timeout)));
     }
 }
