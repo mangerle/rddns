@@ -96,6 +96,34 @@ fn build_dns_query_packet(
     Ok(packet)
 }
 
+/// 安全跳过 DNS 域名标签或压缩指针 (带越界与防死循环保护)
+fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<(), String> {
+    let mut steps = 0;
+    while *offset < buf.len() {
+        steps += 1;
+        if steps > 128 {
+            return Err("DNS 域名解析嵌套层级超出限制".to_string());
+        }
+        let len = buf[*offset] as usize;
+        if len == 0 {
+            *offset += 1;
+            return Ok(());
+        }
+        if (len & 0xC0) == 0xC0 {
+            if *offset + 2 > buf.len() {
+                return Err("DNS 压缩指针截断".to_string());
+            }
+            *offset += 2;
+            return Ok(());
+        }
+        if *offset + 1 + len > buf.len() {
+            return Err("DNS 域名 Label 长度超出数据包边界".to_string());
+        }
+        *offset += 1 + len;
+    }
+    Err("DNS 域名数据包意外截断".to_string())
+}
+
 /// 解析 DNS 响应数据包提取 IP 列表与最小 TTL (秒)
 fn parse_dns_response_packet(
     buf: &[u8],
@@ -127,18 +155,9 @@ fn parse_dns_response_packet(
 
     // 跳过 Question 部分
     for _ in 0..qdcount {
-        while offset < buf.len() {
-            let len = buf[offset] as usize;
-            if len == 0 {
-                offset += 1;
-                break;
-            }
-            if (len & 0xC0) == 0xC0 {
-                // 压缩指针 (2 字节)
-                offset += 2;
-                break;
-            }
-            offset += 1 + len;
+        skip_dns_name(buf, &mut offset)?;
+        if offset + 4 > buf.len() {
+            return Err("DNS Question 区段被截断".to_string());
         }
         offset += 4; // QTYPE (2B) + QCLASS (2B)
     }
@@ -152,26 +171,13 @@ fn parse_dns_response_packet(
             break;
         }
 
-        // 跳过 Name (可能包含指针 0xC0 或 label)
-        while offset < buf.len() {
-            let len = buf[offset] as usize;
-            if len == 0 {
-                offset += 1;
-                break;
-            }
-            if (len & 0xC0) == 0xC0 {
-                offset += 2;
-                break;
-            }
-            offset += 1 + len;
-        }
+        skip_dns_name(buf, &mut offset)?;
 
         if offset + 10 > buf.len() {
-            break;
+            return Err("DNS Answer 记录头部被截断".to_string());
         }
 
         let atype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        // let aclass = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]);
         let ttl = u32::from_be_bytes([
             buf[offset + 4],
             buf[offset + 5],
@@ -182,7 +188,7 @@ fn parse_dns_response_packet(
         offset += 10;
 
         if offset + rdlength > buf.len() {
-            break;
+            return Err("DNS Answer RDATA 数据区被截断".to_string());
         }
 
         if atype == (qtype as u16) {
@@ -300,5 +306,19 @@ mod tests {
     fn test_custom_dns_server_setter_getter() {
         set_custom_dns_server("223.5.5.5:53".to_string());
         assert_eq!(get_custom_dns_server(), Some("223.5.5.5:53".to_string()));
+    }
+
+    #[test]
+    fn test_truncated_dns_packet() {
+        // 截断的数据包应安全返回 Err 而不是发生 panic
+        let short_packet = vec![0x12, 0x34, 0x81, 0x80];
+        let res = parse_dns_response_packet(&short_packet, 0x1234, QueryRecordType::A);
+        assert!(res.is_err());
+
+        // 包含无效超长 label 的数据包
+        let mut malformed_packet = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00];
+        malformed_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x3F, 0x61, 0x62]); // label 声明 63 字节但后续只有 2 字节
+        let res2 = parse_dns_response_packet(&malformed_packet, 0x1234, QueryRecordType::A);
+        assert!(res2.is_err());
     }
 }
