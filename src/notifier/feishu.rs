@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(payload["card"]["header"]["template"], "green");
         assert_eq!(
             payload["card"]["header"]["title"]["content"],
-            "🔔 rddns 动态域名解析通知"
+            "rddns 动态域名解析通知"
         );
 
         let card_json = payload.to_string();
