@@ -219,18 +219,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // 5. 监听系统中断信号 (Ctrl+C)
+    // 5. 监听系统退出信号 (支持 Ctrl+C / SIGINT 与 Linux systemd SIGTERM 优雅退出)
     let cancel_token_clone = cancel_token.clone();
     tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                tracing::info!("收到中断信号 (Ctrl+C)，开始优雅退出流程...");
-                cancel_token_clone.cancel();
-            }
-            Err(err) => {
-                tracing::error!("监听 Ctrl+C 信号异常: {}", err);
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::error!("注册 SIGTERM 信号监听失败: {}", e);
+                    None
+                }
+            };
+
+            tokio::select! {
+                res = tokio::signal::ctrl_c() => {
+                    if let Err(e) = res {
+                        tracing::error!("监听 Ctrl+C (SIGINT) 异常: {}", e);
+                    } else {
+                        tracing::info!("收到中断信号 (SIGINT/Ctrl+C)，开始优雅退出流程...");
+                    }
+                }
+                _ = async {
+                    if let Some(ref mut st) = sigterm {
+                        st.recv().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    tracing::info!("收到终止信号 (SIGTERM)，开始优雅退出流程...");
+                }
             }
         }
+
+        #[cfg(not(unix))]
+        {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                tracing::error!("监听 Ctrl+C 信号异常: {}", err);
+            } else {
+                tracing::info!("收到中断信号 (Ctrl+C)，开始优雅退出流程...");
+            }
+        }
+
+        cancel_token_clone.cancel();
     });
 
     // 等待引擎与 Web 服务退出
