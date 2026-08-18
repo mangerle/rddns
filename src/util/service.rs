@@ -275,6 +275,11 @@ WantedBy=multi-user.target
             );
 
             fs::write(service_file_path, service_content)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(service_file_path, fs::Permissions::from_mode(0o644));
+            }
             println!("🔄 正在重载 systemd 守护进程并启用自启服务...");
             Command::new("systemctl").args(["daemon-reload"]).status()?;
             Command::new("systemctl")
@@ -374,6 +379,11 @@ fn handle_macos_service(
             );
 
             fs::write(plist_path, plist_content)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(plist_path, fs::Permissions::from_mode(0o644));
+            }
             Command::new("launchctl")
                 .args(["load", "-w", plist_path])
                 .status()?;
