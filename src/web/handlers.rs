@@ -58,148 +58,10 @@ pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoRespo
     Json(ApiResponse::ok(clean_conf))
 }
 
-/// 对配置数据中的所有敏感凭据（包括密码、Token、Secret）进行脱敏掩码化
+/// 对配置数据中的关键敏感项（如密码哈希）进行脱敏保护
 fn mask_sensitive_credentials_for_ui(conf: &mut AppConfig) {
     if let Some(ref mut auth) = conf.auth {
         auth.password_hash = "******".to_string();
-    }
-
-    for task in &mut conf.dns_tasks {
-        match &mut task.provider {
-            crate::config::model::ProviderConfig::Cloudflare {
-                api_token, api_key, ..
-            } => {
-                if let Some(t) = api_token
-                    && !t.is_empty()
-                {
-                    *t = "******".to_string();
-                }
-                if let Some(k) = api_key
-                    && !k.is_empty()
-                {
-                    *k = "******".to_string();
-                }
-            }
-            crate::config::model::ProviderConfig::AliDns {
-                access_key_secret, ..
-            }
-            | crate::config::model::ProviderConfig::TencentCloud {
-                secret_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::HuaweiCloud {
-                secret_access_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::Porkbun {
-                secret_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::GoDaddy {
-                api_secret: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::BaiduCloud {
-                secret_access_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::TrafficRoute {
-                secret_access_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::Spaceship {
-                api_secret: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::DnsLa {
-                api_secret: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::AliEsa {
-                access_key_secret, ..
-            }
-            | crate::config::model::ProviderConfig::EdgeOne {
-                secret_key: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::NowCn {
-                secret: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::Eranet {
-                secret: access_key_secret,
-                ..
-            }
-            | crate::config::model::ProviderConfig::TNetHk {
-                secret: access_key_secret,
-                ..
-            } => {
-                if !access_key_secret.is_empty() {
-                    *access_key_secret = "******".to_string();
-                }
-            }
-            crate::config::model::ProviderConfig::Dynv6 { token }
-            | crate::config::model::ProviderConfig::NameSilo { api_key: token }
-            | crate::config::model::ProviderConfig::Gcore { api_key: token }
-            | crate::config::model::ProviderConfig::NsOne { api_key: token }
-            | crate::config::model::ProviderConfig::Vercel { token, .. }
-            | crate::config::model::ProviderConfig::RainYun { api_key: token, .. }
-            | crate::config::model::ProviderConfig::NameCom {
-                api_token: token, ..
-            }
-            | crate::config::model::ProviderConfig::HipmDnsMgr {
-                api_token: token, ..
-            } => {
-                if !token.is_empty() {
-                    *token = "******".to_string();
-                }
-            }
-            crate::config::model::ProviderConfig::Namecheap { password }
-            | crate::config::model::ProviderConfig::Dynadot { password }
-            | crate::config::model::ProviderConfig::ClouDNS {
-                auth_password: password,
-                ..
-            } => {
-                if !password.is_empty() {
-                    *password = "******".to_string();
-                }
-            }
-            crate::config::model::ProviderConfig::Callback { .. } => {}
-        }
-    }
-
-    if let Some(ref mut wx) = conf.notifications.wechat_official
-        && !wx.app_secret.is_empty()
-    {
-        wx.app_secret = "******".to_string();
-    }
-    if let Some(ref mut wc) = conf.notifications.wecom
-        && let Some(ref mut s) = wc.corp_secret
-        && !s.is_empty()
-    {
-        *s = "******".to_string();
-    }
-    if let Some(ref mut tg) = conf.notifications.telegram
-        && !tg.bot_token.is_empty()
-    {
-        tg.bot_token = "******".to_string();
-    }
-    if let Some(ref mut dt) = conf.notifications.dingtalk
-        && let Some(ref mut s) = dt.secret
-        && !s.is_empty()
-    {
-        *s = "******".to_string();
-    }
-    if let Some(ref mut fs) = conf.notifications.feishu
-        && let Some(ref mut s) = fs.secret
-        && !s.is_empty()
-    {
-        *s = "******".to_string();
-    }
-    if let Some(ref mut em) = conf.notifications.email
-        && !em.password.is_empty()
-    {
-        em.password = "******".to_string();
     }
 }
 
@@ -528,54 +390,53 @@ fn merge_sensitive_credentials(new_conf: &mut AppConfig, old_conf: &AppConfig) {
     }
 
     // 3. 通知渠道敏感凭据
-    if let (Some(new_wx), Some(old_wx)) = (
-        &mut new_conf.notifications.wechat_official,
-        &old_conf.notifications.wechat_official,
-    ) && is_masked(&new_wx.app_secret)
+    merge_notification_credentials(&mut new_conf.notifications, &old_conf.notifications);
+}
+
+/// 合并通知配置中的敏感凭据 (如果包含 "******" 掩码则还原为已保存的真实凭据)
+pub fn merge_notification_credentials(
+    new_notif: &mut NotificationConfig,
+    old_notif: &NotificationConfig,
+) {
+    let is_masked = |s: &str| s.trim() == "******";
+
+    if let (Some(new_wx), Some(old_wx)) =
+        (&mut new_notif.wechat_official, &old_notif.wechat_official)
+        && is_masked(&new_wx.app_secret)
     {
         new_wx.app_secret = old_wx.app_secret.clone();
     }
 
-    if let (Some(new_wc), Some(old_wc)) = (
-        &mut new_conf.notifications.wecom,
-        &old_conf.notifications.wecom,
-    ) && new_wc
-        .corp_secret
-        .as_deref()
-        .map(is_masked)
-        .unwrap_or(false)
+    if let (Some(new_wc), Some(old_wc)) = (&mut new_notif.wecom, &old_notif.wecom)
+        && new_wc
+            .corp_secret
+            .as_deref()
+            .map(is_masked)
+            .unwrap_or(false)
     {
         new_wc.corp_secret = old_wc.corp_secret.clone();
     }
 
-    if let (Some(new_tg), Some(old_tg)) = (
-        &mut new_conf.notifications.telegram,
-        &old_conf.notifications.telegram,
-    ) && is_masked(&new_tg.bot_token)
+    if let (Some(new_tg), Some(old_tg)) = (&mut new_notif.telegram, &old_notif.telegram)
+        && is_masked(&new_tg.bot_token)
     {
         new_tg.bot_token = old_tg.bot_token.clone();
     }
 
-    if let (Some(new_dt), Some(old_dt)) = (
-        &mut new_conf.notifications.dingtalk,
-        &old_conf.notifications.dingtalk,
-    ) && new_dt.secret.as_deref().map(is_masked).unwrap_or(false)
+    if let (Some(new_dt), Some(old_dt)) = (&mut new_notif.dingtalk, &old_notif.dingtalk)
+        && new_dt.secret.as_deref().map(is_masked).unwrap_or(false)
     {
         new_dt.secret = old_dt.secret.clone();
     }
 
-    if let (Some(new_fs), Some(old_fs)) = (
-        &mut new_conf.notifications.feishu,
-        &old_conf.notifications.feishu,
-    ) && new_fs.secret.as_deref().map(is_masked).unwrap_or(false)
+    if let (Some(new_fs), Some(old_fs)) = (&mut new_notif.feishu, &old_notif.feishu)
+        && new_fs.secret.as_deref().map(is_masked).unwrap_or(false)
     {
         new_fs.secret = old_fs.secret.clone();
     }
 
-    if let (Some(new_em), Some(old_em)) = (
-        &mut new_conf.notifications.email,
-        &old_conf.notifications.email,
-    ) && is_masked(&new_em.password)
+    if let (Some(new_em), Some(old_em)) = (&mut new_notif.email, &old_notif.email)
+        && is_masked(&new_em.password)
     {
         new_em.password = old_em.password.clone();
     }
@@ -698,12 +559,10 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
             {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<TestIpResult>::err(
-                        format!(
-                            "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
-                            trimmed
-                        ),
-                    )),
+                    Json(ApiResponse::<TestIpResult>::err(format!(
+                        "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
+                        trimmed
+                    ))),
                 );
             }
         }
@@ -735,7 +594,10 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
                 .map(|ip| ip.to_string())
         };
 
-        (StatusCode::OK, Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 })))
+        (
+            StatusCode::OK,
+            Json(ApiResponse::ok(TestIpResult { ipv4, ipv6 })),
+        )
     } else {
         (
             StatusCode::BAD_REQUEST,
@@ -749,9 +611,10 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
 /// 测试通知发送（优先提取当前已配置的真实公网 IP 与真实域名数据）
 pub async fn test_notify_handler(
     State(state): State<AppState>,
-    Json(config): Json<NotificationConfig>,
+    Json(mut config): Json<NotificationConfig>,
 ) -> impl IntoResponse {
     let app_config = state.config_manager.get_config();
+    merge_notification_credentials(&mut config, &app_config.notifications);
     let dispatcher = NotificationDispatcher::new(config);
 
     // 尝试从当前任务中探测真实 IP 并生成真实测试数据
@@ -920,7 +783,10 @@ pub async fn init_auth_handler(
     }
 
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host_header = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let host_header = headers
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
         let origin_host = origin
             .trim_start_matches("http://")
             .trim_start_matches("https://")
@@ -1143,43 +1009,12 @@ mod tests {
                 username: "admin".to_string(),
                 password_hash: "hashed_secret_pw".to_string(),
             }),
-            dns_tasks: vec![DnsTaskConfig {
-                name: "test".to_string(),
-                provider: ProviderConfig::AliDns {
-                    access_key_id: "my_ak".to_string(),
-                    access_key_secret: "my_secret_key".to_string(),
-                    endpoint: None,
-                },
-                ..Default::default()
-            }],
-            notifications: NotificationConfig {
-                email: Some(crate::config::model::EmailConfig {
-                    smtp_server: "smtp.example.com".to_string(),
-                    smtp_port: 465,
-                    username: "user@example.com".to_string(),
-                    password: "email_secret_password".to_string(),
-                    from_address: "user@example.com".to_string(),
-                    to_addresses: vec!["to@example.com".to_string()],
-                    use_ssl: true,
-                    enabled: true,
-                }),
-                ..Default::default()
-            },
             ..Default::default()
         };
 
         mask_sensitive_credentials_for_ui(&mut conf);
 
         assert_eq!(conf.auth.unwrap().password_hash, "******");
-        if let ProviderConfig::AliDns {
-            access_key_secret, ..
-        } = &conf.dns_tasks[0].provider
-        {
-            assert_eq!(access_key_secret, "******");
-        } else {
-            panic!("Provider mismatch");
-        }
-        assert_eq!(conf.notifications.email.unwrap().password, "******");
     }
 
     #[tokio::test]
@@ -1216,7 +1051,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_auth_rejects_wan_ip() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (tx, _rx) = mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.yaml");
         let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
@@ -1242,7 +1077,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_init_auth_rejects_cross_site_and_origin_mismatch() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let (tx, _rx) = mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.yaml");
         let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
@@ -1309,5 +1144,36 @@ provider:
         let task_default: DnsTaskConfig = serde_yaml::from_str(default_yaml).unwrap();
         assert!(task_default.enabled);
     }
-}
 
+    #[test]
+    fn test_merge_notification_credentials() {
+        use crate::config::model::FeishuConfig;
+
+        let old_notif = NotificationConfig {
+            feishu: Some(FeishuConfig {
+                enabled: true,
+                webhook_url: "https://open.feishu.cn/hook/xxx".to_string(),
+                secret: Some("real_secret_123456".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        // 用户在前端界面点击测试时，前端表单传过来的是脱敏的 "******"
+        let mut new_notif = NotificationConfig {
+            feishu: Some(FeishuConfig {
+                enabled: true,
+                webhook_url: "https://open.feishu.cn/hook/xxx".to_string(),
+                secret: Some("******".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        merge_notification_credentials(&mut new_notif, &old_notif);
+
+        // 验证掩码已被正确还原为真实的 secret
+        assert_eq!(
+            new_notif.feishu.unwrap().secret,
+            Some("real_secret_123456".to_string())
+        );
+    }
+}

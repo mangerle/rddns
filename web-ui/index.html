@@ -482,6 +482,37 @@
       border-color: var(--border-focus);
       box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
     }
+    .password-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    .password-input-wrapper input {
+      width: 100%;
+      padding-right: 40px !important;
+    }
+    .btn-toggle-eye {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      padding: 6px;
+      cursor: pointer;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      transition: color 0.2s, background-color 0.2s;
+      z-index: 2;
+    }
+    .btn-toggle-eye:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.08);
+    }
     textarea {
       resize: vertical;
       font-family: var(--font-mono);
@@ -2179,6 +2210,7 @@
       if (loginPage) loginPage.style.display = 'flex';
       if (initPage) initPage.style.display = 'none';
       if (mainApp) mainApp.style.display = 'none';
+      initPasswordToggles();
       setTimeout(() => {
         const u = document.getElementById('loginUsername');
         const p = document.getElementById('loginPassword');
@@ -2194,6 +2226,7 @@
       if (initPage) initPage.style.display = 'flex';
       if (loginPage) loginPage.style.display = 'none';
       if (mainApp) mainApp.style.display = 'none';
+      initPasswordToggles();
       setTimeout(() => document.getElementById('initPassword')?.focus(), 100);
     }
 
@@ -2204,6 +2237,7 @@
       if (loginPage) loginPage.style.display = 'none';
       if (initPage) initPage.style.display = 'none';
       if (mainApp) mainApp.style.display = 'flex';
+      initPasswordToggles();
       updateLogoutBtn();
     }
 
@@ -2377,6 +2411,37 @@
         document.getElementById('emailSmtpPort').value = p.port;
         document.getElementById('emailUseSsl').checked = p.ssl;
       }
+    }
+
+    // 初始化所有密码输入框的显隐切换（小眼睛按钮）
+    function initPasswordToggles() {
+      document.querySelectorAll('input[type="password"], input.password-toggleable').forEach(input => {
+        if (input.parentElement && input.parentElement.classList.contains('password-input-wrapper')) return;
+        input.classList.add('password-toggleable');
+        const wrapper = document.createElement('div');
+        wrapper.className = 'password-input-wrapper';
+        input.parentNode.insertBefore(wrapper, input);
+        wrapper.appendChild(input);
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-toggle-eye';
+        btn.title = '显示明文';
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+        btn.onclick = (e) => {
+          e.preventDefault();
+          if (input.type === 'password') {
+            input.type = 'text';
+            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+            btn.title = '隐藏内容';
+          } else {
+            input.type = 'password';
+            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+            btn.title = '显示明文';
+          }
+        };
+        wrapper.appendChild(btn);
+      });
     }
 
     function autoFillFromAddress() {
@@ -3102,6 +3167,8 @@
         document.getElementById('ipv6Regex').value = task.ipv6.regex || '';
         document.getElementById('ipv6Domains').value = (task.ipv6.domains || []).join('\n');
       }
+
+      initPasswordToggles();
     }
 
     // 从右侧表单采集当前任务数据，同步更新回 globalConfig.dns_tasks[index]
@@ -3438,6 +3505,7 @@
           document.getElementById('webhookBody').value = notif.webhook.body || '';
         }
       }
+      initPasswordToggles();
     }
 
     // 保存全局配置 (包含所有多任务与系统通知)
