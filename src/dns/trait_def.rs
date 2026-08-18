@@ -35,6 +35,23 @@ pub enum SyncStatus {
     Failed,
 }
 
+impl SyncStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncStatus::Created => "已创建",
+            SyncStatus::Updated => "已更新",
+            SyncStatus::Unchanged => "未变动",
+            SyncStatus::Failed => "失败",
+        }
+    }
+}
+
+impl std::fmt::Display for SyncStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// 单条记录同步结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRecordResult {

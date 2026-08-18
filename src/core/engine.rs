@@ -212,20 +212,34 @@ impl DdnsEngine {
                 let task_name = task.name.clone();
                 let ttl = task.ttl;
                 sync_join_set.spawn(async move {
+                    let start_time = std::time::Instant::now();
+                    let full_domain = domain.full_domain();
                     match provider
                         .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), ttl)
                         .await
                     {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!(
-                                "[{}] 同步域名 {} (A 记录) 失败: {}",
+                        Ok(res) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            tracing::info!(
+                                "[{}] 同步域名 {} (A 记录) 完成: {} (耗时 {}ms)",
                                 task_name,
-                                domain.full_domain(),
-                                e
+                                full_domain,
+                                res.status.as_str(),
+                                cost_ms
+                            );
+                            res
+                        }
+                        Err(e) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            tracing::error!(
+                                "[{}] 同步域名 {} (A 记录) 失败: {} (耗时 {}ms)",
+                                task_name,
+                                full_domain,
+                                e,
+                                cost_ms
                             );
                             SyncRecordResult {
-                                domain: domain.full_domain(),
+                                domain: full_domain,
                                 record_type: DnsRecordType::A,
                                 target_ip: ipv4.to_string(),
                                 status: SyncStatus::Failed,
@@ -247,20 +261,34 @@ impl DdnsEngine {
                 let task_name = task.name.clone();
                 let ttl = task.ttl;
                 sync_join_set.spawn(async move {
+                    let start_time = std::time::Instant::now();
+                    let full_domain = domain.full_domain();
                     match provider
                         .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), ttl)
                         .await
                     {
-                        Ok(res) => res,
-                        Err(e) => {
-                            tracing::error!(
-                                "[{}] 同步域名 {} (AAAA 记录) 失败: {}",
+                        Ok(res) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            tracing::info!(
+                                "[{}] 同步域名 {} (AAAA 记录) 完成: {} (耗时 {}ms)",
                                 task_name,
-                                domain.full_domain(),
-                                e
+                                full_domain,
+                                res.status.as_str(),
+                                cost_ms
+                            );
+                            res
+                        }
+                        Err(e) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            tracing::error!(
+                                "[{}] 同步域名 {} (AAAA 记录) 失败: {} (耗时 {}ms)",
+                                task_name,
+                                full_domain,
+                                e,
+                                cost_ms
                             );
                             SyncRecordResult {
-                                domain: domain.full_domain(),
+                                domain: full_domain,
                                 record_type: DnsRecordType::AAAA,
                                 target_ip: ipv6.to_string(),
                                 status: SyncStatus::Failed,
