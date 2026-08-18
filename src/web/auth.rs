@@ -1,33 +1,37 @@
 use crate::web::handlers::AppState;
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use std::net::SocketAddr;
 
 /// Basic Auth 鉴权中间件
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = state.config_manager.get_config();
 
-    // 如果未配置用户认证凭据：默认只允许本地回环和内网局域网访问，严禁公网未授权访问
+    // 如果未配置用户认证凭据：强制只允许本地回环和内网局域网访问，严禁公网未授权访问
     if config.auth.is_none() {
-        let client_ip_str = req
-            .headers()
-            .get("X-Forwarded-For")
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .or_else(|| req.headers().get("X-Real-IP").and_then(|h| h.to_str().ok()))
-            .map(|s| s.trim());
+        // 从底层 TCP 连接信息提取真实 Peer IP (防止伪造 X-Forwarded-For 绕过安全拦截)
+        let peer_ip = req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip());
 
-        if let Some(ip_str) = client_ip_str
-            && let Ok(ip) = ip_str.parse::<std::net::IpAddr>()
-            && !crate::util::net::is_private_or_loopback(&ip)
-        {
+        let is_allowed = match peer_ip {
+            Some(ip) => crate::util::net::is_private_or_loopback(&ip),
+            None => false, // 无法确定真实来源时，严格默认拦截
+        };
+
+        if !is_allowed {
+            let blocked_ip = peer_ip
+                .map(|ip| ip.to_string())
+                .unwrap_or_else(|| "未知/无法验证".to_string());
             tracing::warn!(
                 "🛡️ [安全拦截] 阻止公网 IP ({}) 访问未设置密码的管理控制台",
-                ip
+                blocked_ip
             );
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)

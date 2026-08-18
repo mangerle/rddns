@@ -102,12 +102,15 @@ impl WebServer {
         let listener = TcpListener::bind(addr).await?;
         tracing::info!("Web 服务已成功监听在: http://{}", addr);
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                cancel_token.cancelled().await;
-                tracing::info!("收到退出信号，Web 服务优雅关闭");
-            })
-            .await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            cancel_token.cancelled().await;
+            tracing::info!("收到退出信号，Web 服务优雅关闭");
+        })
+        .await?;
 
         Ok(())
     }
