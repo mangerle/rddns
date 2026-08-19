@@ -13,6 +13,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use chrono::Local;
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -86,7 +87,7 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        tracing::error!("Web API 请求失败 [{}]: {}", self.status, self.message);
+        error!("Web API 请求失败 [{}]: {}", self.status, self.message);
         (self.status, Json(ApiResponse::<()>::err(self.message))).into_response()
     }
 }
@@ -791,7 +792,7 @@ pub async fn init_auth_handler(
 ) -> Result<Json<ApiResponse<&'static str>>, AppError> {
     // 1. 来源 IP 校验：仅允许本地回环和私网局域网初始化，禁止公网直接初始化
     if !crate::util::net::is_private_or_loopback(&peer_addr.ip()) {
-        tracing::warn!(
+        warn!(
             "🛡️ [安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
             peer_addr.ip()
         );
@@ -804,7 +805,7 @@ pub async fn init_auth_handler(
     if let Some(fetch_site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
         && fetch_site == "cross-site"
     {
-        tracing::warn!("🛡️ [安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
+        warn!("🛡️ [安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
         return Err(AppError::forbidden(
             "出于安全保护，禁止跨站请求发起账号初始化！",
         ));
@@ -821,10 +822,9 @@ pub async fn init_auth_handler(
             .trim_end_matches('/');
 
         if !host_header.is_empty() && !origin_host.is_empty() && origin_host != host_header {
-            tracing::warn!(
+            warn!(
                 "🛡️ [安全拦截] Origin ({}) 与 Host ({}) 不匹配，拦截跨站初始化请求",
-                origin,
-                host_header
+                origin, host_header
             );
             return Err(AppError::forbidden(
                 "出于安全保护，禁止跨站请求发起账号初始化！",
@@ -859,7 +859,7 @@ pub async fn init_auth_handler(
         })
         .map_err(|e| AppError::bad_request(format!("初始化管理员账号失败: {}", e)))?;
 
-    tracing::info!("管理员账号 [{}] 已成功初始化", username);
+    info!("管理员账号 [{}] 已成功初始化", username);
     Ok(Json(ApiResponse::ok("管理员账号初始化成功")))
 }
 
@@ -905,13 +905,13 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     tokio::spawn(async {
         match crate::util::update::upgrade_self().await {
             Ok(()) => {
-                tracing::info!("🎉 自动更新完成，正在平滑重启服务以加载新版本...");
+                info!("🎉 自动更新完成，正在平滑重启服务以加载新版本...");
                 if let Err(e) = crate::util::update::restart_process() {
-                    tracing::error!("重启服务失败，请手动重启: {:#}", e);
+                    error!("重启服务失败，请手动重启: {:#}", e);
                 }
             }
             Err(e) => {
-                tracing::error!("在线自动更新失败: {:#}", e);
+                error!("在线自动更新失败: {:#}", e);
             }
         }
     });

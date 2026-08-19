@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use crate::util::crypto::{hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -212,7 +213,7 @@ impl DnsProvider for TencentCloudProvider {
 
         if let Some(existing) = matched {
             if existing.value == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -240,7 +241,7 @@ impl DnsProvider for TencentCloudProvider {
 
             let _: serde_json::Value = self.request_tc3_api("ModifyRecord", modify_payload).await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -266,7 +267,7 @@ impl DnsProvider for TencentCloudProvider {
 
             let _: serde_json::Value = self.request_tc3_api("CreateRecord", create_payload).await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功创建域名 {} -> {}",
                 self.provider_name(),
                 full_domain,

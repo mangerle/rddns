@@ -12,6 +12,7 @@ use crate::web::sse::sse_log_handler;
 use axum::Router;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
+use log::{info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -61,7 +62,7 @@ impl WebServer {
             if let Ok(addr) = s.parse::<SocketAddr>() {
                 return addr;
             }
-            tracing::warn!("无法解析命令行传入的监听地址 [{}]，将回退至默认地址", s);
+            warn!("无法解析命令行传入的监听地址 [{}]，将回退至默认地址", s);
         }
 
         if not_allow_wan_access {
@@ -113,7 +114,7 @@ impl WebServer {
             .with_state(state);
 
         let listener = TcpListener::bind(addr).await?;
-        tracing::info!("Web 服务已成功监听在: http://{}", addr);
+        info!("Web 服务已成功监听在: http://{}", addr);
 
         axum::serve(
             listener,
@@ -121,7 +122,7 @@ impl WebServer {
         )
         .with_graceful_shutdown(async move {
             cancel_token.cancelled().await;
-            tracing::info!("收到退出信号，Web 服务优雅关闭");
+            info!("收到退出信号，Web 服务优雅关闭");
         })
         .await?;
 

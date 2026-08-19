@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::{info, warn};
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
@@ -127,7 +128,7 @@ impl DnsProvider for SpaceshipProvider {
         }
 
         if existing_ips.len() == 1 && existing_ips[0] == target_ip_str {
-            tracing::info!(
+            info!(
                 "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                 self.provider_name(),
                 full_domain,
@@ -171,11 +172,11 @@ impl DnsProvider for SpaceshipProvider {
                 Ok(resp) => {
                     if !resp.status().is_success() {
                         let text = resp.text().await.unwrap_or_default();
-                        tracing::warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
+                        warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Spaceship 删除旧解析记录网络请求失败: {}", e);
+                    warn!("Spaceship 删除旧解析记录网络请求失败: {}", e);
                 }
             }
         }
@@ -203,7 +204,7 @@ impl DnsProvider for SpaceshipProvider {
 
         let put_status = put_resp.status();
         if put_status.is_success() {
-            tracing::info!(
+            info!(
                 "[{}] 成功更新/创建域名 {} -> {}",
                 self.provider_name(),
                 full_domain,

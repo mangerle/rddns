@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -142,7 +143,7 @@ impl DnsProvider for DnsLaProvider {
 
         if let Some(existing) = matched {
             if existing.data == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -182,7 +183,7 @@ impl DnsProvider for DnsLaProvider {
                 });
 
             if act_res.code == 200 {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -228,7 +229,7 @@ impl DnsProvider for DnsLaProvider {
                 });
 
             if act_res.code == 200 {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

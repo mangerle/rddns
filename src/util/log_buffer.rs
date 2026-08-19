@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
@@ -109,8 +110,8 @@ impl LogVisitor {
     }
 }
 
-impl tracing::field::Visit for LogVisitor {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+impl Visit for LogVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" {
             self.message = Some(value.to_string());
         } else {
@@ -119,7 +120,7 @@ impl tracing::field::Visit for LogVisitor {
         }
     }
 
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             let s = format!("{:?}", value);
             let cleaned = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {

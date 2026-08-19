@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use crate::util::crypto::{hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -407,7 +408,7 @@ impl DnsProvider for TencentEoProvider {
                     .any(|r| r.record == target_ip_str && r.weight.unwrap_or(100) == weight_val);
 
             if is_unchanged {
-                tracing::info!(
+                info!(
                     "[{}] EdgeOne 源站组 [{}] 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     matched_group.name,
@@ -442,7 +443,7 @@ impl DnsProvider for TencentEoProvider {
                 });
             }
 
-            tracing::info!(
+            info!(
                 "[{}] 成功同步 EdgeOne 源站组 [{}] -> IP: {}",
                 self.provider_name(),
                 matched_group.name,
@@ -494,7 +495,7 @@ impl DnsProvider for TencentEoProvider {
 
         if let Some(existing) = matched {
             if existing.content == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -538,7 +539,7 @@ impl DnsProvider for TencentEoProvider {
                 });
             }
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -573,7 +574,7 @@ impl DnsProvider for TencentEoProvider {
                 });
             }
 
-            tracing::info!(
+            info!(
                 "[{}] 成功创建域名解析 {} -> {}",
                 self.provider_name(),
                 full_domain,

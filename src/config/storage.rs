@@ -1,4 +1,5 @@
 use crate::config::model::AppConfig;
+use log::info;
 use parking_lot::RwLock;
 use std::fs;
 use std::io::Write;
@@ -29,12 +30,12 @@ impl ConfigManager {
     /// 初始化配置管理器（从指定路径加载，若不存在则创建默认配置）
     pub fn load_or_create(path: PathBuf) -> Result<Self, ConfigError> {
         let config = if path.exists() {
-            tracing::info!("正在加载配置文件: {}", path.display());
+            info!("正在加载配置文件: {}", path.display());
             let content = fs::read_to_string(&path)?;
             let conf: AppConfig = serde_yaml::from_str(&content)?;
             conf
         } else {
-            tracing::info!("配置文件不存在，创建默认配置: {}", path.display());
+            info!("配置文件不存在，创建默认配置: {}", path.display());
             let default_conf = AppConfig::default();
             Self::atomic_save_to_path(&path, &default_conf)?;
             default_conf
@@ -90,7 +91,7 @@ impl ConfigManager {
         let new_arc = Arc::new(new_config);
         *guard = new_arc.clone();
         let _ = self.sender.send(new_arc.clone());
-        tracing::info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
+        info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
         Ok(new_arc)
     }
 

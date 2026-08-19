@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use std::collections::HashMap;
@@ -102,7 +103,7 @@ impl DnsProvider for CallbackProvider {
         let text = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
-            tracing::info!(
+            info!(
                 "[{}] 成功触发 Callback: {} -> {}, 响应: {}",
                 self.provider_name(),
                 full_domain,

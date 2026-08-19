@@ -2,6 +2,7 @@ use crate::web::handlers::AppState;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use log::debug;
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::StreamExt;
@@ -16,7 +17,7 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
             .ok()
             .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str))),
         Err(BroadcastStreamRecvError::Lagged(missed)) => {
-            tracing::debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
+            debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
             None
         }
     });

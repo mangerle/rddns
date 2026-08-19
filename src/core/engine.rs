@@ -8,6 +8,7 @@ use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use chrono::Local;
+use log::{debug, error, info};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -47,7 +48,7 @@ impl DdnsEngine {
         let mut join_set = tokio::task::JoinSet::new();
         for task in config.dns_tasks.clone() {
             if !task.enabled {
-                tracing::debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
+                debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
                 continue;
             }
             let config_clone = config.clone();
@@ -77,12 +78,12 @@ impl DdnsEngine {
         force_sync: bool,
     ) {
         if !task.enabled {
-            tracing::debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
+            debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
             return;
         }
 
         if !task.provider.is_configured() {
-            tracing::info!(
+            info!(
                 "[{}] 未配置有效的 DNS 服务商认证凭据，跳过同步（请访问 Web 界面 http://localhost:9876 完成配置）",
                 task.name
             );
@@ -90,14 +91,14 @@ impl DdnsEngine {
         }
 
         if !task.has_domains() {
-            tracing::info!(
+            info!(
                 "[{}] 未配置需要解析的域名，跳过同步（请访问 Web 界面添加解析域名）",
                 task.name
             );
             return;
         }
 
-        tracing::info!("======== 开始执行任务: [{}] ========", task.name);
+        info!("======== 开始执行任务: [{}] ========", task.name);
 
         let mut current_state = state_manager.get_task_state(&task.name);
 
@@ -111,12 +112,12 @@ impl DdnsEngine {
                     match fetcher.fetch_ipv4().await {
                         Ok(ip) => {
                             if let Some(ref v4) = ip {
-                                tracing::info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
+                                info!("[{}] 探测到当前公网 IPv4: {}", task.name, v4);
                             }
                             ip
                         }
                         Err(e) => {
-                            tracing::error!("[{}] 获取 IPv4 失败: {}", task.name, e);
+                            error!("[{}] 获取 IPv4 失败: {}", task.name, e);
                             None
                         }
                     }
@@ -129,12 +130,12 @@ impl DdnsEngine {
                     match fetcher.fetch_ipv6().await {
                         Ok(ip) => {
                             if let Some(ref v6) = ip {
-                                tracing::info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
+                                info!("[{}] 探测到当前公网 IPv6: {}", task.name, v6);
                             }
                             ip
                         }
                         Err(e) => {
-                            tracing::error!("[{}] 获取 IPv6 失败: {}", task.name, e);
+                            error!("[{}] 获取 IPv6 失败: {}", task.name, e);
                             None
                         }
                     }
@@ -171,13 +172,9 @@ impl DdnsEngine {
         let should_sync_cloud = force_sync || ip_changed || reach_cache_limit;
 
         if !should_sync_cloud {
-            tracing::info!(
+            info!(
                 "[{}] 本地 IP 未发生变动 (IPv4: {:?}, IPv6: {:?})，未达服务商校对周期 ({}/{})，跳过云端请求",
-                task.name,
-                ipv4_opt,
-                ipv6_opt,
-                current_state.check_counter,
-                app_config.cache_times
+                task.name, ipv4_opt, ipv6_opt, current_state.check_counter, app_config.cache_times
             );
             current_state.last_sync_time =
                 Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -186,11 +183,9 @@ impl DdnsEngine {
         }
 
         if reach_cache_limit {
-            tracing::info!(
+            info!(
                 "[{}] 达到服务商校对周期 ({}/{})，强制发起云端真实记录对比",
-                task.name,
-                current_state.check_counter,
-                app_config.cache_times
+                task.name, current_state.check_counter, app_config.cache_times
             );
         }
 
@@ -199,7 +194,7 @@ impl DdnsEngine {
             match create_dns_provider(&task.provider, task.http_interface.as_deref()) {
                 Ok(p) => p,
                 Err(e) => {
-                    tracing::error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
+                    error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
                     current_state.consecutive_failures += 1;
                     current_state.last_error = Some(format!("创建 DNS 服务商驱动失败: {}", e));
                     current_state.last_sync_time =
@@ -239,7 +234,7 @@ impl DdnsEngine {
                         {
                             Ok(res) => {
                                 let cost_ms = start_time.elapsed().as_millis();
-                                tracing::info!(
+                                info!(
                                     "[{}] 同步域名 {} (A 记录) 完成: {} (耗时 {}ms)",
                                     task_name,
                                     full_domain,
@@ -250,12 +245,9 @@ impl DdnsEngine {
                             }
                             Err(e) => {
                                 let cost_ms = start_time.elapsed().as_millis();
-                                tracing::error!(
+                                error!(
                                     "[{}] 同步域名 {} (A 记录) 失败: {} (耗时 {}ms)",
-                                    task_name,
-                                    full_domain,
-                                    e,
-                                    cost_ms
+                                    task_name, full_domain, e, cost_ms
                                 );
                                 SyncRecordResult {
                                     domain: full_domain,
@@ -301,7 +293,7 @@ impl DdnsEngine {
                         {
                             Ok(res) => {
                                 let cost_ms = start_time.elapsed().as_millis();
-                                tracing::info!(
+                                info!(
                                     "[{}] 同步域名 {} (AAAA 记录) 完成: {} (耗时 {}ms)",
                                     task_name,
                                     full_domain,
@@ -312,12 +304,9 @@ impl DdnsEngine {
                             }
                             Err(e) => {
                                 let cost_ms = start_time.elapsed().as_millis();
-                                tracing::error!(
+                                error!(
                                     "[{}] 同步域名 {} (AAAA 记录) 失败: {} (耗时 {}ms)",
-                                    task_name,
-                                    full_domain,
-                                    e,
-                                    cost_ms
+                                    task_name, full_domain, e, cost_ms
                                 );
                                 SyncRecordResult {
                                     domain: full_domain,
@@ -444,7 +433,7 @@ impl DdnsEngine {
             dispatcher.dispatch(event);
         }
 
-        tracing::info!("======== 任务 [{}] 同步执行完毕 ========\n", task.name);
+        info!("======== 任务 [{}] 同步执行完毕 ========\n", task.name);
     }
 
     /// 启动引擎后台主循环
@@ -452,7 +441,7 @@ impl DdnsEngine {
         // 开机网络探测：在后台异步探测网络就绪（最大等待 120 秒），若收到退出信号可提前退出
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                tracing::info!("收到停止信号，DDNS 调度引擎平滑退出");
+                info!("收到停止信号，DDNS 调度引擎平滑退出");
                 return;
             }
             _ = crate::util::wait_internet::wait_for_internet(120, 3) => {}
@@ -467,7 +456,7 @@ impl DdnsEngine {
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
-                    tracing::info!("收到停止信号，DDNS 调度引擎平滑退出");
+                    info!("收到停止信号，DDNS 调度引擎平滑退出");
                     break;
                 }
                 _ = timer.tick() => {
@@ -475,7 +464,7 @@ impl DdnsEngine {
                 }
                 manual_req = self.trigger_receiver.recv() => {
                     if manual_req.is_some() {
-                        tracing::info!("收到手动强制同步触发指令");
+                        info!("收到手动强制同步触发指令");
                         self.run_once(true).await;
                     }
                 }
@@ -489,7 +478,7 @@ impl DdnsEngine {
                             new_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                             new_timer.reset();
                             timer = new_timer;
-                            tracing::info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
+                            info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
                         }
                     }
                 }

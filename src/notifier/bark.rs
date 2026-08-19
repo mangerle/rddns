@@ -1,6 +1,7 @@
 use crate::config::model::BarkConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -65,7 +66,7 @@ impl Notifier for BarkNotifier {
         let resp_body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
-            tracing::info!("[{}] Bark 消息推送成功", self.channel_name());
+            info!("[{}] Bark 消息推送成功", self.channel_name());
             Ok(())
         } else {
             Err(NotifyError::Provider(format!(

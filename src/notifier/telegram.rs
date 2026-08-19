@@ -1,6 +1,7 @@
 use crate::config::model::TelegramConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -74,7 +75,7 @@ impl Notifier for TelegramNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
-            tracing::info!("[{}] 消息发送成功", self.channel_name());
+            info!("[{}] 消息发送成功", self.channel_name());
             Ok(())
         } else {
             Err(NotifyError::Provider(format!(

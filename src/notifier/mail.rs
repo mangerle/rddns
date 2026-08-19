@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use log::{info, warn};
 use std::time::Duration;
 
 pub struct EmailNotifier {
@@ -221,7 +222,7 @@ impl Notifier for EmailNotifier {
                     valid_to_count += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ 收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
+                    warn!("⚠️ 收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
                 }
             }
         }
@@ -259,7 +260,7 @@ impl Notifier for EmailNotifier {
             .await
             .map_err(|e| NotifyError::Email(format!("邮件发送失败: {}", e)))?;
 
-        tracing::info!("[{}] 邮件发送成功", self.channel_name());
+        info!("[{}] 邮件发送成功", self.channel_name());
         Ok(())
     }
 }

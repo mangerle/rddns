@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -111,7 +112,7 @@ impl DnsProvider for NameSiloProvider {
 
         if let Some(record_id) = matched_record_id {
             if current_value.as_deref() == Some(&target_ip_str) {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -146,7 +147,7 @@ impl DnsProvider for NameSiloProvider {
             let update_xml = update_resp.text().await?;
 
             if Self::is_success_code(&update_xml) {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -189,7 +190,7 @@ impl DnsProvider for NameSiloProvider {
             let add_xml = add_resp.text().await?;
 
             if Self::is_success_code(&add_xml) {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

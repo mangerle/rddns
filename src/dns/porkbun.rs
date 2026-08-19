@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -124,7 +125,7 @@ impl DnsProvider for PorkbunProvider {
         let existing_records = query_result.records.unwrap_or_default();
         if let Some(existing) = existing_records.first() {
             if existing.content.as_deref() == Some(&target_ip_str) {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -174,7 +175,7 @@ impl DnsProvider for PorkbunProvider {
 
             let edit_result: PorkbunBaseResponse = serde_json::from_str(&edit_text)?;
             if edit_result.status.eq_ignore_ascii_case("SUCCESS") {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -222,7 +223,7 @@ impl DnsProvider for PorkbunProvider {
 
             let create_result: PorkbunBaseResponse = serde_json::from_str(&create_text)?;
             if create_result.status.eq_ignore_ascii_case("SUCCESS") {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

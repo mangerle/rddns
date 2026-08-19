@@ -6,18 +6,16 @@ mod notifier;
 mod util;
 mod web;
 
+use crate::util::logger::init_logger;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::model::UserAuthConfig;
 use config::storage::ConfigManager;
 use core::engine::DdnsEngine;
+use log::{error, info};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use util::log_buffer::{BufferLogLayer, LogBuffer};
 use web::server::WebServer;
 
 #[derive(Parser, Debug)]
@@ -66,7 +64,18 @@ struct CliArgs {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    // 1. 在程序最开头初始化全局日志体系 (控制台彩色输出 + 本地文件按大小轮转 + Web内存环形缓冲)
+    let logging_handle = init_logger().context("初始化全局日志系统失败")?;
+    let log_buffer = logging_handle.log_buffer;
+    let _log_guard = logging_handle._guard;
+
     let args = CliArgs::parse();
+
+    info!("==========================================");
+    info!(
+        "🚀 rddns 动态域名解析系统 v{} 正在启动",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // 如果配置了自定义 DNS 解析服务器
     if let Some(ref dns_srv) = args.dns {
@@ -81,6 +90,7 @@ async fn main() -> Result<()> {
     // 如果指定了 -u 则执行自动升级并退出
     if args.upgrade {
         if let Err(e) = util::update::upgrade_self().await {
+            error!("❌ 自动升级失败: {:#}", e);
             eprintln!("❌ 自动升级失败: {:#}", e);
             std::process::exit(1);
         }
@@ -93,7 +103,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 1. 解析配置文件路径：
+    // 解析配置文件路径：
     // 若为相对路径，按如下优先级智能判定：
     // - 优先级 1：当前工作目录 (CWD) 下若已存在该文件，优先读取当前目录；
     // - 优先级 2：可执行文件所在目录下若存在该文件，优先读取程序同级目录；
@@ -128,22 +138,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 2. 初始化内存环形日志缓冲区与 Tracing 订阅者
-    let log_buffer = LogBuffer::new(300);
-    let buffer_layer = BufferLogLayer::new(log_buffer.clone());
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(tracing_subscriber::fmt::layer().with_ansi(true))
-        .with(buffer_layer)
-        .init();
-
-    tracing::info!("==========================================");
-    tracing::info!(
-        "🚀 rddns 动态域名解析系统 v{} 正在启动",
-        env!("CARGO_PKG_VERSION")
-    );
     let config_manager =
         Arc::new(ConfigManager::load_or_create(config_path).context("加载或初始化配置文件失败")?);
 
@@ -162,7 +156,7 @@ async fn main() -> Result<()> {
     // 处理重置密码指令 (--reset-password / --resetPassword)
     if let Some(new_pwd) = args.reset_password {
         if new_pwd.trim().is_empty() {
-            eprintln!("❌ 重置密码失败：新密码不能为空！");
+            error!("重置密码失败：新密码不能为空！");
             std::process::exit(1);
         }
         let mut conf = (*config_manager.get_config()).clone();
@@ -180,13 +174,10 @@ async fn main() -> Result<()> {
             .update_config(conf)
             .context("保存新密码至配置文件失败")?;
         println!("==========================================");
-        println!("✅ 管理员密码重置成功！");
-        println!("👤 管理员账号: {}", username);
-        println!("🔑 新登录密码: {}", new_pwd);
-        println!(
-            "📁 配置文件:   {}",
-            config_manager.get_config_path().display()
-        );
+        println!("管理员密码重置成功！");
+        println!("管理员账号: {}", username);
+        println!("新登录密码: {}", new_pwd);
+        println!("配置文件:   {}", config_manager.get_config_path().display());
         println!("==========================================");
         return Ok(());
     }
@@ -214,11 +205,11 @@ async fn main() -> Result<()> {
         let web_token = cancel_token.clone();
         Some(tokio::spawn(async move {
             if let Err(e) = web_server.run(web_token).await {
-                tracing::error!("Web 服务发生异常: {}", e);
+                error!("Web 服务发生异常: {}", e);
             }
         }))
     } else {
-        tracing::info!("已开启 --noweb 模式，跳过 Web 服务启动");
+        info!("已开启 --noweb 模式，跳过 Web 服务启动");
         None
     };
 
@@ -231,7 +222,7 @@ async fn main() -> Result<()> {
             let mut sigterm = match signal(SignalKind::terminate()) {
                 Ok(s) => Some(s),
                 Err(e) => {
-                    tracing::error!("注册 SIGTERM 信号监听失败: {}", e);
+                    error!("注册 SIGTERM 信号监听失败: {}", e);
                     None
                 }
             };
@@ -239,9 +230,9 @@ async fn main() -> Result<()> {
             tokio::select! {
                 res = tokio::signal::ctrl_c() => {
                     if let Err(e) = res {
-                        tracing::error!("监听 Ctrl+C (SIGINT) 异常: {}", e);
+                        error!("监听 Ctrl+C (SIGINT) 异常: {}", e);
                     } else {
-                        tracing::info!("收到中断信号 (SIGINT/Ctrl+C)，开始优雅退出流程...");
+                        info!("收到中断信号 (SIGINT/Ctrl+C)，开始优雅退出流程...");
                     }
                 }
                 _ = async {
@@ -251,7 +242,7 @@ async fn main() -> Result<()> {
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    tracing::info!("收到终止信号 (SIGTERM)，开始优雅退出流程...");
+                    info!("收到终止信号 (SIGTERM)，开始优雅退出流程...");
                 }
             }
         }
@@ -259,9 +250,9 @@ async fn main() -> Result<()> {
         #[cfg(not(unix))]
         {
             if let Err(err) = tokio::signal::ctrl_c().await {
-                tracing::error!("监听 Ctrl+C 信号异常: {}", err);
+                error!("监听 Ctrl+C 信号异常: {}", err);
             } else {
-                tracing::info!("收到中断信号 (Ctrl+C)，开始优雅退出流程...");
+                info!("收到中断信号 (Ctrl+C)，开始优雅退出流程...");
             }
         }
 
@@ -274,6 +265,6 @@ async fn main() -> Result<()> {
         let _ = wh.await;
     }
 
-    tracing::info!("👋 rddns 已完全停止运行");
+    info!("rddns 已完全停止运行");
     Ok(())
 }

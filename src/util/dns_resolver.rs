@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow, bail};
+use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -26,14 +27,14 @@ static GLOBAL_DNS_CACHE: std::sync::LazyLock<DnsCacheMap> =
 pub fn set_custom_dns_server(server: String) {
     let clean = server.trim().to_string();
     if !clean.is_empty() {
-        tracing::info!("🌐 已配置自定义 DNS 递归解析服务器: {}", clean);
+        info!("🌐 已配置自定义 DNS 递归解析服务器: {}", clean);
         *CUSTOM_DNS_SERVER.write() = Some(clean);
     }
 }
 
 /// 清空全局自定义 DNS 解析服务器（恢复系统默认解析）
 pub fn clear_custom_dns_server() {
-    tracing::info!("🌐 已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
+    info!("🌐 已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
     *CUSTOM_DNS_SERVER.write() = None;
 }
 
@@ -139,7 +140,7 @@ fn parse_dns_response_packet(
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
     let tc = (flags & 0x0200) != 0;
     if tc {
-        tracing::warn!("DNS 响应报文被服务器截断 (TC=1)，可能仅包含部分 IP 记录");
+        warn!("DNS 响应报文被服务器截断 (TC=1)，可能仅包含部分 IP 记录");
     }
     let rcode = flags & 0x000F;
     if rcode != 0 {

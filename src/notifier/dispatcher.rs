@@ -8,6 +8,7 @@ use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus, N
 use crate::notifier::webhook::CustomWebhookNotifier;
 use crate::notifier::wechat_official::WechatOfficialNotifier;
 use crate::notifier::wecom::WeComNotifier;
+use log::{debug, error, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -109,7 +110,7 @@ impl NotificationDispatcher {
                 && !event.ip_changed
                 && event.overall_status == NotificationOverallStatus::Success
             {
-                tracing::info!(
+                info!(
                     "[{}] 域名解析记录未发生实际变动，静默跳过成功通知",
                     event.task_name
                 );
@@ -120,7 +121,7 @@ impl NotificationDispatcher {
             match event.overall_status {
                 NotificationOverallStatus::Success => {
                     if !self.config.on_success {
-                        tracing::debug!("同步成功，但配置关闭了成功通知，跳过发送");
+                        debug!("同步成功，但配置关闭了成功通知，跳过发送");
                         return;
                     }
                     // 成功时清理历史错误记录（实现故障恢复）
@@ -128,7 +129,7 @@ impl NotificationDispatcher {
                 }
                 NotificationOverallStatus::Failed | NotificationOverallStatus::PartialSuccess => {
                     if !self.config.on_failure {
-                        tracing::debug!("同步存在失败，但配置关闭了失败报警，跳过发送");
+                        debug!("同步存在失败，但配置关闭了失败报警，跳过发送");
                         return;
                     }
 
@@ -148,10 +149,9 @@ impl NotificationDispatcher {
                             && tracker.last_notified_at.elapsed() < Duration::from_secs(1800)
                         {
                             tracker.suppressed_count += 1;
-                            tracing::warn!(
+                            warn!(
                                 "任务 [{}] 出现相同错误，处于冷却抑制中 (已抑制 {} 次)，暂不重复报警",
-                                event.task_name,
-                                tracker.suppressed_count
+                                event.task_name, tracker.suppressed_count
                             );
                             return;
                         }
@@ -180,7 +180,7 @@ impl NotificationDispatcher {
                 let ev = event.clone();
                 tokio::spawn(async move {
                     if let Err(e) = n.send(&ev).await {
-                        tracing::error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
+                        error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
                     }
                 });
             }

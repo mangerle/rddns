@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
@@ -195,7 +196,7 @@ impl DnsProvider for RainYunProvider {
 
         if let Some(existing) = matched {
             if existing.value == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -234,7 +235,7 @@ impl DnsProvider for RainYunProvider {
             let patch_res: RainyunResp = serde_json::from_str(&patch_text)?;
 
             if patch_res.code == 200 {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -280,7 +281,7 @@ impl DnsProvider for RainYunProvider {
             let post_res: RainyunResp = serde_json::from_str(&post_text)?;
 
             if post_res.code == 200 {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

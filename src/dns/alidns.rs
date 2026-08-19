@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
+use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -179,7 +180,7 @@ impl DnsProvider for AliDnsProvider {
 
         if let Some(existing) = matched_record {
             if existing.value == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -209,7 +210,7 @@ impl DnsProvider for AliDnsProvider {
                 )
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -238,7 +239,7 @@ impl DnsProvider for AliDnsProvider {
                 )
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功创建域名 {} -> {}",
                 self.provider_name(),
                 full_domain,

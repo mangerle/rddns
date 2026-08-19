@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::net::IpAddr;
@@ -84,7 +85,7 @@ impl DnsProvider for DynadotProvider {
         match serde_json::from_str::<DynadotResp>(&body_text) {
             Ok(res_json) => {
                 if res_json.error_code != Some(-1) {
-                    tracing::info!(
+                    info!(
                         "[{}] 成功更新域名 {} -> {}",
                         self.provider_name(),
                         full_domain,

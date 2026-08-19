@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use crate::util::crypto::hmac_sha256_hex;
 use async_trait::async_trait;
 use chrono::Utc;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -146,7 +147,7 @@ impl DnsProvider for BaiduCloudProvider {
 
         if let Some(existing) = matched {
             if existing.rdata == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -176,7 +177,7 @@ impl DnsProvider for BaiduCloudProvider {
                 .post_json("/v1/domain/resolve/edit", edit_payload)
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -203,7 +204,7 @@ impl DnsProvider for BaiduCloudProvider {
                 .post_json("/v1/domain/resolve/add", add_payload)
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功创建域名解析 {} -> {}",
                 self.provider_name(),
                 full_domain,

@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -89,7 +90,7 @@ impl DnsProvider for GoDaddyProvider {
             && let Some(existing) = records.first()
             && existing.data.as_deref() == Some(&target_ip_str)
         {
-            tracing::info!(
+            info!(
                 "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                 self.provider_name(),
                 full_domain,
@@ -122,7 +123,7 @@ impl DnsProvider for GoDaddyProvider {
 
         let status = put_resp.status();
         if status.is_success() {
-            tracing::info!(
+            info!(
                 "[{}] 成功更新/创建域名 {} -> {}",
                 self.provider_name(),
                 full_domain,

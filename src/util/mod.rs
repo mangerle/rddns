@@ -3,6 +3,8 @@ pub mod daemon;
 pub mod dns_resolver;
 pub mod http;
 pub mod log_buffer;
+pub mod log_file;
+pub mod logger;
 pub mod net;
 pub mod service;
 pub mod update;

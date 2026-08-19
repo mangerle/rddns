@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -118,7 +119,7 @@ impl DnsProvider for NameComProvider {
 
         if let Some(existing) = matched {
             if existing.answer == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -156,7 +157,7 @@ impl DnsProvider for NameComProvider {
 
             let put_status = put_resp.status();
             if put_status.is_success() {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -197,7 +198,7 @@ impl DnsProvider for NameComProvider {
 
             let post_status = post_resp.status();
             if post_status.is_success() {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

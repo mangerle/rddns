@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -77,7 +78,7 @@ impl DnsProvider for NamecheapProvider {
             || body_text.contains("<Done>true</Done>")
             || body_text.contains("Success")
         {
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,

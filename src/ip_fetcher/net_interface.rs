@@ -3,6 +3,7 @@ use crate::util::net::{
     extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4, select_best_ipv6,
 };
 use async_trait::async_trait;
+use log::warn;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -111,7 +112,7 @@ pub fn select_ip_by_ordinal_or_regex<T: Clone + std::fmt::Display>(
             if idx >= 1 && idx <= candidates.len() {
                 return Some(candidates[idx - 1].clone());
             } else if idx > candidates.len() {
-                tracing::warn!(
+                warn!(
                     "指定的序号 @{} 超出可用 IP 数量 ({})，将回退使用第 1 个地址",
                     idx,
                     candidates.len()

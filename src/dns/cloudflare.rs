@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -233,7 +234,7 @@ impl DnsProvider for CloudflareProvider {
 
         if let Some(existing) = records.first() {
             if existing.content == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -292,7 +293,7 @@ impl DnsProvider for CloudflareProvider {
 
             let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
             if result.success {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -362,7 +363,7 @@ impl DnsProvider for CloudflareProvider {
 
             let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
             if result.success {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名 {} -> {}",
                     self.provider_name(),
                     full_domain,

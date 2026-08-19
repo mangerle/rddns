@@ -1,6 +1,7 @@
 use crate::config::model::WebhookConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use async_trait::async_trait;
+use log::{info, warn};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use std::str::FromStr;
@@ -70,10 +71,9 @@ impl Notifier for CustomWebhookNotifier {
                         header_map.insert(hk, hv);
                     }
                     _ => {
-                        tracing::warn!(
+                        warn!(
                             "⚠️ Webhook 自定义 Header [{}: {}] 格式不合法，已跳过",
-                            k,
-                            rendered_v
+                            k, rendered_v
                         );
                     }
                 }
@@ -91,7 +91,7 @@ impl Notifier for CustomWebhookNotifier {
         let body = resp.text().await.unwrap_or_default();
 
         if status.is_success() {
-            tracing::info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
+            info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
             Ok(())
         } else {
             Err(NotifyError::Provider(format!(

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
+use log::info;
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -102,7 +103,7 @@ impl Notifier for DingTalkNotifier {
                     errcode, errmsg
                 )));
             }
-            tracing::info!("[{}] 钉钉消息发送成功", self.channel_name());
+            info!("[{}] 钉钉消息发送成功", self.channel_name());
             Ok(())
         } else {
             Err(NotifyError::Provider(format!(

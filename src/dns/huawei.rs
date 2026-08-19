@@ -5,6 +5,7 @@ use crate::dns::trait_def::{
 use crate::util::crypto::{hmac_sha256_hex, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
+use log::info;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
@@ -243,7 +244,7 @@ impl DnsProvider for HuaweiDnsProvider {
         if let Some(existing) = matched {
             let cur_records = existing.records.unwrap_or_default();
             if cur_records.len() == 1 && cur_records[0] == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -273,7 +274,7 @@ impl DnsProvider for HuaweiDnsProvider {
                 .request_hw_api(Method::PUT, &path, vec![], Some(body))
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -321,7 +322,7 @@ impl DnsProvider for HuaweiDnsProvider {
                 .request_hw_api(Method::POST, &path, vec![], Some(body))
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功创建域名解析 {} -> {}",
                 self.provider_name(),
                 full_domain,

@@ -1,6 +1,7 @@
 use crate::config::model::WechatOfficialConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use async_trait::async_trait;
+use log::{info, warn};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -227,7 +228,7 @@ impl Notifier for WechatOfficialNotifier {
             let send_result: WechatSendResponse = resp.json().await?;
 
             if send_result.errcode != 0 {
-                tracing::warn!(
+                warn!(
                     "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
                     self.channel_name(),
                     user_openid,
@@ -241,7 +242,7 @@ impl Notifier for WechatOfficialNotifier {
             }
         }
 
-        tracing::info!("[{}] 模板消息推送成功", self.channel_name());
+        info!("[{}] 模板消息推送成功", self.channel_name());
         Ok(())
     }
 }

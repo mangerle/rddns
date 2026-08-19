@@ -1,3 +1,4 @@
+use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +11,7 @@ static SKIP_VERIFY: AtomicBool = AtomicBool::new(false);
 pub fn set_skip_verify(skip: bool) {
     SKIP_VERIFY.store(skip, Ordering::SeqCst);
     if skip {
-        tracing::warn!("⚠️ 已开启 --skipVerify 跳过 TLS 证书验证模式，请注意网络通信安全");
+        warn!("⚠️ 已开启 --skipVerify 跳过 TLS 证书验证模式，请注意网络通信安全");
     }
 }
 
@@ -166,14 +167,13 @@ pub fn create_task_http_client_builder(interface_name: Option<&str>) -> reqwest:
         let clean = iface.trim();
         if !clean.is_empty() {
             if let Some(local_ip) = find_interface_ip(clean) {
-                tracing::info!(
+                info!(
                     "🔗 任务绑定出站物理网卡 [{}] (本地源 IP: {})",
-                    clean,
-                    local_ip
+                    clean, local_ip
                 );
                 builder = builder.local_address(Some(local_ip));
             } else {
-                tracing::warn!(
+                warn!(
                     "⚠️ 未能在系统网卡中找到 [{}] 对应的出站 IP，将回退至系统默认路由",
                     clean
                 );

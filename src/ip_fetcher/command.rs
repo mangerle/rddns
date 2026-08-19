@@ -1,6 +1,7 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
 use crate::util::net::{extract_ipv4, extract_ipv6};
 use async_trait::async_trait;
+use log::warn;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tokio::process::Command;
@@ -44,7 +45,7 @@ impl CommandIpFetcher {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            tracing::warn!(
+            warn!(
                 "执行命令 '{}' 退出码异常: {:?}, stderr: {}",
                 self.cmd,
                 output.status.code(),

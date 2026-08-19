@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -96,7 +97,7 @@ pub async fn check_version() -> Result<VersionInfo> {
 
 /// 执行原地一键热升级（下载最新发布包 -> 解压 -> 安全备份替换 -> 重启进程）
 pub async fn upgrade_self() -> Result<()> {
-    tracing::info!(
+    info!(
         "🔍 正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
         env!("CARGO_PKG_VERSION")
     );

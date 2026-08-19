@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
@@ -130,7 +131,7 @@ impl DnsProvider for Dynv6Provider {
             };
 
             if cur_ip == Some(&target_ip_str) {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -158,7 +159,7 @@ impl DnsProvider for Dynv6Provider {
                 )
                 .await?;
 
-            tracing::info!(
+            info!(
                 "[{}] 成功更新主域名 {} -> {}",
                 self.provider_name(),
                 full_domain,
@@ -190,7 +191,7 @@ impl DnsProvider for Dynv6Provider {
 
             if let Some(record) = matched_record {
                 if record.data.as_deref() == Some(&target_ip_str) {
-                    tracing::info!(
+                    info!(
                         "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                         self.provider_name(),
                         full_domain,
@@ -218,7 +219,7 @@ impl DnsProvider for Dynv6Provider {
                     )
                     .await?;
 
-                tracing::info!(
+                info!(
                     "[{}] 成功更新子域名记录 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -246,7 +247,7 @@ impl DnsProvider for Dynv6Provider {
                     )
                     .await?;
 
-                tracing::info!(
+                info!(
                     "[{}] 成功创建子域名记录 {} -> {}",
                     self.provider_name(),
                     full_domain,

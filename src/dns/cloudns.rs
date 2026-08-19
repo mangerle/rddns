@@ -3,6 +3,7 @@ use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
 use async_trait::async_trait;
+use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -93,7 +94,7 @@ impl DnsProvider for ClouDnsProvider {
 
         if let Some(existing) = matched {
             if existing.record == target_ip_str {
-                tracing::info!(
+                info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),
                     full_domain,
@@ -134,7 +135,7 @@ impl DnsProvider for ClouDnsProvider {
                 });
 
             if res.status.as_deref() == Some("Success") {
-                tracing::info!(
+                info!(
                     "[{}] 成功更新域名 {} -> {}",
                     self.provider_name(),
                     full_domain,
@@ -176,7 +177,7 @@ impl DnsProvider for ClouDnsProvider {
                 });
 
             if res.status.as_deref() == Some("Success") {
-                tracing::info!(
+                info!(
                     "[{}] 成功创建域名解析 {} -> {}",
                     self.provider_name(),
                     full_domain,

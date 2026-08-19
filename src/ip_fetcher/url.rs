@@ -1,6 +1,7 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
 use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6};
 use async_trait::async_trait;
+use log::{debug, warn};
 use reqwest::Client;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
@@ -26,7 +27,7 @@ impl UrlIpFetcher {
             Ok(c) => c,
             Err(e) => {
                 if let Some(iface) = http_interface {
-                    tracing::warn!(
+                    warn!(
                         "为任务网卡 [{}] 构建专有 HTTP 客户端失败: {}，降级为默认客户端",
                         iface,
                         e
@@ -80,20 +81,20 @@ impl IpFetcher for UrlIpFetcher {
                 Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => {
                         if let Some(ip) = extract_ipv4(&body, self.regex.as_deref()) {
-                            tracing::debug!("从接口 {} 成功获取到 IPv4: {}", endpoint, ip);
+                            debug!("从接口 {} 成功获取到 IPv4: {}", endpoint, ip);
                             return Ok(Some(ip));
                         } else {
-                            tracing::debug!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
+                            debug!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
                             last_err = Some(FetchError::NoValidIpv4(body));
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
                         last_err = Some(e);
                     }
                 },
                 Err(e) => {
-                    tracing::debug!("请求接口 {} 失败: {}", endpoint, e);
+                    debug!("请求接口 {} 失败: {}", endpoint, e);
                     last_err = Some(FetchError::Http(e));
                 }
             }
@@ -115,35 +116,27 @@ impl IpFetcher for UrlIpFetcher {
                     Ok(body) => {
                         if let Some(ip) = extract_ipv6(&body, self.regex.as_deref()) {
                             if is_global_unicast_ipv6(&ip) {
-                                tracing::debug!(
-                                    "从接口 {} 成功获取到全球单播 IPv6: {}",
-                                    endpoint,
-                                    ip
-                                );
+                                debug!("从接口 {} 成功获取到全球单播 IPv6: {}", endpoint, ip);
                                 return Ok(Some(ip));
                             } else {
-                                tracing::debug!(
-                                    "接口 {} 返回的 IPv6 非公网全球单播地址: {}",
-                                    endpoint,
-                                    ip
-                                );
+                                debug!("接口 {} 返回的 IPv6 非公网全球单播地址: {}", endpoint, ip);
                                 last_err = Some(FetchError::NoValidIpv6(format!(
                                     "非全球单播 IPv6: {}",
                                     ip
                                 )));
                             }
                         } else {
-                            tracing::debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
+                            debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
                             last_err = Some(FetchError::NoValidIpv6(body));
                         }
                     }
                     Err(e) => {
-                        tracing::debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
                         last_err = Some(e);
                     }
                 },
                 Err(e) => {
-                    tracing::debug!("请求接口 {} 失败: {}", endpoint, e);
+                    debug!("请求接口 {} 失败: {}", endpoint, e);
                     last_err = Some(FetchError::Http(e));
                 }
             }

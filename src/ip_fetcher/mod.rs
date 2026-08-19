@@ -9,6 +9,7 @@ pub use trait_def::*;
 pub use url::*;
 
 use crate::config::model::{IpFetchConfig, IpSourceType};
+use log::warn;
 use std::sync::Arc;
 
 /// 根据配置构建具体的 IP 提取器实例 (支持绑定任务指定的出站物理网卡)
@@ -49,11 +50,11 @@ pub fn create_ip_fetcher(
                         10,
                     )))
                 } else {
-                    tracing::warn!("配置为命令获取但指定的命令为空");
+                    warn!("配置为命令获取但指定的命令为空");
                     None
                 }
             } else {
-                tracing::warn!("配置为命令获取但未指定命令");
+                warn!("配置为命令获取但未指定命令");
                 None
             }
         }
