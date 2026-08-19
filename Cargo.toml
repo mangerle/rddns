@@ -12,22 +12,22 @@ keywords = ["ddns", "dns", "cloudflare", "alidns", "dnspod"]
 categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
-tokio = { version = "1.43", features = ["full"] }
-tokio-util = { version = "0.7" }
+tokio = { version = "1.43", default-features = false, features = ["rt", "macros", "time", "sync", "process", "net", "signal"] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 axum = { version = "0.8" }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", default-features = false, features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 clap = { version = "4.5", features = ["derive"] }
 async-trait = "0.1"
 thiserror = "2.0"
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-regex = "1.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+regex = { version = "1.11", default-features = false, features = ["std", "perf", "unicode-perl"] }
 hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
@@ -41,7 +41,6 @@ parking_lot = "0.12"
 rust-embed = "8.5"
 tempfile = "3.16"
 bcrypt = "0.17"
-mime_guess = "2.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
@@ -52,7 +51,7 @@ tar = { version = "0.4", default-features = false }
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
-opt-level = "s"       # 针对二进制体积进行深度优化 (Optimize for size)
+opt-level = "z"       # 针对二进制体积与代码段映射进行极致优化 (Optimize for minimum size)
 lto = true            # 开启全局链接时优化 (Link Time Optimization)，跨模块裁剪死代码
 codegen-units = 1     # 启用单代码生成单元，最大化优化内联
 panic = "abort"       # 移除冗余的栈展开回溯表

@@ -8,6 +8,29 @@ use rust_embed::RustEmbed;
 #[folder = "web-ui/"]
 pub struct WebAssets;
 
+/// 根据文件扩展名匹配常用 Web 静态资源 MIME 类型 (零第三方依赖，纯静态分发)
+fn get_mime_type(path: &str) -> &'static str {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
 /// 静态资源托管处理器 (支持 If-None-Match 304 协商缓存与 SPA 路由降级)
 pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoResponse {
     let mut path = uri.path().trim_start_matches('/').to_string();
@@ -34,15 +57,10 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                     .unwrap_or_else(|_| StatusCode::NOT_MODIFIED.into_response());
             }
 
-            let mime_type = mime_guess::from_path(&path)
-                .first_or_octet_stream()
-                .as_ref()
-                .to_string();
+            let mime_type = get_mime_type(&path);
 
             let mut headers = HeaderMap::new();
-            if let Ok(val) = HeaderValue::from_str(&mime_type) {
-                headers.insert(CONTENT_TYPE, val);
-            }
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime_type));
             if path.ends_with(".html") || path == "index.html" {
                 headers.insert(
                     CACHE_CONTROL,
