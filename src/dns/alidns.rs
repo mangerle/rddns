@@ -2,7 +2,7 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
-use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
+use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
 use log::info;
@@ -102,12 +102,7 @@ impl AliDnsProvider {
         if !status.is_success() {
             if let Ok(err_resp) = serde_json::from_str::<AliErrorResponse>(&body_text) {
                 let mut msg = err_resp.message;
-                if err_resp.code.contains("Expired")
-                    || msg.contains("expired")
-                    || msg.contains("time stamp")
-                {
-                    msg.push_str(" (💡 提示: 当前服务器系统时钟与网络标准时间偏差过大，请检查并同步系统 NTP 时间)");
-                }
+                append_ntp_hint_if_expired(&mut msg, &err_resp.code);
                 return Err(DnsProviderError::ApiError {
                     code: err_resp.code,
                     message: msg,

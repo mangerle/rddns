@@ -2,7 +2,7 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
-use crate::util::crypto::{hmac_sha256_hex, sha256_hex};
+use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha256_hex, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
 use log::info;
@@ -187,9 +187,7 @@ impl HuaweiDnsProvider {
             if let Ok(err_resp) = serde_json::from_str::<HwErrorResponse>(&body_text) {
                 let mut msg = err_resp.message.unwrap_or_else(|| body_text.clone());
                 let code = err_resp.code.unwrap_or_else(|| status.to_string());
-                if code.contains("Expire") || msg.contains("expire") || msg.contains("time") {
-                    msg.push_str(" (💡 提示: 服务器系统时钟可能偏差过大，请检查 NTP 时间)");
-                }
+                append_ntp_hint_if_expired(&mut msg, &code);
                 return Err(DnsProviderError::ApiError { code, message: msg });
             }
             return Err(DnsProviderError::ApiError {
