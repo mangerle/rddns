@@ -19,7 +19,7 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
                 .status(StatusCode::FORBIDDEN)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .body(axum::body::Body::from(
-                    r#"{"success":false,"message":"🛡️ 系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
+                    r#"{"success":false,"message":"系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
                 ))
                 .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
         }

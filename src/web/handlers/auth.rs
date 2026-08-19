@@ -44,7 +44,7 @@ pub async fn init_auth_handler(
     // 1. 来源 IP 校验：仅允许本地回环和私网局域网初始化，禁止公网直接初始化
     if !is_private_or_loopback(&peer_addr.ip()) {
         warn!(
-            "🛡️ [安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
+            "[安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
             peer_addr.ip()
         );
         return Err(AppError::forbidden(
@@ -56,7 +56,7 @@ pub async fn init_auth_handler(
     if let Some(fetch_site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
         && fetch_site == "cross-site"
     {
-        warn!("🛡️ [安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
+        warn!("[安全拦截] 拦截来自跨站发起的初始化请求 (Sec-Fetch-Site: cross-site)");
         return Err(AppError::forbidden(
             "出于安全保护，禁止跨站请求发起账号初始化！",
         ));
@@ -74,7 +74,7 @@ pub async fn init_auth_handler(
 
         if !host_header.is_empty() && !origin_host.is_empty() && origin_host != host_header {
             warn!(
-                "🛡️ [安全拦截] Origin ({}) 与 Host ({}) 不匹配，拦截跨站初始化请求",
+                "[安全拦截] Origin ({}) 与 Host ({}) 不匹配，拦截跨站初始化请求",
                 origin, host_header
             );
             return Err(AppError::forbidden(

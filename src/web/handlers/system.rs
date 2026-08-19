@@ -36,7 +36,7 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     tokio::spawn(async {
         match upgrade_self().await {
             Ok(()) => {
-                info!("🎉 自动更新完成，正在平滑重启服务以加载新版本...");
+                info!("自动更新完成，正在平滑重启服务以加载新版本...");
                 if let Err(e) = restart_process() {
                     error!("重启服务失败，请手动重启: {:#}", e);
                 }
