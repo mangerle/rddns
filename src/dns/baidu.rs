@@ -11,7 +11,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue}
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const BAIDU_ENDPOINT: &str = "https://bcd.baidubce.com";
 const BAIDU_HOST: &str = "bcd.baidubce.com";
@@ -46,11 +45,11 @@ struct BaiduBaseResp {
 
 impl BaiduCloudProvider {
     pub fn new(ak: String, sk: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { ak, sk, client }
+        Self {
+            ak,
+            sk,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 
     /// 构建百度云 BCE-AUTH-V1 签名标头

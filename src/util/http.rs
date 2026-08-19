@@ -197,3 +197,8 @@ pub fn create_task_http_client(
         .timeout(timeout)
         .build()
 }
+
+/// 创建具有 15 秒标准超时的 DNS 任务通用 HTTP 客户端 (失败时回退至默认客户端)
+pub fn create_default_dns_client(interface_name: Option<&str>) -> reqwest::Client {
+    create_task_http_client(interface_name, Duration::from_secs(15)).unwrap_or_default()
+}

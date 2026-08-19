@@ -11,7 +11,6 @@ use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const VOLC_HOST: &str = "open.volcengineapi.com";
 const VOLC_ENDPOINT: &str = "https://open.volcengineapi.com";
@@ -78,11 +77,11 @@ struct VolcResponse {
 
 impl TrafficRouteProvider {
     pub fn new(ak: String, sk: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { ak, sk, client }
+        Self {
+            ak,
+            sk,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 
     /// 发起经 AWS SigV4 变种签名的火山引擎 API 请求

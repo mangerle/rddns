@@ -11,7 +11,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const NAME_COM_ENDPOINT: &str = "https://api.name.com/core/v1/domains";
 
@@ -38,14 +37,10 @@ struct NameComListResp {
 
 impl NameComProvider {
     pub fn new(username: String, api_token: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
         Self {
             username,
             api_token,
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
         }
     }
 

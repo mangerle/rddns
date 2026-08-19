@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const NAMECHEAP_ENDPOINT: &str = "https://dynamicdns.park-your-domain.com/update";
 
@@ -18,11 +17,10 @@ pub struct NamecheapProvider {
 
 impl NamecheapProvider {
     pub fn new(password: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { password, client }
+        Self {
+            password,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 }
 

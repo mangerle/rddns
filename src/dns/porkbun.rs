@@ -8,7 +8,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const PORKBUN_ENDPOINT: &str = "https://api.porkbun.com/api/json/v3/dns";
 
@@ -39,13 +38,10 @@ struct PorkbunBaseResponse {
 
 impl PorkbunProvider {
     pub fn new(api_key: String, secret_key: String, http_interface: Option<&str>) -> Self {
-        let client =
-            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))
-                .unwrap_or_default();
         Self {
             api_key,
             secret_key,
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
         }
     }
 

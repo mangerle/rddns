@@ -10,7 +10,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::time::Duration;
 
 pub const NOWCN_ENDPOINT: &str = "https://api.now.cn";
 pub const ERANET_ENDPOINT: &str = "https://www.eranet.com";
@@ -105,9 +104,7 @@ impl NowcnProvider {
             )));
         }
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             access_instance_id,

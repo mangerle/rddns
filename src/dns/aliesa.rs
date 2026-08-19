@@ -10,7 +10,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const DEFAULT_ALIESA_ENDPOINT: &str = "https://esa.cn-hangzhou.aliyuncs.com";
 
@@ -91,9 +90,7 @@ impl AliEsaProvider {
             .filter(|e| !e.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ALIESA_ENDPOINT.to_string());
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             client,

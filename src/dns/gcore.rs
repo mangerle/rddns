@@ -9,7 +9,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const GCORE_API_BASE: &str = "https://api.gcore.com/dns/v2";
 
@@ -49,11 +48,10 @@ struct GcoreRRSetListResponse {
 
 impl GcoreProvider {
     pub fn new(api_key: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { api_key, client }
+        Self {
+            api_key,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 
     fn build_headers(&self) -> HeaderMap {

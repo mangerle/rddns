@@ -9,7 +9,6 @@ use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const DYNV6_ENDPOINT: &str = "https://dynv6.com/api/v2";
 
@@ -40,11 +39,10 @@ struct Dynv6Record {
 
 impl Dynv6Provider {
     pub fn new(token: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { token, client }
+        Self {
+            token,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 
     fn build_headers(&self) -> HeaderMap {

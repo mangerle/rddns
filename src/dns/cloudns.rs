@@ -8,7 +8,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const CLOUDNS_ENDPOINT: &str = "https://api.cloudns.net/dns";
 
@@ -37,14 +36,10 @@ struct ClouDnsActionResp {
 
 impl ClouDnsProvider {
     pub fn new(auth_id: String, auth_password: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
         Self {
             auth_id,
             auth_password,
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
         }
     }
 }

@@ -9,7 +9,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const GODADDY_API_BASE: &str = "https://api.godaddy.com/v1";
 
@@ -27,14 +26,10 @@ struct GoDaddyRecord {
 
 impl GoDaddyProvider {
     pub fn new(api_key: String, api_secret: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
         Self {
             api_key,
             api_secret,
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
         }
     }
 

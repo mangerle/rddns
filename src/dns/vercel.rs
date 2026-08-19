@@ -9,7 +9,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 /// Vercel DNS 提供商
 pub struct VercelProvider {
@@ -34,14 +33,10 @@ struct VercelRecordsResp {
 
 impl VercelProvider {
     pub fn new(token: String, team_id: Option<String>, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
         Self {
             token,
             team_id: team_id.filter(|t| !t.trim().is_empty()),
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
         }
     }
 

@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const NAMESILO_API_BASE: &str = "https://www.namesilo.com/api";
 
@@ -18,10 +17,10 @@ pub struct NameSiloProvider {
 
 impl NameSiloProvider {
     pub fn new(api_key: String, http_interface: Option<&str>) -> Self {
-        let client =
-            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))
-                .unwrap_or_default();
-        Self { api_key, client }
+        Self {
+            api_key,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 
     /// 简易提取 XML 标签中的内容

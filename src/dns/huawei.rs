@@ -11,7 +11,6 @@ use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const DEFAULT_HUAWEI_ENDPOINT: &str = "https://dns.myhuaweicloud.com";
 
@@ -73,9 +72,7 @@ impl HuaweiDnsProvider {
             ep
         };
 
-        let client =
-            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))
-                .unwrap_or_default();
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Self {
             ak,

@@ -9,7 +9,6 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 
@@ -60,14 +59,10 @@ struct RainyunResp {
 
 impl RainYunProvider {
     pub fn new(api_key: String, domain_id: Option<String>, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
         Self {
             api_key,
             domain_id: domain_id.filter(|d| !d.trim().is_empty()),
-            client,
+            client: crate::util::http::create_default_dns_client(http_interface),
             domain_cache: RwLock::new(HashMap::new()),
         }
     }

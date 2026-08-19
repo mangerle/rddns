@@ -7,7 +7,6 @@ use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const DYNADOT_ENDPOINT: &str = "https://www.dynadot.com/set_ddns";
 
@@ -26,11 +25,10 @@ struct DynadotResp {
 
 impl DynadotProvider {
     pub fn new(password: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self { password, client }
+        Self {
+            password,
+            client: crate::util::http::create_default_dns_client(http_interface),
+        }
     }
 }
 

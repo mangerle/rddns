@@ -9,7 +9,6 @@ use reqwest::{Client, Method};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::time::Duration;
 
 pub struct CallbackProvider {
     client: Client,
@@ -27,9 +26,7 @@ impl CallbackProvider {
         body: Option<String>,
         http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             client,
