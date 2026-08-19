@@ -32,6 +32,14 @@ impl ParsedDomain {
             &self.sub_domain
         }
     }
+
+    /// 校验给定的云端记录名是否与当前域名匹配（自动处理末尾点、大小写与 @ 根域）
+    pub fn matches_record_name(&self, record_name: &str) -> bool {
+        let clean_rec = record_name.trim_end_matches('.');
+        let full = self.full_domain();
+        clean_rec.eq_ignore_ascii_case(full.trim_end_matches('.'))
+            || clean_rec.eq_ignore_ascii_case(self.sub_domain_or_at().trim_end_matches('.'))
+    }
 }
 
 /// 将域名字符串转换为 ASCII Punycode 格式（针对中文等多语言 IDN 域名）
@@ -422,5 +430,20 @@ mod tests {
         assert_eq!(d.sub_domain, "nas");
         assert_eq!(d.custom_params.get("line").unwrap(), "telecom");
         assert_eq!(d.custom_params.get("ttl").unwrap(), "600");
+    }
+
+    #[test]
+    fn test_matches_record_name() {
+        let d = parse_domain("www.example.com").unwrap();
+        assert!(d.matches_record_name("www.example.com"));
+        assert!(d.matches_record_name("www.example.com."));
+        assert!(d.matches_record_name("WWW.EXAMPLE.COM"));
+        assert!(d.matches_record_name("www"));
+        assert!(!d.matches_record_name("api.example.com"));
+
+        let d_root = parse_domain("example.com").unwrap();
+        assert!(d_root.matches_record_name("example.com"));
+        assert!(d_root.matches_record_name("example.com."));
+        assert!(d_root.matches_record_name("@"));
     }
 }

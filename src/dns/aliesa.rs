@@ -232,11 +232,9 @@ impl DnsProvider for AliEsaProvider {
             .await?;
 
         let records = rec_resp.records.unwrap_or_default();
-        let matched = records.into_iter().find(|r| {
-            r.record_name
-                .trim_end_matches('.')
-                .eq_ignore_ascii_case(full_domain.trim_end_matches('.'))
-        });
+        let matched = records
+            .into_iter()
+            .find(|r| domain.matches_record_name(&r.record_name));
 
         let data_json = format!(r#"{{"Value":"{}"}}"#, target_ip_str);
 

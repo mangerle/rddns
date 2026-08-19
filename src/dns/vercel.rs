@@ -112,19 +112,8 @@ impl DnsProvider for VercelProvider {
         let records = parsed.records.unwrap_or_default();
 
         let matched = records.into_iter().find(|r| {
-            if !r.record_type.eq_ignore_ascii_case(&record_type.to_string()) {
-                return false;
-            }
-            let rec_name = r.name.trim_end_matches('.').to_lowercase();
-            let sub_lower = sub_name.trim_end_matches('.').to_lowercase();
-            let full_lower = full_domain.trim_end_matches('.').to_lowercase();
-            let root_lower = domain.root_domain.trim_end_matches('.').to_lowercase();
-
-            if sub_lower.is_empty() || sub_lower == "@" {
-                rec_name.is_empty() || rec_name == "@" || rec_name == root_lower
-            } else {
-                rec_name == sub_lower || rec_name == full_lower
-            }
+            r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+                && domain.matches_record_name(&r.name)
         });
 
         if let Some(existing) = matched {

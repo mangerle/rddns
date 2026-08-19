@@ -140,9 +140,7 @@ impl DnsProvider for GcoreProvider {
 
         let matched = rrsets.into_iter().find(|r| {
             r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-                && r.name
-                    .trim_end_matches('.')
-                    .eq_ignore_ascii_case(full_domain.trim_end_matches('.'))
+                && domain.matches_record_name(&r.name)
         });
 
         let full_record_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {

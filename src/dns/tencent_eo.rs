@@ -407,9 +407,7 @@ impl DnsProvider for TencentEoProvider {
 
         let records = rec_resp.response.dns_records.unwrap_or_default();
         let matched = records.into_iter().find(|r| {
-            r.name
-                .trim_end_matches('.')
-                .eq_ignore_ascii_case(full_domain.trim_end_matches('.'))
+            domain.matches_record_name(&r.name)
                 && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
         });
 
