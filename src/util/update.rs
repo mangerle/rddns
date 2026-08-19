@@ -217,22 +217,7 @@ pub fn restart_process() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut cmd = std::process::Command::new(&current_exe);
     cmd.args(&args);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        const DETACHED_PROCESS: u32 = 0x00000008;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-    }
-
-    #[cfg(unix)]
-    {
-        use std::process::Stdio;
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-    }
+    crate::util::daemon::configure_daemon_command(&mut cmd);
 
     cmd.spawn().context("派生重启进程失败")?;
 

@@ -114,12 +114,7 @@ fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> 
             println!("🚀 正在启动后台守护进程...");
             let mut spawn_cmd = Command::new(exe_path);
             spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                spawn_cmd.creation_flags(CREATE_NO_WINDOW);
-            }
+            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
             let _ = spawn_cmd.spawn();
 
             println!("==========================================");
@@ -163,12 +158,7 @@ fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> 
             println!("🚀 正在启动 [{}] 后台守护进程...", SERVICE_NAME);
             let mut spawn_cmd = Command::new(exe_path);
             spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                spawn_cmd.creation_flags(CREATE_NO_WINDOW);
-            }
+            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
             spawn_cmd.spawn().context("启动后台守护进程失败")?;
             println!("✅ [{}] 后台进程已成功启动！", SERVICE_NAME);
         }
@@ -188,12 +178,7 @@ fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> 
             std::thread::sleep(std::time::Duration::from_millis(800));
             let mut spawn_cmd = Command::new(exe_path);
             spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                spawn_cmd.creation_flags(CREATE_NO_WINDOW);
-            }
+            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
             spawn_cmd.spawn().context("重启后台守护进程失败")?;
             println!("✅ [{}] 后台守护进程已完成重启！", SERVICE_NAME);
         }

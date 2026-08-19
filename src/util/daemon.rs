@@ -21,7 +21,21 @@ pub fn run_as_daemon() -> Result<()> {
     let mut cmd = Command::new(&current_exe);
     cmd.args(&args);
     cmd.env(DAEMON_ENV_KEY, "1");
+    configure_daemon_command(&mut cmd);
 
+    let child = cmd.spawn().context("派生后台守护进程失败")?;
+
+    println!("==========================================");
+    println!("🚀 RDDNS 已成功在后台静默运行！");
+    println!("📌 后台进程 PID: {}", child.id());
+    println!("🌐 请访问 Web 管理界面查看运行状态与实时日志");
+    println!("==========================================");
+
+    Ok(())
+}
+
+/// 为 Command 配置静默后台守护运行属性 (跨平台兼容 Windows 无窗口脱离与 Unix 进程组脱离)
+pub fn configure_daemon_command(cmd: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -40,16 +54,6 @@ pub fn run_as_daemon() -> Result<()> {
             .stderr(Stdio::null())
             .process_group(0);
     }
-
-    let child = cmd.spawn().context("派生后台守护进程失败")?;
-
-    println!("==========================================");
-    println!("🚀 RDDNS 已成功在后台静默运行！");
-    println!("📌 后台进程 PID: {}", child.id());
-    println!("🌐 请访问 Web 管理界面查看运行状态与实时日志");
-    println!("==========================================");
-
-    Ok(())
 }
 
 #[cfg(test)]
