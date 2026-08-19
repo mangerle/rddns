@@ -1,5 +1,5 @@
 use crate::config::storage::ConfigManager;
-use crate::util::log_buffer::LogBuffer;
+use crate::util::logging::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{

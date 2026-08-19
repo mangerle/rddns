@@ -6,7 +6,7 @@ mod notifier;
 mod util;
 mod web;
 
-use crate::util::logger::init_logger;
+use crate::util::logging::init_logger;
 use anyhow::{Context, Result};
 use clap::Parser;
 use config::model::UserAuthConfig;

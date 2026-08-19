@@ -1,6 +1,6 @@
 use super::{ApiResponse, AppError, AppState};
 use crate::ip_fetcher::net_interface::list_system_interfaces;
-use crate::util::log_buffer::LogEntry;
+use crate::util::logging::LogEntry;
 use crate::util::update::{VersionInfo, check_version, restart_process, upgrade_self};
 use axum::Json;
 use axum::extract::State;

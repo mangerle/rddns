@@ -9,7 +9,7 @@ pub use system::*;
 pub use test::*;
 
 use crate::config::storage::ConfigManager;
-use crate::util::log_buffer::LogBuffer;
+use crate::util::logging::LogBuffer;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

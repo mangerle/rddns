@@ -1,5 +1,9 @@
-use crate::util::log_buffer::{BufferLogLayer, LogBuffer};
-use crate::util::log_file::init_file_appender;
+pub mod buffer;
+pub mod file;
+
+pub use buffer::{BufferLogLayer, LogBuffer, LogEntry};
+pub use file::init_file_appender;
+
 use anyhow::{Context, Result};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;

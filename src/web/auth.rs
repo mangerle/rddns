@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use crate::config::model::{AppConfig, UserAuthConfig};
     use crate::config::storage::ConfigManager;
-    use crate::util::log_buffer::LogBuffer;
+    use crate::util::logging::LogBuffer;
     use axum::Router;
     use axum::middleware::from_fn_with_state;
     use axum::routing::get;

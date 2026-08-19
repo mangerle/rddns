@@ -148,7 +148,7 @@ pub async fn login_auth_handler(
 mod tests {
     use super::*;
     use crate::config::storage::ConfigManager;
-    use crate::util::log_buffer::LogBuffer;
+    use crate::util::logging::LogBuffer;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use std::sync::Arc;
