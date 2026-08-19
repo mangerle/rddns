@@ -187,3 +187,13 @@ pub fn create_task_http_client_builder(interface_name: Option<&str>) -> reqwest:
 pub fn create_http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
     create_http_client_builder().timeout(timeout).build()
 }
+
+/// 创建绑定了指定出站物理网卡并带指定超时的 Reqwest Client
+pub fn create_task_http_client(
+    interface_name: Option<&str>,
+    timeout: Duration,
+) -> Result<reqwest::Client, reqwest::Error> {
+    create_task_http_client_builder(interface_name)
+        .timeout(timeout)
+        .build()
+}

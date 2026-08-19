@@ -36,9 +36,8 @@ impl TencentCloudProvider {
             ));
         }
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client =
+            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
 
         Ok(Self {
             client,

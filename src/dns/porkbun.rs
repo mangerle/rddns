@@ -42,10 +42,9 @@ struct PorkbunBaseResponse {
 
 impl PorkbunProvider {
     pub fn new(api_key: String, secret_key: String, http_interface: Option<&str>) -> Self {
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
+        let client =
+            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))
+                .unwrap_or_default();
         Self {
             api_key,
             secret_key,

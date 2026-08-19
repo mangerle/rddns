@@ -73,10 +73,9 @@ impl HuaweiDnsProvider {
             ep
         };
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
+        let client =
+            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))
+                .unwrap_or_default();
 
         Self {
             ak,
