@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 
     info!("==========================================");
     info!(
-        "🚀 rddns 动态域名解析系统 v{} 正在启动",
+        "rddns 动态域名解析系统 v{} 正在启动",
         env!("CARGO_PKG_VERSION")
     );
 
@@ -90,8 +90,8 @@ async fn main() -> Result<()> {
     // 如果指定了 -u 则执行自动升级并退出
     if args.upgrade {
         if let Err(e) = util::update::upgrade_self().await {
-            error!("❌ 自动升级失败: {:#}", e);
-            eprintln!("❌ 自动升级失败: {:#}", e);
+            error!("自动升级失败: {:#}", e);
+            eprintln!("自动升级失败: {:#}", e);
             std::process::exit(1);
         }
         return Ok(());
