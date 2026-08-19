@@ -16,10 +16,7 @@ pub struct LoggingHandle {
 
 /// 统一初始化全局日志系统 (控制台彩色输出 + 本地文件按大小轮转 + Web内存环形缓冲)
 pub fn init_logger() -> Result<LoggingHandle> {
-    // 0. 桥接标准 log crate 日志门面到 Tracing 体系
-    let _ = tracing_log::LogTracer::init();
-
-    // 1. 初始化内存环形日志缓冲区 (最大 300 条)
+    // 1. 初始化内存环形日志缓冲区 (最大 50 条)
     let log_buffer = LogBuffer::new(50);
     let buffer_layer = BufferLogLayer::new(log_buffer.clone());
 
@@ -36,13 +33,13 @@ pub fn init_logger() -> Result<LoggingHandle> {
     // 4. 控制台日志输出 (启用 ANSI 彩色)
     let console_layer = tracing_subscriber::fmt::layer().with_ansi(true);
 
-    // 5. 组合注册全局 Tracing 订阅者
-    tracing_subscriber::registry()
+    // 5. 组合注册全局 Tracing 订阅者 (try_init 会自动初始化 log 门面桥接，并安全防止重复初始化时 panic)
+    let _ = tracing_subscriber::registry()
         .with(env_filter)
         .with(console_layer)
         .with(file_layer)
         .with(buffer_layer)
-        .init();
+        .try_init();
 
     Ok(LoggingHandle {
         log_buffer,
