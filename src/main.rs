@@ -64,7 +64,7 @@ struct CliArgs {
     upgrade: bool,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args = CliArgs::parse();
 
