@@ -129,6 +129,49 @@ pub struct Tc3ApiEndpoint {
     pub version: &'static str,
 }
 
+/// 腾讯云 API v3 客户端封装
+#[derive(Debug, Clone)]
+pub struct Tc3Client {
+    client: reqwest::Client,
+    secret_id: String,
+    secret_key: String,
+    endpoint: Tc3ApiEndpoint,
+}
+
+impl Tc3Client {
+    /// 构造新的腾讯云 TC3 客户端
+    pub fn new(
+        client: reqwest::Client,
+        secret_id: impl Into<String>,
+        secret_key: impl Into<String>,
+        endpoint: Tc3ApiEndpoint,
+    ) -> Self {
+        Self {
+            client,
+            secret_id: secret_id.into(),
+            secret_key: secret_key.into(),
+            endpoint,
+        }
+    }
+
+    /// 发起 TC3 API 请求
+    pub async fn request_api<T: for<'de> Deserialize<'de>>(
+        &self,
+        action: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<T, DnsProviderError> {
+        request_tc3_api(
+            &self.client,
+            &self.secret_id,
+            &self.secret_key,
+            &self.endpoint,
+            action,
+            payload_json,
+        )
+        .await
+    }
+}
+
 /// 执行标准腾讯云 API v3 (TC3-HMAC-SHA256) 签名请求并解析响应
 pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     client: &reqwest::Client,

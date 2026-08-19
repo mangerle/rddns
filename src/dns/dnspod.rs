@@ -1,9 +1,8 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
-use crate::util::crypto::{Tc3ApiEndpoint, request_tc3_api};
+use crate::util::crypto::{Tc3ApiEndpoint, Tc3Client};
 use async_trait::async_trait;
 use log::info;
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
@@ -16,9 +15,7 @@ const DNSPOD_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
 };
 
 pub struct TencentCloudProvider {
-    client: Client,
-    secret_id: String,
-    secret_key: String,
+    tc3: Tc3Client,
 }
 
 impl TencentCloudProvider {
@@ -37,26 +34,8 @@ impl TencentCloudProvider {
             crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
 
         Ok(Self {
-            client,
-            secret_id,
-            secret_key,
+            tc3: Tc3Client::new(client, secret_id, secret_key, DNSPOD_ENDPOINT),
         })
-    }
-
-    async fn request_api<T: for<'de> Deserialize<'de>>(
-        &self,
-        action: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<T, DnsProviderError> {
-        request_tc3_api(
-            &self.client,
-            &self.secret_id,
-            &self.secret_key,
-            &DNSPOD_ENDPOINT,
-            action,
-            payload_json,
-        )
-        .await
     }
 }
 
@@ -92,8 +71,10 @@ impl DnsProvider for TencentCloudProvider {
             "Limit": 100,
         });
 
-        let list_res: Result<TcRecordListResponse, DnsProviderError> =
-            self.request_api("DescribeRecordList", list_payload).await;
+        let list_res: Result<TcRecordListResponse, DnsProviderError> = self
+            .tc3
+            .request_api("DescribeRecordList", list_payload)
+            .await;
 
         let records = match list_res {
             Ok(data) => data.record_list.unwrap_or_default(),
@@ -144,7 +125,7 @@ impl DnsProvider for TencentCloudProvider {
                 "TTL": ttl_val,
             });
 
-            let _: serde_json::Value = self.request_api("ModifyRecord", modify_payload).await?;
+            let _: serde_json::Value = self.tc3.request_api("ModifyRecord", modify_payload).await?;
 
             info!(
                 "[{}] 成功更新域名 {} -> {}",
@@ -168,7 +149,7 @@ impl DnsProvider for TencentCloudProvider {
                 "TTL": ttl_val,
             });
 
-            let _: serde_json::Value = self.request_api("CreateRecord", create_payload).await?;
+            let _: serde_json::Value = self.tc3.request_api("CreateRecord", create_payload).await?;
 
             info!(
                 "[{}] 成功创建域名 {} -> {}",

@@ -1,9 +1,8 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
-use crate::util::crypto::{Tc3ApiEndpoint, request_tc3_api};
+use crate::util::crypto::{Tc3ApiEndpoint, Tc3Client};
 use async_trait::async_trait;
 use log::info;
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
@@ -17,9 +16,7 @@ const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
 
 /// 腾讯云 EdgeOne (TEO) 提供商
 pub struct TencentEoProvider {
-    client: Client,
-    secret_id: String,
-    secret_key: String,
+    tc3: Tc3Client,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,26 +137,8 @@ impl TencentEoProvider {
             crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
 
         Ok(Self {
-            client,
-            secret_id,
-            secret_key,
+            tc3: Tc3Client::new(client, secret_id, secret_key, TEO_ENDPOINT),
         })
-    }
-
-    async fn request_api<T: for<'de> Deserialize<'de>>(
-        &self,
-        action: &str,
-        payload_json: serde_json::Value,
-    ) -> Result<T, DnsProviderError> {
-        request_tc3_api(
-            &self.client,
-            &self.secret_id,
-            &self.secret_key,
-            &TEO_ENDPOINT,
-            action,
-            payload_json,
-        )
-        .await
     }
 
     /// 获取 Zone ID
@@ -173,7 +152,7 @@ impl TencentEoProvider {
             ]
         });
 
-        let resp: TeoZoneResp = self.request_api("DescribeZones", payload).await?;
+        let resp: TeoZoneResp = self.tc3.request_api("DescribeZones", payload).await?;
 
         if let Some(err) = resp.response.error {
             return Err(DnsProviderError::ApiError {
@@ -256,6 +235,7 @@ impl DnsProvider for TencentEoProvider {
             });
 
             let og_resp: TeoOriginGroupResp = self
+                .tc3
                 .request_api("DescribeOriginGroup", og_describe_payload)
                 .await?;
 
@@ -355,6 +335,7 @@ impl DnsProvider for TencentEoProvider {
             });
 
             let act_resp: TeoActionResp = self
+                .tc3
                 .request_api("ModifyOriginGroup", modify_og_payload)
                 .await?;
 
@@ -395,6 +376,7 @@ impl DnsProvider for TencentEoProvider {
         });
 
         let rec_resp: TeoRecordResp = self
+            .tc3
             .request_api("DescribeDnsRecords", describe_payload)
             .await?;
 
@@ -444,8 +426,10 @@ impl DnsProvider for TencentEoProvider {
                 ]
             });
 
-            let act_resp: TeoActionResp =
-                self.request_api("ModifyDnsRecords", modify_payload).await?;
+            let act_resp: TeoActionResp = self
+                .tc3
+                .request_api("ModifyDnsRecords", modify_payload)
+                .await?;
 
             if let Some(err) = act_resp.response.error {
                 return Err(DnsProviderError::ApiError {
@@ -476,8 +460,10 @@ impl DnsProvider for TencentEoProvider {
                 "TTL": ttl_val
             });
 
-            let act_resp: TeoActionResp =
-                self.request_api("CreateDnsRecord", create_payload).await?;
+            let act_resp: TeoActionResp = self
+                .tc3
+                .request_api("CreateDnsRecord", create_payload)
+                .await?;
 
             if let Some(err) = act_resp.response.error {
                 return Err(DnsProviderError::ApiError {
