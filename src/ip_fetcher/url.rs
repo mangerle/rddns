@@ -66,83 +66,68 @@ impl UrlIpFetcher {
         String::from_utf8(bytes.to_vec())
             .map_err(|e| FetchError::Other(format!("响应内容非合法 UTF-8 文本: {}", e)))
     }
+
+    /// 通用 URL 遍历与 IP 提取循环
+    async fn fetch_ip_generic<T: std::fmt::Display>(
+        &self,
+        ip_name: &str,
+        extractor: impl Fn(&str) -> Result<T, FetchError>,
+    ) -> Result<Option<T>, FetchError> {
+        if self.endpoints.is_empty() {
+            return Ok(None);
+        }
+
+        let mut last_err = None;
+        for endpoint in &self.endpoints {
+            match self.client.get(endpoint).send().await {
+                Ok(resp) => match Self::read_limited_text(resp).await {
+                    Ok(body) => match extractor(&body) {
+                        Ok(ip) => {
+                            debug!("从接口 {} 成功获取到 {}: {}", endpoint, ip_name, ip);
+                            return Ok(Some(ip));
+                        }
+                        Err(e) => {
+                            debug!("接口 {} 返回内容提取 {} 失败: {:?}", endpoint, ip_name, e);
+                            last_err = Some(e);
+                        }
+                    },
+                    Err(e) => {
+                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        last_err = Some(e);
+                    }
+                },
+                Err(e) => {
+                    debug!("请求接口 {} 失败: {}", endpoint, e);
+                    last_err = Some(FetchError::Http(e));
+                }
+            }
+        }
+
+        Err(last_err
+            .unwrap_or_else(|| FetchError::Other(format!("所有 {} URL 接口均请求失败", ip_name))))
+    }
 }
 
 #[async_trait]
 impl IpFetcher for UrlIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
-        if self.endpoints.is_empty() {
-            return Ok(None);
-        }
-
-        let mut last_err = None;
-        for endpoint in &self.endpoints {
-            match self.client.get(endpoint).send().await {
-                Ok(resp) => match Self::read_limited_text(resp).await {
-                    Ok(body) => {
-                        if let Some(ip) = extract_ipv4(&body, self.regex.as_deref()) {
-                            debug!("从接口 {} 成功获取到 IPv4: {}", endpoint, ip);
-                            return Ok(Some(ip));
-                        } else {
-                            debug!("接口 {} 返回内容无法解析为 IPv4: {}", endpoint, body);
-                            last_err = Some(FetchError::NoValidIpv4(body));
-                        }
-                    }
-                    Err(e) => {
-                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
-                        last_err = Some(e);
-                    }
-                },
-                Err(e) => {
-                    debug!("请求接口 {} 失败: {}", endpoint, e);
-                    last_err = Some(FetchError::Http(e));
-                }
-            }
-        }
-
-        Err(last_err
-            .unwrap_or_else(|| FetchError::Other("所有 IPv4 URL 接口均请求失败".to_string())))
+        self.fetch_ip_generic("IPv4", |body| {
+            extract_ipv4(body, self.regex.as_deref())
+                .ok_or_else(|| FetchError::NoValidIpv4(body.to_string()))
+        })
+        .await
     }
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
-        if self.endpoints.is_empty() {
-            return Ok(None);
-        }
-
-        let mut last_err = None;
-        for endpoint in &self.endpoints {
-            match self.client.get(endpoint).send().await {
-                Ok(resp) => match Self::read_limited_text(resp).await {
-                    Ok(body) => {
-                        if let Some(ip) = extract_ipv6(&body, self.regex.as_deref()) {
-                            if is_global_unicast_ipv6(&ip) {
-                                debug!("从接口 {} 成功获取到全球单播 IPv6: {}", endpoint, ip);
-                                return Ok(Some(ip));
-                            } else {
-                                debug!("接口 {} 返回的 IPv6 非公网全球单播地址: {}", endpoint, ip);
-                                last_err = Some(FetchError::NoValidIpv6(format!(
-                                    "非全球单播 IPv6: {}",
-                                    ip
-                                )));
-                            }
-                        } else {
-                            debug!("接口 {} 返回内容无法解析为 IPv6: {}", endpoint, body);
-                            last_err = Some(FetchError::NoValidIpv6(body));
-                        }
-                    }
-                    Err(e) => {
-                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
-                        last_err = Some(e);
-                    }
-                },
-                Err(e) => {
-                    debug!("请求接口 {} 失败: {}", endpoint, e);
-                    last_err = Some(FetchError::Http(e));
-                }
+        self.fetch_ip_generic("IPv6", |body| {
+            let ip = extract_ipv6(body, self.regex.as_deref())
+                .ok_or_else(|| FetchError::NoValidIpv6(body.to_string()))?;
+            if is_global_unicast_ipv6(&ip) {
+                Ok(ip)
+            } else {
+                Err(FetchError::NoValidIpv6(format!("非全球单播 IPv6: {}", ip)))
             }
-        }
-
-        Err(last_err
-            .unwrap_or_else(|| FetchError::Other("所有 IPv6 URL 接口均请求失败".to_string())))
+        })
+        .await
     }
 }
