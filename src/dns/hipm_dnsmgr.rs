@@ -129,21 +129,7 @@ impl HipmDnsMgrProvider {
         let path = format!("/domains?page=1&pageSize=1&keyword={}", root_domain);
         let data = self.request_api(reqwest::Method::GET, &path, None).await?;
 
-        let parse_domains = |val: &Value| -> Vec<DnsMgrDomainItem> {
-            if let Some(arr) = val.as_array() {
-                serde_json::from_value(Value::Array(arr.clone())).unwrap_or_default()
-            } else if let Some(obj) = val.as_object() {
-                if let Some(list) = obj.get("list").and_then(|l| l.as_array()) {
-                    serde_json::from_value(Value::Array(list.clone())).unwrap_or_default()
-                } else {
-                    vec![]
-                }
-            } else {
-                vec![]
-            }
-        };
-
-        let domains = parse_domains(&data);
+        let domains: Vec<DnsMgrDomainItem> = extract_json_list(&data);
         if let Some(matched) = domains
             .into_iter()
             .find(|d| d.name.eq_ignore_ascii_case(root_domain))
@@ -157,7 +143,7 @@ impl HipmDnsMgrProvider {
             let p_data = self
                 .request_api(reqwest::Method::GET, &p_path, None)
                 .await?;
-            let p_domains = parse_domains(&p_data);
+            let p_domains: Vec<DnsMgrDomainItem> = extract_json_list(&p_data);
             if p_domains.is_empty() {
                 break;
             }
@@ -187,18 +173,7 @@ impl HipmDnsMgrProvider {
             domain_id, sub, record_type
         );
         let data = self.request_api(reqwest::Method::GET, &path, None).await?;
-
-        let records: Vec<DnsMgrRecordItem> = if let Some(arr) = data.as_array() {
-            serde_json::from_value(Value::Array(arr.clone())).unwrap_or_default()
-        } else if let Some(obj) = data.as_object() {
-            if let Some(list) = obj.get("list").and_then(|l| l.as_array()) {
-                serde_json::from_value(Value::Array(list.clone())).unwrap_or_default()
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
+        let records: Vec<DnsMgrRecordItem> = extract_json_list(&data);
 
         let matched = records.into_iter().find(|r| {
             r.name.eq_ignore_ascii_case(sub) && r.record_type.eq_ignore_ascii_case(record_type)
@@ -311,5 +286,20 @@ impl DnsProvider for HipmDnsMgrProvider {
                 message: "解析记录创建成功".to_string(),
             })
         }
+    }
+}
+
+/// 从 JSON 中提取泛型实体列表 (兼容顶层数组与包裹在 list 字段中的分页对象)
+fn extract_json_list<T: serde::de::DeserializeOwned>(val: &Value) -> Vec<T> {
+    if let Some(arr) = val.as_array() {
+        serde_json::from_value(Value::Array(arr.clone())).unwrap_or_default()
+    } else if let Some(obj) = val.as_object() {
+        if let Some(list) = obj.get("list").and_then(|l| l.as_array()) {
+            serde_json::from_value(Value::Array(list.clone())).unwrap_or_default()
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
     }
 }
