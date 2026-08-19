@@ -1,6 +1,6 @@
 use crate::config::model::{AppConfig, DnsTaskConfig};
 use crate::config::storage::ConfigManager;
-use crate::core::domain::parse_domain_list;
+use crate::core::domain::{ParsedDomain, parse_domain_list};
 use crate::core::state::StateManager;
 use crate::dns::create_dns_provider;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
@@ -217,123 +217,28 @@ impl DdnsEngine {
             Vec::new()
         };
 
-        // 4. 并发调度 IPv4 域名同步任务
-        if task.ipv4.enabled {
-            if let Some(ipv4) = ipv4_opt {
-                for domain in &parsed_v4_domains {
-                    let domain = domain.clone();
-                    let provider = dns_provider.clone();
-                    let task_name = task.name.clone();
-                    let ttl = task.ttl;
-                    sync_join_set.spawn(async move {
-                        let start_time = std::time::Instant::now();
-                        let full_domain = domain.full_domain();
-                        match provider
-                            .sync_record(&domain, DnsRecordType::A, &IpAddr::V4(ipv4), ttl)
-                            .await
-                        {
-                            Ok(res) => {
-                                let cost_ms = start_time.elapsed().as_millis();
-                                info!(
-                                    "[{}] 同步域名 {} (A 记录) 完成: {} (耗时 {}ms)",
-                                    task_name,
-                                    full_domain,
-                                    res.status.as_str(),
-                                    cost_ms
-                                );
-                                res
-                            }
-                            Err(e) => {
-                                let cost_ms = start_time.elapsed().as_millis();
-                                error!(
-                                    "[{}] 同步域名 {} (A 记录) 失败: {} (耗时 {}ms)",
-                                    task_name, full_domain, e, cost_ms
-                                );
-                                SyncRecordResult {
-                                    domain: full_domain,
-                                    record_type: DnsRecordType::A,
-                                    target_ip: ipv4.to_string(),
-                                    status: SyncStatus::Failed,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    });
-                }
-            } else {
-                for domain in &parsed_v4_domains {
-                    let full_domain = domain.full_domain();
-                    sync_join_set.spawn(async move {
-                        SyncRecordResult {
-                            domain: full_domain,
-                            record_type: DnsRecordType::A,
-                            target_ip: "未知/获取失败".to_string(),
-                            status: SyncStatus::Failed,
-                            message: "获取本地公网 IPv4 地址失败".to_string(),
-                        }
-                    });
-                }
-            }
-        }
+        // 4. 并发调度 IPv4 / IPv6 域名同步任务
+        Self::spawn_protocol_sync_tasks(
+            &mut sync_join_set,
+            task.ipv4.enabled,
+            &parsed_v4_domains,
+            ipv4_opt.map(IpAddr::V4),
+            DnsRecordType::A,
+            dns_provider.clone(),
+            task.name.clone(),
+            task.ttl,
+        );
 
-        // 5. 并发调度 IPv6 域名同步任务
-        if task.ipv6.enabled {
-            if let Some(ipv6) = ipv6_opt {
-                for domain in &parsed_v6_domains {
-                    let domain = domain.clone();
-                    let provider = dns_provider.clone();
-                    let task_name = task.name.clone();
-                    let ttl = task.ttl;
-                    sync_join_set.spawn(async move {
-                        let start_time = std::time::Instant::now();
-                        let full_domain = domain.full_domain();
-                        match provider
-                            .sync_record(&domain, DnsRecordType::AAAA, &IpAddr::V6(ipv6), ttl)
-                            .await
-                        {
-                            Ok(res) => {
-                                let cost_ms = start_time.elapsed().as_millis();
-                                info!(
-                                    "[{}] 同步域名 {} (AAAA 记录) 完成: {} (耗时 {}ms)",
-                                    task_name,
-                                    full_domain,
-                                    res.status.as_str(),
-                                    cost_ms
-                                );
-                                res
-                            }
-                            Err(e) => {
-                                let cost_ms = start_time.elapsed().as_millis();
-                                error!(
-                                    "[{}] 同步域名 {} (AAAA 记录) 失败: {} (耗时 {}ms)",
-                                    task_name, full_domain, e, cost_ms
-                                );
-                                SyncRecordResult {
-                                    domain: full_domain,
-                                    record_type: DnsRecordType::AAAA,
-                                    target_ip: ipv6.to_string(),
-                                    status: SyncStatus::Failed,
-                                    message: e.to_string(),
-                                }
-                            }
-                        }
-                    });
-                }
-            } else {
-                for domain in &parsed_v6_domains {
-                    let full_domain = domain.full_domain();
-                    sync_join_set.spawn(async move {
-                        SyncRecordResult {
-                            domain: full_domain,
-                            record_type: DnsRecordType::AAAA,
-                            target_ip: "未知/获取失败".to_string(),
-                            status: SyncStatus::Failed,
-                            message: "获取本地公网 IPv6 地址失败".to_string(),
-                        }
-                    });
-                }
-            }
-        }
+        Self::spawn_protocol_sync_tasks(
+            &mut sync_join_set,
+            task.ipv6.enabled,
+            &parsed_v6_domains,
+            ipv6_opt.map(IpAddr::V6),
+            DnsRecordType::AAAA,
+            dns_provider.clone(),
+            task.name.clone(),
+            task.ttl,
+        );
 
         let mut sync_results: Vec<SyncRecordResult> = Vec::new();
         while let Some(res) = sync_join_set.join_next().await {
@@ -342,38 +247,22 @@ impl DdnsEngine {
             }
         }
 
-        // 6. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
-        let ipv4_all_ok = if task.ipv4.enabled {
-            if ipv4_opt.is_some() {
-                let parsed_v4_count = parsed_v4_domains.len();
-                let v4_success_count = sync_results
-                    .iter()
-                    .filter(|r| r.record_type == DnsRecordType::A && r.status != SyncStatus::Failed)
-                    .count();
-                parsed_v4_count == 0 || v4_success_count == parsed_v4_count
-            } else {
-                false
-            }
-        } else {
-            true
-        };
+        // 5. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
+        let ipv4_all_ok = Self::is_protocol_all_ok(
+            task.ipv4.enabled,
+            ipv4_opt.is_some(),
+            parsed_v4_domains.len(),
+            DnsRecordType::A,
+            &sync_results,
+        );
 
-        let ipv6_all_ok = if task.ipv6.enabled {
-            if ipv6_opt.is_some() {
-                let parsed_v6_count = parsed_v6_domains.len();
-                let v6_success_count = sync_results
-                    .iter()
-                    .filter(|r| {
-                        r.record_type == DnsRecordType::AAAA && r.status != SyncStatus::Failed
-                    })
-                    .count();
-                parsed_v6_count == 0 || v6_success_count == parsed_v6_count
-            } else {
-                false
-            }
-        } else {
-            true
-        };
+        let ipv6_all_ok = Self::is_protocol_all_ok(
+            task.ipv6.enabled,
+            ipv6_opt.is_some(),
+            parsed_v6_domains.len(),
+            DnsRecordType::AAAA,
+            &sync_results,
+        );
 
         if ipv4_all_ok && ipv4_opt.is_some() {
             current_state.last_ipv4 = ipv4_opt;
@@ -484,6 +373,102 @@ impl DdnsEngine {
                 }
             }
         }
+    }
+
+    /// 调度单个网络协议 (IPv4/IPv6) 下所有域名的并发同步任务
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_protocol_sync_tasks(
+        sync_join_set: &mut tokio::task::JoinSet<SyncRecordResult>,
+        enabled: bool,
+        domains: &[ParsedDomain],
+        ip_opt: Option<IpAddr>,
+        record_type: DnsRecordType,
+        provider: Arc<dyn crate::dns::trait_def::DnsProvider>,
+        task_name: String,
+        ttl: Option<u32>,
+    ) {
+        if !enabled {
+            return;
+        }
+
+        let type_str = match record_type {
+            DnsRecordType::A => "A 记录",
+            DnsRecordType::AAAA => "AAAA 记录",
+        };
+
+        if let Some(ip) = ip_opt {
+            for domain in domains {
+                let domain = domain.clone();
+                let provider = provider.clone();
+                let task_name = task_name.clone();
+                sync_join_set.spawn(async move {
+                    let start_time = std::time::Instant::now();
+                    let full_domain = domain.full_domain();
+                    match provider.sync_record(&domain, record_type, &ip, ttl).await {
+                        Ok(res) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            info!(
+                                "[{}] 同步域名 {} ({}) 完成: {} (耗时 {}ms)",
+                                task_name,
+                                full_domain,
+                                type_str,
+                                res.status.as_str(),
+                                cost_ms
+                            );
+                            res
+                        }
+                        Err(e) => {
+                            let cost_ms = start_time.elapsed().as_millis();
+                            error!(
+                                "[{}] 同步域名 {} ({}) 失败: {} (耗时 {}ms)",
+                                task_name, full_domain, type_str, e, cost_ms
+                            );
+                            SyncRecordResult::failed(
+                                full_domain,
+                                record_type,
+                                ip.to_string(),
+                                e.to_string(),
+                            )
+                        }
+                    }
+                });
+            }
+        } else {
+            for domain in domains {
+                let full_domain = domain.full_domain();
+                let fail_msg = match record_type {
+                    DnsRecordType::A => "获取本地公网 IPv4 地址失败",
+                    DnsRecordType::AAAA => "获取本地公网 IPv6 地址失败",
+                };
+                sync_join_set.spawn(async move {
+                    SyncRecordResult::failed(full_domain, record_type, "未知/获取失败", fail_msg)
+                });
+            }
+        }
+    }
+
+    /// 校验指定协议的所有域名是否均成功同步
+    fn is_protocol_all_ok(
+        enabled: bool,
+        has_ip: bool,
+        domain_count: usize,
+        record_type: DnsRecordType,
+        results: &[SyncRecordResult],
+    ) -> bool {
+        if !enabled {
+            return true;
+        }
+        if !has_ip {
+            return false;
+        }
+        if domain_count == 0 {
+            return true;
+        }
+        let success_count = results
+            .iter()
+            .filter(|r| r.record_type == record_type && r.status != SyncStatus::Failed)
+            .count();
+        success_count == domain_count
     }
 }
 
