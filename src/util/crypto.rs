@@ -1,3 +1,4 @@
+use crate::dns::trait_def::DnsProviderError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hmac::{Hmac, Mac};
@@ -116,7 +117,7 @@ pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     endpoint_config: &Tc3ApiEndpoint,
     action: &str,
     payload_json: serde_json::Value,
-) -> Result<T, crate::dns::trait_def::DnsProviderError> {
+) -> Result<T, DnsProviderError> {
     let payload_str = payload_json.to_string();
     let timestamp = chrono::Utc::now().timestamp();
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -189,7 +190,7 @@ pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     let body_text = resp.text().await?;
 
     if !status.is_success() {
-        return Err(crate::dns::trait_def::DnsProviderError::ApiError {
+        return Err(DnsProviderError::ApiError {
             code: status.to_string(),
             message: body_text,
         });
@@ -199,15 +200,16 @@ pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     if let Some(err) = full_resp.response.error {
         let mut msg = err.message;
         append_ntp_hint_if_expired(&mut msg, &err.code);
-        return Err(crate::dns::trait_def::DnsProviderError::ApiError {
+        return Err(DnsProviderError::ApiError {
             code: err.code,
             message: msg,
         });
     }
 
-    full_resp.response.data.ok_or_else(|| {
-        crate::dns::trait_def::DnsProviderError::Other("腾讯云 API 响应缺少数据实体".to_string())
-    })
+    full_resp
+        .response
+        .data
+        .ok_or_else(|| DnsProviderError::Other("腾讯云 API 响应缺少数据实体".to_string()))
 }
 
 #[cfg(test)]

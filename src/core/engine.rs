@@ -3,10 +3,11 @@ use crate::config::storage::ConfigManager;
 use crate::core::domain::{ParsedDomain, parse_domain_list};
 use crate::core::state::StateManager;
 use crate::dns::create_dns_provider;
-use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{DnsProvider, DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
+use crate::util::wait_internet::wait_for_internet;
 use chrono::Local;
 use log::{debug, error, info};
 use parking_lot::RwLock;
@@ -190,7 +191,7 @@ impl DdnsEngine {
         }
 
         // 3. 构建 DNS 提供商驱动
-        let dns_provider: Arc<dyn crate::dns::trait_def::DnsProvider> =
+        let dns_provider: Arc<dyn DnsProvider> =
             match create_dns_provider(&task.provider, task.http_interface.as_deref()) {
                 Ok(p) => p,
                 Err(e) => {
@@ -333,7 +334,7 @@ impl DdnsEngine {
                 info!("收到停止信号，DDNS 调度引擎平滑退出");
                 return;
             }
-            _ = crate::util::wait_internet::wait_for_internet(120, 3) => {}
+            _ = wait_for_internet(120, 3) => {}
         }
 
         let mut config_rx = self.config_manager.subscribe();
@@ -383,7 +384,7 @@ impl DdnsEngine {
         domains: &[ParsedDomain],
         ip_opt: Option<IpAddr>,
         record_type: DnsRecordType,
-        provider: Arc<dyn crate::dns::trait_def::DnsProvider>,
+        provider: Arc<dyn DnsProvider>,
         task_name: String,
         ttl: Option<u32>,
     ) {
