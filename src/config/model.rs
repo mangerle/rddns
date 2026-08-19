@@ -72,7 +72,8 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserAuthConfig {
     pub username: String,
-    /// 经过 bcrypt 哈希后的密码
+    /// 经过 bcrypt 哈希后的密码 (返回给前端时清空并不序列化，存盘到本地时持久化)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub password_hash: String,
 }
 

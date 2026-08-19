@@ -5,7 +5,6 @@ use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
-use crate::web::handlers::config::merge_notification_credentials;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -106,10 +105,9 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
 /// 测试通知发送（优先提取当前已配置的真实公网 IP 与真实域名数据）
 pub async fn test_notify_handler(
     State(state): State<AppState>,
-    Json(mut config): Json<NotificationConfig>,
+    Json(config): Json<NotificationConfig>,
 ) -> impl IntoResponse {
     let app_config = state.config_manager.get_config();
-    merge_notification_credentials(&mut config, &app_config.notifications);
     let dispatcher = NotificationDispatcher::new(config);
 
     // 尝试从当前任务中探测真实 IP 并生成真实测试数据

@@ -3522,8 +3522,7 @@
           cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
           not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
           auth: document.getElementById('sysUsername').value ? {
-            username: document.getElementById('sysUsername').value,
-            password_hash: "******"
+            username: document.getElementById('sysUsername').value
           } : null,
           dns_server: document.getElementById('sysDnsServer')?.value?.trim() || null,
           dns_tasks: globalConfig.dns_tasks || [],
