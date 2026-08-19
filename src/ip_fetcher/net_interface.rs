@@ -20,18 +20,23 @@ impl NetInterfaceIpFetcher {
             regex,
         }
     }
+
+    /// 查找并获取指定名称的目标网卡设备
+    fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
+        let interfaces = NetworkInterface::show()
+            .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
+
+        interfaces
+            .into_iter()
+            .find(|iface| iface.name.eq_ignore_ascii_case(&self.interface_name))
+            .ok_or_else(|| FetchError::InterfaceNotFound(self.interface_name.clone()))
+    }
 }
 
 #[async_trait]
 impl IpFetcher for NetInterfaceIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
-        let interfaces = NetworkInterface::show()
-            .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
-
-        let target_if = interfaces
-            .into_iter()
-            .find(|iface| iface.name.eq_ignore_ascii_case(&self.interface_name))
-            .ok_or_else(|| FetchError::InterfaceNotFound(self.interface_name.clone()))?;
+        let target_if = self.get_target_interface()?;
 
         let mut candidates = Vec::new();
         for addr in target_if.addr {
@@ -59,13 +64,7 @@ impl IpFetcher for NetInterfaceIpFetcher {
     }
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
-        let interfaces = NetworkInterface::show()
-            .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
-
-        let target_if = interfaces
-            .into_iter()
-            .find(|iface| iface.name.eq_ignore_ascii_case(&self.interface_name))
-            .ok_or_else(|| FetchError::InterfaceNotFound(self.interface_name.clone()))?;
+        let target_if = self.get_target_interface()?;
 
         let mut candidates = Vec::new();
 
