@@ -1,7 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
-use log::{info, warn};
+use log::warn;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
@@ -121,13 +121,8 @@ impl DnsProvider for SpaceshipProvider {
         }
 
         if existing_ips.as_slice() == [target_ip_str.as_str()] {
-            info!(
-                "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+            return Ok(SyncRecordResult::unchanged_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            return Ok(SyncRecordResult::unchanged(
                 full_domain,
                 record_type,
                 target_ip_str,
@@ -195,13 +190,8 @@ impl DnsProvider for SpaceshipProvider {
 
         let put_status = put_resp.status();
         if put_status.is_success() {
-            info!(
-                "[{}] 成功更新/创建域名 {} -> {}",
+            Ok(SyncRecordResult::updated_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::updated(
                 full_domain,
                 record_type,
                 target_ip_str,

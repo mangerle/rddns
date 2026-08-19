@@ -1,7 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
-use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -87,13 +86,8 @@ impl DnsProvider for ClouDnsProvider {
 
         if let Some(existing) = matched {
             if existing.record == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -126,13 +120,8 @@ impl DnsProvider for ClouDnsProvider {
                 });
 
             if res.status.as_deref() == Some("Success") {
-                info!(
-                    "[{}] 成功更新域名 {} -> {}",
+                Ok(SyncRecordResult::updated_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::updated(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -166,13 +155,8 @@ impl DnsProvider for ClouDnsProvider {
                 });
 
             if res.status.as_deref() == Some("Success") {
-                info!(
-                    "[{}] 成功创建域名解析 {} -> {}",
+                Ok(SyncRecordResult::created_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::created(
                     full_domain,
                     record_type,
                     target_ip_str,

@@ -5,7 +5,6 @@ use crate::util::crypto::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use log::info;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
@@ -226,13 +225,8 @@ impl DnsProvider for HuaweiDnsProvider {
         if let Some(existing) = matched {
             let cur_records = existing.records.unwrap_or_default();
             if cur_records.as_slice() == [target_ip_str.as_str()] {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -254,13 +248,8 @@ impl DnsProvider for HuaweiDnsProvider {
                 .request_hw_api(Method::PUT, &path, vec![], Some(body))
                 .await?;
 
-            info!(
-                "[{}] 成功更新域名 {} -> {}",
+            Ok(SyncRecordResult::updated_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::updated(
                 full_domain,
                 record_type,
                 target_ip_str,
@@ -300,13 +289,8 @@ impl DnsProvider for HuaweiDnsProvider {
                 .request_hw_api(Method::POST, &path, vec![], Some(body))
                 .await?;
 
-            info!(
-                "[{}] 成功创建域名解析 {} -> {}",
+            Ok(SyncRecordResult::created_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::created(
                 full_domain,
                 record_type,
                 target_ip_str,

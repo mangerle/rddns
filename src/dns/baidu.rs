@@ -3,7 +3,6 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use crate::util::crypto::hmac_sha256_hex;
 use async_trait::async_trait;
 use chrono::Utc;
-use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -140,13 +139,8 @@ impl DnsProvider for BaiduCloudProvider {
 
         if let Some(existing) = matched {
             if existing.rdata == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -168,13 +162,8 @@ impl DnsProvider for BaiduCloudProvider {
                 .post_json("/v1/domain/resolve/edit", edit_payload)
                 .await?;
 
-            info!(
-                "[{}] 成功更新域名 {} -> {}",
+            Ok(SyncRecordResult::updated_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::updated(
                 full_domain,
                 record_type,
                 target_ip_str,
@@ -193,13 +182,8 @@ impl DnsProvider for BaiduCloudProvider {
                 .post_json("/v1/domain/resolve/add", add_payload)
                 .await?;
 
-            info!(
-                "[{}] 成功创建域名解析 {} -> {}",
+            Ok(SyncRecordResult::created_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::created(
                 full_domain,
                 record_type,
                 target_ip_str,

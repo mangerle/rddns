@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use async_trait::async_trait;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::IpAddr;
@@ -78,6 +79,22 @@ impl SyncRecordResult {
         }
     }
 
+    /// 记录日志并构造“未变动”同步结果
+    pub fn unchanged_log(
+        provider: &str,
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        let domain_str = domain.into();
+        let ip_str = ip.into();
+        info!(
+            "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+            provider, domain_str, ip_str
+        );
+        Self::unchanged(domain_str, record_type, ip_str)
+    }
+
     /// 构造“已更新”同步结果
     pub fn updated(
         domain: impl Into<String>,
@@ -93,6 +110,19 @@ impl SyncRecordResult {
         }
     }
 
+    /// 记录日志并构造“已更新”同步结果
+    pub fn updated_log(
+        provider: &str,
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        let domain_str = domain.into();
+        let ip_str = ip.into();
+        info!("[{}] 成功更新域名 {} -> {}", provider, domain_str, ip_str);
+        Self::updated(domain_str, record_type, ip_str)
+    }
+
     /// 构造“已创建”同步结果
     pub fn created(
         domain: impl Into<String>,
@@ -106,6 +136,22 @@ impl SyncRecordResult {
             status: SyncStatus::Created,
             message: "记录添加成功".to_string(),
         }
+    }
+
+    /// 记录日志并构造“已创建”同步结果
+    pub fn created_log(
+        provider: &str,
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        let domain_str = domain.into();
+        let ip_str = ip.into();
+        info!(
+            "[{}] 成功创建域名解析 {} -> {}",
+            provider, domain_str, ip_str
+        );
+        Self::created(domain_str, record_type, ip_str)
     }
 
     /// 构造“失败”同步结果
@@ -172,6 +218,30 @@ mod tests {
 
         let res_created = SyncRecordResult::created("example.com", DnsRecordType::AAAA, "::1");
         assert_eq!(res_created.status, SyncStatus::Created);
+
+        let res_unchanged_log = SyncRecordResult::unchanged_log(
+            "TestProvider",
+            "example.com",
+            DnsRecordType::A,
+            "1.1.1.1",
+        );
+        assert_eq!(res_unchanged_log.status, SyncStatus::Unchanged);
+
+        let res_updated_log = SyncRecordResult::updated_log(
+            "TestProvider",
+            "example.com",
+            DnsRecordType::A,
+            "1.1.1.2",
+        );
+        assert_eq!(res_updated_log.status, SyncStatus::Updated);
+
+        let res_created_log = SyncRecordResult::created_log(
+            "TestProvider",
+            "example.com",
+            DnsRecordType::AAAA,
+            "::1",
+        );
+        assert_eq!(res_created_log.status, SyncStatus::Created);
 
         let res_failed =
             SyncRecordResult::failed("example.com", DnsRecordType::A, "1.1.1.1", "网络超时");

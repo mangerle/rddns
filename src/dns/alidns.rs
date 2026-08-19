@@ -3,7 +3,6 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
-use log::info;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -172,13 +171,8 @@ impl DnsProvider for AliDnsProvider {
 
         if let Some(existing) = matched_record {
             if existing.value == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -200,13 +194,8 @@ impl DnsProvider for AliDnsProvider {
                 )
                 .await?;
 
-            info!(
-                "[{}] 成功更新域名 {} -> {}",
+            Ok(SyncRecordResult::updated_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::updated(
                 full_domain,
                 record_type,
                 target_ip_str,
@@ -227,13 +216,8 @@ impl DnsProvider for AliDnsProvider {
                 )
                 .await?;
 
-            info!(
-                "[{}] 成功创建域名 {} -> {}",
+            Ok(SyncRecordResult::created_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::created(
                 full_domain,
                 record_type,
                 target_ip_str,

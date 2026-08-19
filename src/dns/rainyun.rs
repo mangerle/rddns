@@ -1,7 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
-use log::info;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
@@ -189,13 +188,8 @@ impl DnsProvider for RainYunProvider {
 
         if let Some(existing) = matched {
             if existing.value == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -226,13 +220,8 @@ impl DnsProvider for RainYunProvider {
             let patch_res: RainyunResp = serde_json::from_str(&patch_text)?;
 
             if patch_res.code == 200 {
-                info!(
-                    "[{}] 成功更新域名 {} -> {}",
+                Ok(SyncRecordResult::updated_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::updated(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -270,13 +259,8 @@ impl DnsProvider for RainYunProvider {
             let post_res: RainyunResp = serde_json::from_str(&post_text)?;
 
             if post_res.code == 200 {
-                info!(
-                    "[{}] 成功创建域名解析 {} -> {}",
+                Ok(SyncRecordResult::created_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::created(
                     full_domain,
                     record_type,
                     target_ip_str,

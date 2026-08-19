@@ -3,7 +3,6 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use log::info;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
@@ -112,13 +111,8 @@ impl DnsProvider for NameComProvider {
 
         if let Some(existing) = matched {
             if existing.answer == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -148,13 +142,8 @@ impl DnsProvider for NameComProvider {
 
             let put_status = put_resp.status();
             if put_status.is_success() {
-                info!(
-                    "[{}] 成功更新域名 {} -> {}",
+                Ok(SyncRecordResult::updated_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::updated(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -187,13 +176,8 @@ impl DnsProvider for NameComProvider {
 
             let post_status = post_resp.status();
             if post_status.is_success() {
-                info!(
-                    "[{}] 成功创建域名解析 {} -> {}",
+                Ok(SyncRecordResult::created_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                Ok(SyncRecordResult::created(
                     full_domain,
                     record_type,
                     target_ip_str,

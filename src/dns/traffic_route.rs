@@ -3,7 +3,6 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
-use log::info;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
@@ -231,13 +230,8 @@ impl DnsProvider for TrafficRouteProvider {
 
         if let Some(existing) = matched {
             if existing.value == target_ip_str {
-                info!(
-                    "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
+                return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
-                    full_domain,
-                    target_ip_str
-                );
-                return Ok(SyncRecordResult::unchanged(
                     full_domain,
                     record_type,
                     target_ip_str,
@@ -257,13 +251,8 @@ impl DnsProvider for TrafficRouteProvider {
                 .request_volc("UpdateRecord", vec![], Some(update_body))
                 .await?;
 
-            info!(
-                "[{}] 成功更新域名 {} -> {}",
+            Ok(SyncRecordResult::updated_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::updated(
                 full_domain,
                 record_type,
                 target_ip_str,
@@ -282,13 +271,8 @@ impl DnsProvider for TrafficRouteProvider {
                 .request_volc("CreateRecord", vec![], Some(create_body))
                 .await?;
 
-            info!(
-                "[{}] 成功创建域名解析 {} -> {}",
+            Ok(SyncRecordResult::created_log(
                 self.provider_name(),
-                full_domain,
-                target_ip_str
-            );
-            Ok(SyncRecordResult::created(
                 full_domain,
                 record_type,
                 target_ip_str,
