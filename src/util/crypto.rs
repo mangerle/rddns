@@ -62,6 +62,27 @@ pub fn pop_url_encode(s: &str) -> String {
     result
 }
 
+/// 构建符合 AWS SigV4 规范的规范化 URL 查询字符串 (按键名升序排序并逐字段 URL 编码)
+pub fn build_canonical_query_string<K: AsRef<str>, V: AsRef<str>>(query: &[(K, V)]) -> String {
+    let mut sorted: Vec<(&str, &str)> = query
+        .iter()
+        .map(|(k, v)| (k.as_ref(), v.as_ref()))
+        .collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+    sorted
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
+                url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 /// 若错误信息或错误码中包含时间戳/时钟过期特征，自动追加 NTP 时间同步提示
 pub fn append_ntp_hint_if_expired(msg: &mut String, code: &str) {
     let lower_msg = msg.to_ascii_lowercase();
@@ -250,5 +271,12 @@ mod tests {
         let mut normal_msg = "Invalid password".to_string();
         append_ntp_hint_if_expired(&mut normal_msg, "AuthFailed");
         assert_eq!(normal_msg, "Invalid password");
+    }
+
+    #[test]
+    fn test_build_canonical_query_string() {
+        let query = vec![("b", "2"), ("a", "1 2"), ("c", "3/4")];
+        let res = build_canonical_query_string(&query);
+        assert_eq!(res, "a=1+2&b=2&c=3%2F4");
     }
 }

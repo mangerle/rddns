@@ -2,7 +2,9 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
-use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha256_hex, sha256_hex};
+use crate::util::crypto::{
+    append_ntp_hint_if_expired, build_canonical_query_string, hmac_sha256_hex, sha256_hex,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use log::info;
@@ -99,19 +101,7 @@ impl HuaweiDnsProvider {
         let x_sdk_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
         // 1. 构建标准化查询字符串 (Canonical Query String)
-        let mut sorted_query = query_params.clone();
-        sorted_query.sort_by(|a, b| a.0.cmp(b.0));
-        let canonical_query_str = sorted_query
-            .iter()
-            .map(|(k, v)| {
-                format!(
-                    "{}={}",
-                    url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
-                    url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("&");
+        let canonical_query_str = build_canonical_query_string(&query_params);
 
         // 2. 构建标准化标头 (Canonical Headers)
         let canonical_headers = format!(

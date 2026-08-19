@@ -2,7 +2,7 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
-use crate::util::crypto::{hmac_sha256, sha256_hex};
+use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
 use log::info;
@@ -98,19 +98,8 @@ impl TrafficRouteProvider {
         let mut query = query_params;
         query.push(("Action", action.to_string()));
         query.push(("Version", VOLC_VERSION.to_string()));
-        query.sort_by(|a, b| a.0.cmp(b.0));
 
-        let canonical_query_str = query
-            .iter()
-            .map(|(k, v)| {
-                format!(
-                    "{}={}",
-                    url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
-                    url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("&");
+        let canonical_query_str = build_canonical_query_string(&query);
 
         let body_str = body.map(|b| b.to_string()).unwrap_or_default();
         let x_content_sha256 = sha256_hex(body_str.as_bytes());
