@@ -95,7 +95,6 @@ struct TeoOriginRecord {
     #[serde(rename = "Record")]
     record: String,
     #[serde(rename = "Type")]
-    #[allow(dead_code)]
     record_type: String,
     #[serde(rename = "Weight")]
     weight: Option<u32>,

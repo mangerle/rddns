@@ -258,7 +258,6 @@ mod tests {
 
         let event = NotificationEvent {
             overall_status: NotificationOverallStatus::Success,
-            title: "测试通知".to_string(),
             task_name: "腾讯云".to_string(),
             ipv4: Some(Ipv4Addr::new(13, 115, 228, 110)),
             ipv6: None,
@@ -298,7 +297,6 @@ mod tests {
 
         let event = NotificationEvent {
             overall_status: NotificationOverallStatus::Failed,
-            title: "失败通知".to_string(),
             task_name: "阿里云".to_string(),
             ipv4: None,
             ipv6: None,

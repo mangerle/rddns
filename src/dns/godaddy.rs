@@ -20,14 +20,9 @@ pub struct GoDaddyProvider {
     client: Client,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct GoDaddyRecord {
     data: Option<String>,
-    name: Option<String>,
-    ttl: Option<u32>,
-    #[serde(rename = "type")]
-    record_type: Option<String>,
 }
 
 impl GoDaddyProvider {

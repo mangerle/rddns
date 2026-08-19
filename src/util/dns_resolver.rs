@@ -39,21 +39,19 @@ pub fn clear_custom_dns_server() {
 }
 
 /// 获取全局自定义 DNS 解析服务器
-#[allow(dead_code)]
 pub fn get_custom_dns_server() -> Option<String> {
     CUSTOM_DNS_SERVER.read().clone()
 }
 
 /// 标准 DNS 记录类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code, clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum QueryRecordType {
     A = 1,
     AAAA = 28,
 }
 
 /// 构造标准 DNS 查询请求数据包 (UDP 格式)
-#[allow(dead_code)]
 fn build_dns_query_packet(domain: &str, qtype: QueryRecordType, query_id: u16) -> Result<Vec<u8>> {
     let mut packet = Vec::with_capacity(64);
 

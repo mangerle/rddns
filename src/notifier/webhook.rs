@@ -112,7 +112,6 @@ mod tests {
     #[test]
     fn test_webhook_url_encoding() {
         let event = NotificationEvent {
-            title: "DDNS 同步状态通知".to_string(),
             task_name: "家庭网络".to_string(),
             overall_status: NotificationOverallStatus::Success,
             ip_changed: true,

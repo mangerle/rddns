@@ -283,7 +283,6 @@ mod tests {
 
         let event = NotificationEvent {
             overall_status: NotificationOverallStatus::Failed,
-            title: "测试标题".to_string(),
             task_name: "<任务&危险>".to_string(),
             ipv4: None,
             ipv6: None,

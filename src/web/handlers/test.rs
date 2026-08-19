@@ -190,7 +190,6 @@ pub async fn test_notify_handler(
 
     let sample_event = NotificationEvent {
         overall_status: NotificationOverallStatus::Success,
-        title: "rddns 通知通道测试".to_string(),
         task_name,
         ipv4,
         ipv6,

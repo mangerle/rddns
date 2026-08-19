@@ -7,9 +7,7 @@ use std::process::Command;
 use std::fs;
 
 const SERVICE_NAME: &str = "rddns";
-#[allow(dead_code)]
-const SERVICE_DISPLAY_NAME: &str = "RDDNS Dynamic DNS Service";
-#[allow(dead_code)]
+#[cfg(unix)]
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
 
 /// 处理系统服务管理命令 (install | uninstall | start | stop | restart | status)

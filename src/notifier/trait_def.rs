@@ -4,7 +4,6 @@ use chrono::{DateTime, Local};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum NotifyError {
     #[error("HTTP 请求失败: {0}")]
@@ -15,8 +14,6 @@ pub enum NotifyError {
     Json(#[from] serde_json::Error),
     #[error("通知服务商返回错误: {0}")]
     Provider(String),
-    #[error("其他通知错误: {0}")]
-    Other(String),
 }
 
 /// 同步总状态标识
@@ -38,11 +35,9 @@ impl NotificationOverallStatus {
 }
 
 /// 领域通知事件实体
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct NotificationEvent {
     pub overall_status: NotificationOverallStatus,
-    pub title: String,
     pub task_name: String,
     pub ipv4: Option<Ipv4Addr>,
     pub ipv6: Option<Ipv6Addr>,

@@ -19,11 +19,8 @@ pub struct PorkbunProvider {
     client: Client,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PorkbunRecord {
-    #[serde(rename = "type")]
-    record_type: Option<String>,
     content: Option<String>,
 }
 

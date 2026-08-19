@@ -34,17 +34,13 @@ struct BaiduRecord {
     rdata: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct BaiduRecordsResp {
     result: Option<Vec<BaiduRecord>>,
-    message: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct BaiduBaseResp {
-    code: Option<String>,
     message: Option<String>,
 }
 

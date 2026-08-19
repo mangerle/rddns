@@ -26,12 +26,10 @@ struct CachedToken {
 }
 
 /// 微信模板消息发送响应实体
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct WechatSendResponse {
     pub errcode: i64,
     pub errmsg: String,
-    pub msgid: Option<i64>,
 }
 
 use std::collections::HashMap;
@@ -270,7 +268,6 @@ mod tests {
 
         let event = NotificationEvent {
             overall_status: NotificationOverallStatus::Failed,
-            title: "测试标题".to_string(),
             task_name: "超长中文任务名称测试——这是一个超过二十个汉字的特殊任务名字".to_string(),
             ipv4: None,
             ipv6: None,

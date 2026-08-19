@@ -44,13 +44,6 @@ impl StateManager {
         tasks.entry(task_name.to_string()).or_default().clone()
     }
 
-    /// 获取所有任务状态快照
-    #[allow(dead_code)]
-    pub fn get_all_states(&self) -> HashMap<String, TaskRuntimeState> {
-        let tasks = self.tasks.read();
-        tasks.clone()
-    }
-
     /// 更新任务状态
     pub fn update_task_state<F>(&self, task_name: &str, f: F)
     where
@@ -82,9 +75,5 @@ mod tests {
         let updated = mgr.get_task_state("task1");
         assert_eq!(updated.consecutive_failures, 2);
         assert_eq!(updated.last_error.as_deref(), Some("连接超时"));
-
-        let all = mgr.get_all_states();
-        assert_eq!(all.len(), 1);
-        assert!(all.contains_key("task1"));
     }
 }

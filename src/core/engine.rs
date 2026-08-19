@@ -311,7 +311,6 @@ impl DdnsEngine {
 
             let event = NotificationEvent {
                 overall_status,
-                title: format!("rddns 同步通知 - [{}]", task.name),
                 task_name: task.name.clone(),
                 ipv4: ipv4_opt,
                 ipv6: ipv6_opt,

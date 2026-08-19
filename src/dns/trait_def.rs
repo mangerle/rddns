@@ -62,7 +62,6 @@ pub struct SyncRecordResult {
     pub message: String,
 }
 
-#[allow(dead_code)]
 impl SyncRecordResult {
     /// 构造“未变动”同步结果
     pub fn unchanged(
@@ -126,7 +125,6 @@ impl SyncRecordResult {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum DnsProviderError {
     #[error("HTTP 通信错误: {0}")]
@@ -137,8 +135,6 @@ pub enum DnsProviderError {
     ZoneNotFound(String),
     #[error("服务商 API 错误 [{code}]: {message}")]
     ApiError { code: String, message: String },
-    #[error("签名生成错误: {0}")]
-    Signature(String),
     #[error("缺少认证凭据: {0}")]
     MissingCredentials(String),
     #[error("其他服务商错误: {0}")]

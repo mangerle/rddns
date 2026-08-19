@@ -29,12 +29,9 @@ struct Dynv6Zone {
     ipv6_prefix: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct Dynv6Record {
     id: u64,
-    #[serde(rename = "zoneID")]
-    zone_id: Option<u64>,
     name: Option<String>,
     #[serde(rename = "type")]
     record_type: Option<String>,
