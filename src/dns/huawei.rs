@@ -225,7 +225,7 @@ impl DnsProvider for HuaweiDnsProvider {
 
         if let Some(existing) = matched {
             let cur_records = existing.records.unwrap_or_default();
-            if cur_records.len() == 1 && cur_records[0] == target_ip_str {
+            if cur_records.as_slice() == [target_ip_str.as_str()] {
                 info!(
                     "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                     self.provider_name(),

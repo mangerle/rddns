@@ -120,7 +120,7 @@ impl DnsProvider for SpaceshipProvider {
             }
         }
 
-        if existing_ips.len() == 1 && existing_ips[0] == target_ip_str {
+        if existing_ips.as_slice() == [target_ip_str.as_str()] {
             info!(
                 "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
                 self.provider_name(),
