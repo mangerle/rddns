@@ -63,6 +63,70 @@ pub struct SyncRecordResult {
 }
 
 #[allow(dead_code)]
+impl SyncRecordResult {
+    /// 构造“未变动”同步结果
+    pub fn unchanged(
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            record_type,
+            target_ip: ip.into(),
+            status: SyncStatus::Unchanged,
+            message: "记录未发生变化，无需更新".to_string(),
+        }
+    }
+
+    /// 构造“已更新”同步结果
+    pub fn updated(
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            record_type,
+            target_ip: ip.into(),
+            status: SyncStatus::Updated,
+            message: "记录更新成功".to_string(),
+        }
+    }
+
+    /// 构造“已创建”同步结果
+    pub fn created(
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            record_type,
+            target_ip: ip.into(),
+            status: SyncStatus::Created,
+            message: "记录添加成功".to_string(),
+        }
+    }
+
+    /// 构造“失败”同步结果
+    pub fn failed(
+        domain: impl Into<String>,
+        record_type: DnsRecordType,
+        ip: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            record_type,
+            target_ip: ip.into(),
+            status: SyncStatus::Failed,
+            message: message.into(),
+        }
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum DnsProviderError {
     #[error("HTTP 通信错误: {0}")]
@@ -95,4 +159,27 @@ pub trait DnsProvider: Send + Sync {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_record_result_constructors() {
+        let res_unchanged = SyncRecordResult::unchanged("example.com", DnsRecordType::A, "1.1.1.1");
+        assert_eq!(res_unchanged.status, SyncStatus::Unchanged);
+        assert_eq!(res_unchanged.domain, "example.com");
+
+        let res_updated = SyncRecordResult::updated("example.com", DnsRecordType::A, "1.1.1.2");
+        assert_eq!(res_updated.status, SyncStatus::Updated);
+
+        let res_created = SyncRecordResult::created("example.com", DnsRecordType::AAAA, "::1");
+        assert_eq!(res_created.status, SyncStatus::Created);
+
+        let res_failed =
+            SyncRecordResult::failed("example.com", DnsRecordType::A, "1.1.1.1", "网络超时");
+        assert_eq!(res_failed.status, SyncStatus::Failed);
+        assert_eq!(res_failed.message, "网络超时");
+    }
 }
