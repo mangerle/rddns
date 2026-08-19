@@ -1,7 +1,5 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
-};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
@@ -86,13 +84,11 @@ impl DnsProvider for GoDaddyProvider {
                 full_domain,
                 target_ip_str
             );
-            return Ok(SyncRecordResult {
-                domain: full_domain,
+            return Ok(SyncRecordResult::unchanged(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Unchanged,
-                message: "记录未发生变化，无需更新".to_string(),
-            });
+                target_ip_str,
+            ));
         }
 
         // 2. 幂等更新/创建记录 (PUT /domains/{domain}/records/{type}/{name})
@@ -119,13 +115,11 @@ impl DnsProvider for GoDaddyProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: "记录更新成功".to_string(),
-            })
+                target_ip_str,
+            ))
         } else {
             let body_text = put_resp.text().await.unwrap_or_default();
             Err(DnsProviderError::ApiError {

@@ -1,7 +1,5 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
-};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use log::{info, warn};
 use reqwest::Client;
@@ -129,13 +127,11 @@ impl DnsProvider for SpaceshipProvider {
                 full_domain,
                 target_ip_str
             );
-            return Ok(SyncRecordResult {
-                domain: full_domain,
+            return Ok(SyncRecordResult::unchanged(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Unchanged,
-                message: "记录未发生变化，无需更新".to_string(),
-            });
+                target_ip_str,
+            ));
         }
 
         // 2. 如果存在旧的其它 IP，先调用 DELETE 清理旧记录
@@ -205,13 +201,11 @@ impl DnsProvider for SpaceshipProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: "记录更新成功".to_string(),
-            })
+                target_ip_str,
+            ))
         } else {
             let put_body = put_resp.text().await.unwrap_or_default();
             Err(DnsProviderError::ApiError {

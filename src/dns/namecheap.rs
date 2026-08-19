@@ -1,7 +1,5 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
-};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
@@ -82,13 +80,11 @@ impl DnsProvider for NamecheapProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: "记录更新成功".to_string(),
-            })
+                target_ip_str,
+            ))
         } else {
             Err(DnsProviderError::ApiError {
                 code: "NamecheapError".to_string(),

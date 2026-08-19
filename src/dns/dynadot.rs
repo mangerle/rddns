@@ -89,13 +89,11 @@ impl DnsProvider for DynadotProvider {
                         full_domain,
                         target_ip_str
                     );
-                    Ok(SyncRecordResult {
-                        domain: full_domain,
+                    Ok(SyncRecordResult::updated(
+                        full_domain,
                         record_type,
-                        target_ip: target_ip_str,
-                        status: SyncStatus::Updated,
-                        message: "记录更新成功".to_string(),
-                    })
+                        target_ip_str,
+                    ))
                 } else {
                     let err_msg = res_json.content.unwrap_or_default().join(", ");
                     Err(DnsProviderError::ApiError {

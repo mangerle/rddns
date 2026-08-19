@@ -1,7 +1,5 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
-};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -253,13 +251,11 @@ impl DnsProvider for AliEsaProvider {
                     full_domain,
                     target_ip_str
                 );
-                return Ok(SyncRecordResult {
-                    domain: full_domain,
+                return Ok(SyncRecordResult::unchanged(
+                    full_domain,
                     record_type,
-                    target_ip: target_ip_str,
-                    status: SyncStatus::Unchanged,
-                    message: "记录未发生变化，无需更新".to_string(),
-                });
+                    target_ip_str,
+                ));
             }
 
             // 更新记录 (POST UpdateRecord)
@@ -282,13 +278,11 @@ impl DnsProvider for AliEsaProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: "记录更新成功".to_string(),
-            })
+                target_ip_str,
+            ))
         } else {
             // 创建记录 (POST CreateRecord)
             let act: AliEsaActionResp = self
@@ -312,13 +306,11 @@ impl DnsProvider for AliEsaProvider {
                     full_domain,
                     target_ip_str
                 );
-                Ok(SyncRecordResult {
-                    domain: full_domain,
+                Ok(SyncRecordResult::created(
+                    full_domain,
                     record_type,
-                    target_ip: target_ip_str,
-                    status: SyncStatus::Created,
-                    message: "解析记录创建成功".to_string(),
-                })
+                    target_ip_str,
+                ))
             } else {
                 Err(DnsProviderError::ApiError {
                     code: "AliEsaCreateError".to_string(),
