@@ -1,22 +1,19 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
-};
-use crate::util::crypto::{hmac_sha256, sha256_hex};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::crypto::{Tc3ApiEndpoint, request_tc3_api};
 use async_trait::async_trait;
-use chrono::Utc;
 use log::info;
 use reqwest::Client;
-use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
 use std::time::Duration;
 
-const TEO_ENDPOINT: &str = "https://teo.tencentcloudapi.com";
-const TEO_HOST: &str = "teo.tencentcloudapi.com";
-const TEO_SERVICE: &str = "teo";
-const TEO_VERSION: &str = "2022-09-01";
+const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
+    host: "teo.tencentcloudapi.com",
+    service: "teo",
+    version: "2022-09-01",
+};
 
 /// 腾讯云 EdgeOne (TEO) 提供商
 pub struct TencentEoProvider {
@@ -140,9 +137,8 @@ impl TencentEoProvider {
             ));
         }
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let client =
+            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
 
         Ok(Self {
             client,
@@ -151,91 +147,20 @@ impl TencentEoProvider {
         })
     }
 
-    /// 发起腾讯云 TC3-HMAC-SHA256 签名请求
-    async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
+    async fn request_api<T: for<'de> Deserialize<'de>>(
         &self,
         action: &str,
         payload_json: serde_json::Value,
     ) -> Result<T, DnsProviderError> {
-        let payload_str = payload_json.to_string();
-        let timestamp = Utc::now().timestamp();
-        let date = Utc::now().format("%Y-%m-%d").to_string();
-
-        // 1. 构造规范请求串 CanonicalRequest
-        let canonical_headers = format!(
-            "content-type:application/json; charset=utf-8\nhost:{}\nx-tc-action:{}\nx-tc-timestamp:{}\n",
-            TEO_HOST,
-            action.to_ascii_lowercase(),
-            timestamp
-        );
-        let signed_headers = "content-type;host;x-tc-action;x-tc-timestamp";
-        let hashed_payload = sha256_hex(payload_str.as_bytes());
-
-        let canonical_request = format!(
-            "POST\n/\n\n{}\n{}\n{}",
-            canonical_headers, signed_headers, hashed_payload
-        );
-
-        // 2. 构造待签名字符串 StringToSign
-        let credential_scope = format!("{}/{}/tc3_request", date, TEO_SERVICE);
-        let hashed_canonical_request = sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "TC3-HMAC-SHA256\n{}\n{}\n{}",
-            timestamp, credential_scope, hashed_canonical_request
-        );
-
-        // 3. 计算签名 Signature
-        let secret_date = hmac_sha256(
-            format!("TC3{}", self.secret_key).as_bytes(),
-            date.as_bytes(),
-        );
-        let secret_service = hmac_sha256(&secret_date, TEO_SERVICE.as_bytes());
-        let secret_signing = hmac_sha256(&secret_service, b"tc3_request");
-        let signature = hex::encode(hmac_sha256(&secret_signing, string_to_sign.as_bytes()));
-
-        // 4. 构造 Authorization
-        let authorization = format!(
-            "TC3-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.secret_id, credential_scope, signed_headers, signature
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json; charset=utf-8"),
-        );
-        headers.insert(HOST, HeaderValue::from_static(TEO_HOST));
-        if let Ok(act_val) = HeaderValue::from_str(action) {
-            headers.insert("X-TC-Action", act_val);
-        }
-        headers.insert("X-TC-Version", HeaderValue::from_static(TEO_VERSION));
-        if let Ok(ts_val) = HeaderValue::from_str(&timestamp.to_string()) {
-            headers.insert("X-TC-Timestamp", ts_val);
-        }
-        if let Ok(auth_val) = HeaderValue::from_str(&authorization) {
-            headers.insert("Authorization", auth_val);
-        }
-
-        let resp = self
-            .client
-            .post(TEO_ENDPOINT)
-            .headers(headers)
-            .body(payload_str)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let body_text = resp.text().await?;
-
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: body_text,
-            });
-        }
-
-        let parsed = serde_json::from_str::<T>(&body_text)?;
-        Ok(parsed)
+        request_tc3_api(
+            &self.client,
+            &self.secret_id,
+            &self.secret_key,
+            &TEO_ENDPOINT,
+            action,
+            payload_json,
+        )
+        .await
     }
 
     /// 获取 Zone ID
@@ -249,7 +174,7 @@ impl TencentEoProvider {
             ]
         });
 
-        let resp: TeoZoneResp = self.request_tc3_api("DescribeZones", payload).await?;
+        let resp: TeoZoneResp = self.request_api("DescribeZones", payload).await?;
 
         if let Some(err) = resp.response.error {
             return Err(DnsProviderError::ApiError {
@@ -332,7 +257,7 @@ impl DnsProvider for TencentEoProvider {
             });
 
             let og_resp: TeoOriginGroupResp = self
-                .request_tc3_api("DescribeOriginGroup", og_describe_payload)
+                .request_api("DescribeOriginGroup", og_describe_payload)
                 .await?;
 
             if let Some(err) = og_resp.response.error {
@@ -414,13 +339,11 @@ impl DnsProvider for TencentEoProvider {
                     matched_group.name,
                     target_ip_str
                 );
-                return Ok(SyncRecordResult {
-                    domain: full_domain,
+                return Ok(SyncRecordResult::unchanged(
+                    full_domain,
                     record_type,
-                    target_ip: target_ip_str,
-                    status: SyncStatus::Unchanged,
-                    message: "EdgeOne 源站组记录一致，无需更新".to_string(),
-                });
+                    target_ip_str,
+                ));
             }
 
             // 执行修改源站组 (ModifyOriginGroup)
@@ -433,7 +356,7 @@ impl DnsProvider for TencentEoProvider {
             });
 
             let act_resp: TeoActionResp = self
-                .request_tc3_api("ModifyOriginGroup", modify_og_payload)
+                .request_api("ModifyOriginGroup", modify_og_payload)
                 .await?;
 
             if let Some(err) = act_resp.response.error {
@@ -450,13 +373,11 @@ impl DnsProvider for TencentEoProvider {
                 target_ip_str
             );
 
-            return Ok(SyncRecordResult {
-                domain: full_domain,
+            return Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: format!("成功更新 EdgeOne 源站组 [{}]", matched_group.name),
-            });
+                target_ip_str,
+            ));
         }
 
         // 3. 常规 DNS 解析记录查询与同步
@@ -475,7 +396,7 @@ impl DnsProvider for TencentEoProvider {
         });
 
         let rec_resp: TeoRecordResp = self
-            .request_tc3_api("DescribeDnsRecords", describe_payload)
+            .request_api("DescribeDnsRecords", describe_payload)
             .await?;
 
         if let Some(err) = rec_resp.response.error {
@@ -501,13 +422,11 @@ impl DnsProvider for TencentEoProvider {
                     full_domain,
                     target_ip_str
                 );
-                return Ok(SyncRecordResult {
-                    domain: full_domain,
+                return Ok(SyncRecordResult::unchanged(
+                    full_domain,
                     record_type,
-                    target_ip: target_ip_str,
-                    status: SyncStatus::Unchanged,
-                    message: "记录未发生变化，无需更新".to_string(),
-                });
+                    target_ip_str,
+                ));
             }
 
             let record_id = existing.record_id.unwrap_or_default();
@@ -528,9 +447,8 @@ impl DnsProvider for TencentEoProvider {
                 ]
             });
 
-            let act_resp: TeoActionResp = self
-                .request_tc3_api("ModifyDnsRecords", modify_payload)
-                .await?;
+            let act_resp: TeoActionResp =
+                self.request_api("ModifyDnsRecords", modify_payload).await?;
 
             if let Some(err) = act_resp.response.error {
                 return Err(DnsProviderError::ApiError {
@@ -545,13 +463,11 @@ impl DnsProvider for TencentEoProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::updated(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Updated,
-                message: "记录更新成功".to_string(),
-            })
+                target_ip_str,
+            ))
         } else {
             // 创建记录 (CreateDnsRecord)
             let create_payload = json!({
@@ -563,9 +479,8 @@ impl DnsProvider for TencentEoProvider {
                 "TTL": ttl_val
             });
 
-            let act_resp: TeoActionResp = self
-                .request_tc3_api("CreateDnsRecord", create_payload)
-                .await?;
+            let act_resp: TeoActionResp =
+                self.request_api("CreateDnsRecord", create_payload).await?;
 
             if let Some(err) = act_resp.response.error {
                 return Err(DnsProviderError::ApiError {
@@ -580,13 +495,11 @@ impl DnsProvider for TencentEoProvider {
                 full_domain,
                 target_ip_str
             );
-            Ok(SyncRecordResult {
-                domain: full_domain,
+            Ok(SyncRecordResult::created(
+                full_domain,
                 record_type,
-                target_ip: target_ip_str,
-                status: SyncStatus::Created,
-                message: "解析记录创建成功".to_string(),
-            })
+                target_ip_str,
+            ))
         }
     }
 }
