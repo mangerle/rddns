@@ -290,8 +290,6 @@ pub enum ProviderConfig {
     /// Dynadot
     Dynadot { password: String },
     /// Vercel DNS
-    /// Vercel DNS
-    /// Vercel DNS
     Vercel {
         token: String,
         #[serde(skip_serializing_if = "Option::is_none")]
