@@ -76,3 +76,21 @@ pub trait Notifier: Send + Sync {
     /// 发送通知
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError>;
 }
+
+/// 校验国内常见开放平台 (钉钉/企业微信/微信等) 的 JSON errcode 业务响应
+pub fn check_errcode_response(body: &str, platform_name: &str) -> Result<(), NotifyError> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(errcode) = v.get("errcode").and_then(|c| c.as_i64())
+        && errcode != 0
+    {
+        let errmsg = v
+            .get("errmsg")
+            .and_then(|m| m.as_str())
+            .unwrap_or("未知错误");
+        return Err(NotifyError::Provider(format!(
+            "{}业务错误 [code: {}]: {}",
+            platform_name, errcode, errmsg
+        )));
+    }
+    Ok(())
+}
