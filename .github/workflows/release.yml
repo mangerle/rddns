@@ -41,8 +41,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows 64位
+          # Windows 64位 (Intel / AMD x86_64)
           - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Windows 64位 ARM (骁龙 X Elite / Copilot+ PC, Surface ARM, M系列虚拟机)
+          - target: aarch64-pc-windows-msvc
             os: windows-latest
           # Windows 32位 (遗留工控机与 32 位 Windows 系统)
           - target: i686-pc-windows-msvc
@@ -59,6 +62,12 @@ jobs:
           # Linux ARMv6 (第一代树莓派 1/1B+, Raspberry Pi Zero)
           - target: arm-unknown-linux-musleabihf
             os: ubuntu-latest
+          # Linux ARMv5TE 纯静态 musl (早期 Marvell 芯片老 NAS、工业网关)
+          - target: armv5te-unknown-linux-musleabi
+            os: ubuntu-latest
+          # Linux 32位 x86 纯静态 musl (老旧 32位工控机、32位 Alpine 容器)
+          - target: i686-unknown-linux-musl
+            os: ubuntu-latest
           # Linux RISC-V 64位 (全志 D1, Milk-V 等 RISC-V 开发板与网关)
           - target: riscv64gc-unknown-linux-gnu
             os: ubuntu-latest
@@ -67,6 +76,12 @@ jobs:
             os: ubuntu-latest
           # FreeBSD x86_64 (pfSense, OPNsense 等专业防火墙系统)
           - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+          # FreeBSD ARM64 (树莓派 4/5 或 ARM64 云主机运行的 FreeBSD/OPNsense)
+          - target: aarch64-unknown-freebsd
+            os: ubuntu-latest
+          # FreeBSD 32位 (老旧 32位工控机防火墙)
+          - target: i686-unknown-freebsd
             os: ubuntu-latest
           # macOS Intel 架构 (在 macos-latest 上直接交叉编译)
           - target: x86_64-apple-darwin

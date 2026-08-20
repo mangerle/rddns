@@ -87,16 +87,21 @@ Tested on a 64-bit operating system with Release optimization profile:
 
 Download the pre-compiled binary for your architecture from [GitHub Releases](https://github.com/mangerle/rddns/releases):
 
-| Platform / Architecture | Recommended Devices | Binary Characteristics |
+| 平台 / 架构 (Platform) | 适用设备与场景 (Recommended Devices) | 二进制特性 (Characteristics) |
 | :--- | :--- | :--- |
 | **Linux x86_64** (`x86_64-unknown-linux-musl`) | 64-bit PC, Cloud VPS, x86 Soft Router, NAS | Statically linked with musl, compatible with all distros, Alpine & OpenWrt |
 | **Linux ARM64** (`aarch64-unknown-linux-musl`) | Raspberry Pi 4/5, ARM Routers, ARM64 Servers | Statically linked with musl, zero shared library dependencies |
 | **Linux ARMv7** (`armv7-unknown-linux-musleabihf`) | Raspberry Pi 2/3, 32-bit ARM Routers | Statically linked with musl |
 | **Linux ARMv6** (`arm-unknown-linux-musleabihf`) | Raspberry Pi 1/1B+, Raspberry Pi Zero | Statically linked with musl |
+| **Linux ARMv5TE** (`armv5te-unknown-linux-musleabi`) | Legacy Marvell NAS (e.g. Synology DS211j), Gateways | Statically linked with musl |
+| **Linux 32-bit (x86)** (`i686-unknown-linux-musl`) | Legacy 32-bit Linux & 32-bit Alpine Containers | Statically linked with musl |
 | **Linux RISC-V 64** (`riscv64gc-unknown-linux-gnu`) | Allwinner D1, Milk-V RISC-V boards | Native 64-bit RISC-V binary |
 | **Linux LoongArch 64** (`loongarch64-unknown-linux-gnu`) | Loongson 3A5000/3C5000 servers & desktops | Native LoongArch binary |
-| **FreeBSD x86_64** (`x86_64-unknown-freebsd`) | pfSense, OPNsense firewalls & FreeBSD | Native FreeBSD 64-bit binary |
-| **Windows 64-bit** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server (64-bit) | Native standalone executable |
+| **FreeBSD x86_64** (`x86_64-unknown-freebsd`) | 64-bit pfSense, OPNsense firewalls & FreeBSD | Native FreeBSD 64-bit binary |
+| **FreeBSD ARM64** (`aarch64-unknown-freebsd`) | Raspberry Pi 4/5 / ARM64 Cloud FreeBSD/OPNsense | Native FreeBSD ARM64 binary |
+| **FreeBSD 32-bit** (`i686-unknown-freebsd`) | Legacy 32-bit FreeBSD industrial firewalls | Native FreeBSD 32-bit binary |
+| **Windows 64-bit (x86_64)** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server (Intel / AMD) | Native standalone executable |
+| **Windows 64-bit (ARM64)** (`aarch64-pc-windows-msvc`) | Snapdragon X Elite / Copilot+ PCs, Surface ARM | Native ARM64 standalone executable |
 | **Windows 32-bit** (`i686-pc-windows-msvc`) | Legacy 32-bit Windows & industrial PCs | Native standalone executable |
 | **macOS Apple Silicon** (`aarch64-apple-darwin`) | Apple Silicon Mac (M1/M2/M3/M4) | Native ARM64 binary |
 | **macOS Intel** (`x86_64-apple-darwin`) | Intel-based Mac | Native x86_64 binary |
