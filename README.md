@@ -92,7 +92,12 @@ Download the pre-compiled binary for your architecture from [GitHub Releases](ht
 | **Linux x86_64** (`x86_64-unknown-linux-musl`) | 64-bit PC, Cloud VPS, x86 Soft Router, NAS | Statically linked with musl, compatible with all distros, Alpine & OpenWrt |
 | **Linux ARM64** (`aarch64-unknown-linux-musl`) | Raspberry Pi 4/5, ARM Routers, ARM64 Servers | Statically linked with musl, zero shared library dependencies |
 | **Linux ARMv7** (`armv7-unknown-linux-musleabihf`) | Raspberry Pi 2/3, 32-bit ARM Routers | Statically linked with musl |
-| **Windows 64-bit** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server | Native standalone executable |
+| **Linux ARMv6** (`arm-unknown-linux-musleabihf`) | Raspberry Pi 1/1B+, Raspberry Pi Zero | Statically linked with musl |
+| **Linux RISC-V 64** (`riscv64gc-unknown-linux-gnu`) | Allwinner D1, Milk-V RISC-V boards | Native 64-bit RISC-V binary |
+| **Linux LoongArch 64** (`loongarch64-unknown-linux-gnu`) | Loongson 3A5000/3C5000 servers & desktops | Native LoongArch binary |
+| **FreeBSD x86_64** (`x86_64-unknown-freebsd`) | pfSense, OPNsense firewalls & FreeBSD | Native FreeBSD 64-bit binary |
+| **Windows 64-bit** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server (64-bit) | Native standalone executable |
+| **Windows 32-bit** (`i686-pc-windows-msvc`) | Legacy 32-bit Windows & industrial PCs | Native standalone executable |
 | **macOS Apple Silicon** (`aarch64-apple-darwin`) | Apple Silicon Mac (M1/M2/M3/M4) | Native ARM64 binary |
 | **macOS Intel** (`x86_64-apple-darwin`) | Intel-based Mac | Native x86_64 binary |
 

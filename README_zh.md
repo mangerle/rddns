@@ -92,7 +92,12 @@
 | **Linux x86_64** (`x86_64-unknown-linux-musl`) | 常见 64 位 PC、云服务器、x86 软路由、NAS | 纯静态 musl 编译，零依赖兼容所有发行版与 Alpine/OpenWrt |
 | **Linux ARM64** (`aarch64-unknown-linux-musl`) | 树莓派 4/5、ARM 软路由、各类 ARM64 架构设备 | 纯静态 musl 编译，零系统库依赖 |
 | **Linux ARMv7** (`armv7-unknown-linux-musleabihf`) | 早期 32 位树莓派、老旧 32 位 ARM 路由器 | 纯静态 musl 编译 |
-| **Windows 64位** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server | 原生绿色单文件，解压即用 |
+| **Linux ARMv6** (`arm-unknown-linux-musleabihf`) | 第一代树莓派 1/1B+、Raspberry Pi Zero | 纯静态 musl 编译 |
+| **Linux RISC-V 64** (`riscv64gc-unknown-linux-gnu`) | 全志 D1、Milk-V 等 RISC-V 软路由与开发板 | 原生 64 位 RISC-V 架构 |
+| **Linux 龙芯 64位** (`loongarch64-unknown-linux-gnu`) | 国产龙芯 3A5000/3C5000 等信创服务器与桌面 | 原生 LoongArch 指令集支持 |
+| **FreeBSD x86_64** (`x86_64-unknown-freebsd`) | pfSense、OPNsense 专业防火墙与 FreeBSD 系统 | 原生 FreeBSD 64位二进制 |
+| **Windows 64位** (`x86_64-pc-windows-msvc`) | Windows 10 / 11 / Server (64位) | 原生绿色单文件，解压即用 |
+| **Windows 32位** (`i686-pc-windows-msvc`) | 遗留 32 位 Windows 系统与老工控机 | 原生绿色单文件，解压即用 |
 | **macOS Apple Silicon** (`aarch64-apple-darwin`) | Apple M 系列芯片 Mac (M1/M2/M3/M4) | 原生 ARM64 架构 |
 | **macOS Intel** (`x86_64-apple-darwin`) | Intel 处理器 Mac | 原生 x86_64 架构 |
 
