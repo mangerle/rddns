@@ -30,19 +30,15 @@
   align-items: center;
   gap: 12px;
 }
-.brand-logo {
-  background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 1.05rem;
-  letter-spacing: -0.5px;
-  padding: 5px 10px;
+.brand-logo,
+.brand-logo-badge {
+  height: 32px;
+  width: auto;
   border-radius: var(--radius);
   box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
   flex-shrink: 0;
+  user-select: none;
 }
 .brand-title {
   font-size: 1.02rem;
@@ -299,6 +295,15 @@
   border-radius: 16px;
   margin-bottom: 16px;
   box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+.auth-logo-img {
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+  display: inline-block;
+  user-select: none;
 }
 .auth-logo svg {
   width: 32px;

@@ -8,6 +8,10 @@ use rust_embed::RustEmbed;
 #[folder = "web-ui/"]
 pub struct WebAssets;
 
+#[derive(RustEmbed)]
+#[folder = "assets/"]
+pub struct RootAssets;
+
 /// 根据文件扩展名匹配常用 Web 静态资源 MIME 类型 (零第三方依赖，纯静态分发)
 fn get_mime_type(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -38,7 +42,13 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
         path = "index.html".to_string();
     }
 
-    match WebAssets::get(&path) {
+    let embedded_file = if let Some(sub_path) = path.strip_prefix("assets/") {
+        RootAssets::get(sub_path).or_else(|| WebAssets::get(&path))
+    } else {
+        WebAssets::get(&path)
+    };
+
+    match embedded_file {
         Some(content) => {
             let etag_str = format!("\"{}\"", hex::encode(content.metadata.sha256_hash()));
 
