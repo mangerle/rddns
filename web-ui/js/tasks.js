@@ -5,6 +5,7 @@
 import { apiFetch } from './api.js';
 import { showToast } from './toast.js';
 import { initPasswordToggles } from './auth.js';
+import { t, onLocaleChange } from './i18n/index.js';
 
 // 全局任务状态数据
 export let globalConfig = null;
@@ -63,7 +64,7 @@ export const PROVIDER_DISPLAY_NAMES = {
 };
 
 export function getProviderDisplayName(pType) {
-  return PROVIDER_DISPLAY_NAMES[pType] || pType || '未配置服务商';
+  return PROVIDER_DISPLAY_NAMES[pType] || pType || t('task.noProviderConfigured');
 }
 
 // 渲染出站物理网卡下拉选项
@@ -71,13 +72,13 @@ export function renderHttpInterfaceOptions(selectedVal) {
   const selectEl = document.getElementById('dnsHttpInterface');
   if (!selectEl) return;
   const current = selectedVal !== undefined ? selectedVal : (selectEl.value || '');
-  let html = '<option value="">使用默认系统路由 (推荐)</option>';
+  let html = `<option value="">${escapeHtml(t('dns.httpInterfaceDefault'))}</option>`;
   availableInterfaces.forEach(iface => {
     const isSel = (iface.name === current) ? 'selected' : '';
     html += `<option value="${escapeHtml(iface.name)}" ${isSel}>${escapeHtml(iface.display_name || iface.name)}</option>`;
   });
   if (current && !availableInterfaces.some(i => i.name === current)) {
-    html += `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (自定义/已离线)</option>`;
+    html += `<option value="${escapeHtml(current)}" selected>${escapeHtml(t('dns.httpInterfaceOffline', { name: current }))}</option>`;
   }
   selectEl.innerHTML = html;
 }
@@ -198,16 +199,16 @@ export function renderProviderFields() {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
-          <label>API Token (推荐)</label>
-          <input type="password" id="cfApiToken" placeholder="Cloudflare API 令牌 (编辑 Zone 权限)" />
+          <label>API Token (${t('common.recommended')})</label>
+          <input type="password" id="cfApiToken" placeholder="Cloudflare API Token" />
         </div>
         <div class="form-group">
-          <label>或使用 Global API Key</label>
-          <input type="password" id="cfApiKey" placeholder="Global API Key (如不使用 Token)" />
+          <label>Global API Key</label>
+          <input type="password" id="cfApiKey" placeholder="Global API Key" />
         </div>
       </div>
       <div class="form-group">
-        <label>Cloudflare 注册邮箱 (仅搭配 Global API Key 使用时必填)</label>
+        <label>Cloudflare Account Email</label>
         <input type="text" id="cfEmail" placeholder="your_email@example.com" />
       </div>`;
   } else if (type === 'ali_dns') {
@@ -215,11 +216,11 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessKey ID</label>
-          <input type="text" id="aliAccessKeyId" placeholder="阿里云 RAM AccessKey ID" />
+          <input type="text" id="aliAccessKeyId" placeholder="Aliyun RAM AccessKey ID" />
         </div>
         <div class="form-group">
           <label>AccessKey Secret</label>
-          <input type="password" id="aliAccessKeySecret" placeholder="阿里云 RAM AccessKey Secret" />
+          <input type="password" id="aliAccessKeySecret" placeholder="Aliyun RAM AccessKey Secret" />
         </div>
       </div>`;
   } else if (type === 'tencent_cloud') {
@@ -227,11 +228,11 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>SecretId</label>
-          <input type="text" id="tcSecretId" placeholder="腾讯云 API SecretId" />
+          <input type="text" id="tcSecretId" placeholder="Tencent Cloud API SecretId" />
         </div>
         <div class="form-group">
           <label>SecretKey</label>
-          <input type="password" id="tcSecretKey" placeholder="腾讯云 API SecretKey" />
+          <input type="password" id="tcSecretKey" placeholder="Tencent Cloud API SecretKey" />
         </div>
       </div>`;
   } else if (type === 'huawei_cloud') {
@@ -239,15 +240,15 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessKey ID (AK)</label>
-          <input type="text" id="hwAccessKeyId" placeholder="华为云 访问密钥 AK" />
+          <input type="text" id="hwAccessKeyId" placeholder="Huawei Cloud AK" />
         </div>
         <div class="form-group">
           <label>Secret Access Key (SK)</label>
-          <input type="password" id="hwSecretAccessKey" placeholder="华为云 访问密钥 SK" />
+          <input type="password" id="hwSecretAccessKey" placeholder="Huawei Cloud SK" />
         </div>
       </div>
       <div class="form-group">
-        <label>自定义 Endpoint (可选，默认 https://dns.myhuaweicloud.com)</label>
+        <label>Endpoint (${t('common.optional')})</label>
         <input type="text" id="hwEndpoint" placeholder="https://dns.myhuaweicloud.com" />
       </div>`;
   } else if (type === 'porkbun') {
@@ -285,11 +286,11 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessKey (AK)</label>
-          <input type="text" id="bdAccessKeyId" placeholder="百度云 AccessKey ID" />
+          <input type="text" id="bdAccessKeyId" placeholder="Baidu Cloud AK" />
         </div>
         <div class="form-group">
           <label>SecretKey (SK)</label>
-          <input type="password" id="bdSecretAccessKey" placeholder="百度云 Secret Access Key" />
+          <input type="password" id="bdSecretAccessKey" placeholder="Baidu Cloud SK" />
         </div>
       </div>`;
   } else if (type === 'traffic_route') {
@@ -297,24 +298,24 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessKey ID (AK)</label>
-          <input type="text" id="volcAccessKeyId" placeholder="火山引擎 AccessKey ID" />
+          <input type="text" id="volcAccessKeyId" placeholder="Volcengine AK" />
         </div>
         <div class="form-group">
           <label>Secret Access Key (SK)</label>
-          <input type="password" id="volcSecretAccessKey" placeholder="火山引擎 Secret Access Key" />
+          <input type="password" id="volcSecretAccessKey" placeholder="Volcengine SK" />
         </div>
       </div>`;
   } else if (type === 'namecheap') {
     container.innerHTML = `
       <div class="form-group">
-        <label>动态 DNS 密码 (Dynamic DNS Password)</label>
-        <input type="password" id="ncPassword" placeholder="Namecheap Advanced DNS 动态解析密码" />
+        <label>Dynamic DNS Password</label>
+        <input type="password" id="ncPassword" placeholder="Namecheap Dynamic DNS Password" />
       </div>`;
   } else if (type === 'namesilo') {
     container.innerHTML = `
       <div class="form-group">
         <label>API Key</label>
-        <input type="password" id="nsApiKey" placeholder="NameSilo API 密钥" />
+        <input type="password" id="nsApiKey" placeholder="NameSilo API Key" />
       </div>`;
   } else if (type === 'spaceship') {
     container.innerHTML = `
@@ -331,19 +332,19 @@ export function renderProviderFields() {
   } else if (type === 'dynadot') {
     container.innerHTML = `
       <div class="form-group">
-        <label>动态 DNS 密码 (Dynamic DNS Password)</label>
-        <input type="password" id="ddPassword" placeholder="Dynadot 域名设置中的动态 DNS 密码" />
+        <label>Dynamic DNS Password</label>
+        <input type="password" id="ddPassword" placeholder="Dynadot Dynamic DNS Password" />
       </div>`;
   } else if (type === 'vercel') {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
           <label>Vercel Token</label>
-          <input type="password" id="vcToken" placeholder="Vercel 个人 Access Token" />
+          <input type="password" id="vcToken" placeholder="Vercel Access Token" />
         </div>
         <div class="form-group">
-          <label>Team ID (团队域名选填)</label>
-          <input type="text" id="vcTeamId" placeholder="team_xxxx (个人账户留空)" />
+          <label>Team ID (${t('common.optional')})</label>
+          <input type="text" id="vcTeamId" placeholder="team_xxxx" />
         </div>
       </div>`;
   } else if (type === 'rainyun') {
@@ -351,37 +352,37 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>API Key (x-api-key)</label>
-          <input type="password" id="ryApiKey" placeholder="雨云控制台 API 密钥" />
+          <input type="password" id="ryApiKey" placeholder="Rainyun API Key" />
         </div>
         <div class="form-group">
-          <label>Domain ID (域名编号/选填)</label>
-          <input type="text" id="ryDomainId" placeholder="自动根据域名查询 / 可手动指定" />
+          <label>Domain ID (${t('common.optional')})</label>
+          <input type="text" id="ryDomainId" placeholder="Domain ID" />
         </div>
       </div>`;
   } else if (type === 'cloudns') {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
-          <label>Auth ID (或 sub-auth-id)</label>
-          <input type="text" id="cldAuthId" placeholder="ClouDNS HTTP API Auth ID" />
+          <label>Auth ID</label>
+          <input type="text" id="cldAuthId" placeholder="ClouDNS Auth ID" />
         </div>
         <div class="form-group">
           <label>Auth Password</label>
-          <input type="password" id="cldAuthPassword" placeholder="ClouDNS API 密码" />
+          <input type="password" id="cldAuthPassword" placeholder="ClouDNS API Password" />
         </div>
       </div>`;
   } else if (type === 'gcore') {
     container.innerHTML = `
       <div class="form-group">
-        <label>API Key (Permanent API-Key)</label>
-        <input type="password" id="gcApiKey" placeholder="Gcore 永久 API 令牌 (APIKey xxx)" />
+        <label>Permanent API Key</label>
+        <input type="password" id="gcApiKey" placeholder="APIKey xxx" />
       </div>`;
   } else if (type === 'name_com') {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
-          <label>用户名 (Username)</label>
-          <input type="text" id="ncUsername" placeholder="Name.com 用户名" />
+          <label>Username</label>
+          <input type="text" id="ncUsername" placeholder="Name.com Username" />
         </div>
         <div class="form-group">
           <label>API Token</label>
@@ -396,8 +397,8 @@ export function renderProviderFields() {
           <input type="text" id="dnslaApiId" placeholder="DNS.LA API ID" />
         </div>
         <div class="form-group">
-          <label>API 密钥 (API Secret)</label>
-          <input type="password" id="dnslaApiSecret" placeholder="DNS.LA API 密钥" />
+          <label>API Secret</label>
+          <input type="password" id="dnslaApiSecret" placeholder="DNS.LA API Secret" />
         </div>
       </div>`;
   } else if (type === 'aliesa') {
@@ -405,40 +406,39 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessKey ID</label>
-          <input type="text" id="esaAccessKeyId" placeholder="阿里云 AccessKey ID" />
+          <input type="text" id="esaAccessKeyId" placeholder="Aliyun AccessKey ID" />
         </div>
         <div class="form-group">
           <label>AccessKey Secret</label>
-          <input type="password" id="esaAccessKeySecret" placeholder="阿里云 AccessKey Secret" />
+          <input type="password" id="esaAccessKeySecret" placeholder="Aliyun AccessKey Secret" />
         </div>
       </div>
       <div class="form-group">
-        <label>自定义 ESA Endpoint (选填)</label>
-        <input type="text" id="esaEndpoint" placeholder="默认: https://esa.cn-hangzhou.aliyuncs.com" />
+        <label>ESA Endpoint (${t('common.optional')})</label>
+        <input type="text" id="esaEndpoint" placeholder="https://esa.cn-hangzhou.aliyuncs.com" />
       </div>`;
   } else if (type === 'edgeone') {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
           <label>SecretId</label>
-          <input type="text" id="eoSecretId" placeholder="腾讯云 API SecretId" />
+          <input type="text" id="eoSecretId" placeholder="Tencent Cloud API SecretId" />
         </div>
         <div class="form-group">
           <label>SecretKey</label>
-          <input type="password" id="eoSecretKey" placeholder="腾讯云 API SecretKey" />
+          <input type="password" id="eoSecretKey" placeholder="Tencent Cloud API SecretKey" />
         </div>
-      </div>
-      <p class="form-tip">💡 提示：支持普通 DNS 解析同步，亦支持动态源站组更新。如需同步源站组，可在下方域名中追加参数，例如 <code>yourdomain.com?GroupId=og-xxxx</code> 或 <code>yourdomain.com?OriginGroupName=MyOrigin</code></p>`;
+      </div>`;
   } else if (type === 'nowcn') {
     container.innerHTML = `
       <div class="grid-2">
         <div class="form-group">
           <label>AccessInstanceID</label>
-          <input type="text" id="nowcnId" placeholder="时代互联 AccessInstanceID" />
+          <input type="text" id="nowcnId" placeholder="Now.cn AccessInstanceID" />
         </div>
         <div class="form-group">
-          <label>SecretKey (密钥)</label>
-          <input type="password" id="nowcnSecret" placeholder="时代互联 API 密钥" />
+          <label>SecretKey</label>
+          <input type="password" id="nowcnSecret" placeholder="Now.cn SecretKey" />
         </div>
       </div>`;
   } else if (type === 'eranet') {
@@ -446,11 +446,11 @@ export function renderProviderFields() {
       <div class="grid-2">
         <div class="form-group">
           <label>AccessInstanceID</label>
-          <input type="text" id="eranetId" placeholder="时代互联国际版 AccessInstanceID" />
+          <input type="text" id="eranetId" placeholder="Eranet AccessInstanceID" />
         </div>
         <div class="form-group">
-          <label>SecretKey (密钥)</label>
-          <input type="password" id="eranetSecret" placeholder="时代互联国际版 API 密钥" />
+          <label>SecretKey</label>
+          <input type="password" id="eranetSecret" placeholder="Eranet SecretKey" />
         </div>
       </div>`;
   } else if (type === 'tnethk') {
@@ -461,8 +461,8 @@ export function renderProviderFields() {
           <input type="text" id="tnetId" placeholder="TNetHK AccessInstanceID" />
         </div>
         <div class="form-group">
-          <label>SecretKey (密钥)</label>
-          <input type="password" id="tnetSecret" placeholder="TNetHK API 密钥" />
+          <label>SecretKey</label>
+          <input type="password" id="tnetSecret" placeholder="TNetHK SecretKey" />
         </div>
       </div>`;
   } else if (type === 'nsone') {
@@ -478,13 +478,13 @@ export function renderProviderFields() {
         <input type="password" id="hipmApiToken" placeholder="HiPM DNSMgr API Token" />
       </div>
       <div class="form-group">
-        <label>DNSMgr 服务地址 (选填)</label>
-        <input type="text" id="hipmEndpoint" placeholder="默认: https://dnsmgr.example.com" />
+        <label>DNSMgr Endpoint (${t('common.optional')})</label>
+        <input type="text" id="hipmEndpoint" placeholder="https://dnsmgr.example.com" />
       </div>`;
   } else if (type === 'callback') {
     container.innerHTML = `
       <div class="form-group">
-        <label>Callback URL (支持宏变量: #{ip}, #{domain}, #{recordType})</label>
+        <label>Callback URL (Supports #{ip}, #{domain}, #{recordType})</label>
         <input type="text" id="cbUrl" placeholder="https://api.myprovider.com/update?ip=#{ip}&domain=#{domain}" />
       </div>`;
   }
@@ -502,11 +502,11 @@ export function renderIpFields(vType) {
       ? 'https://api.ipify.org, https://myip.ipip.net/ip, https://ddns.oray.com/checkip'
       : 'https://api64.ipify.org, https://speed.neu6.edu.cn/getIP.php, https://6.ipw.cn';
     fieldContainer.innerHTML = `
-      <label>探测 URL (多个接口用英文逗号分隔，失败自动回退)</label>
+      <label>${t('dns.probeUrlLabel')}</label>
       <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
   } else if (sourceType === 'net_interface') {
     const currentSaved = (vType === 'ipv4' ? savedIpv4NetIf : savedIpv6NetIf) || '';
-    let optionsHtml = `<option value="">-- 请选择网卡设备 --</option>`;
+    let optionsHtml = `<option value="">${t('dns.netIfSelectPlaceholder')}</option>`;
     let matched = false;
 
     availableInterfaces.forEach(iface => {
@@ -516,18 +516,18 @@ export function renderIpFields(vType) {
     });
 
     const isCustomSelected = (!matched && currentSaved);
-    optionsHtml += `<option value="__custom__" ${isCustomSelected ? 'selected' : ''}>手动输入自定义网卡名称...</option>`;
+    optionsHtml += `<option value="__custom__" ${isCustomSelected ? 'selected' : ''}>${t('dns.netIfCustomOption')}</option>`;
 
     fieldContainer.innerHTML = `
-      <label>选择网卡设备 (自动探测当前主机网卡)</label>
+      <label>${t('dns.netIfSelectLabel')}</label>
       <select id="${vType}NetIfSelect" onchange="handleNetIfSelect('${vType}')">
         ${optionsHtml}
       </select>
-      <input type="text" id="${vType}NetIfCustom" placeholder="例如 eth0 或 以太网" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? escapeHtml(currentSaved) : ''}" />`;
+      <input type="text" id="${vType}NetIfCustom" placeholder="${t('dns.netIfCustomPlaceholder')}" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? escapeHtml(currentSaved) : ''}" />`;
   } else if (sourceType === 'command') {
     fieldContainer.innerHTML = `
-      <label>执行命令 / 脚本</label>
-      <input type="text" id="${vType}Cmd" placeholder="例如 curl -s http://ip.sb" />`;
+      <label>${t('dns.cmdLabel')}</label>
+      <input type="text" id="${vType}Cmd" placeholder="${t('dns.cmdPlaceholder')}" />`;
   }
 }
 
@@ -541,7 +541,7 @@ export function renderTaskList() {
   if (badge) badge.innerText = tasks.length.toString();
 
   if (tasks.length === 0) {
-    container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:0.8rem;">暂无解析任务，点击上方新建</div>`;
+    container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:0.8rem;">${escapeHtml(t('task.emptyList'))}</div>`;
     return;
   }
 
@@ -555,7 +555,7 @@ export function renderTaskList() {
     const isEnabled = task.enabled !== false;
     const pName = getProviderDisplayName(task.provider?.type);
     
-    let domainSummary = '未配置解析域名';
+    let domainSummary = t('task.noDomainConfigured');
     if (task.ipv4?.domains && task.ipv4.domains.length > 0) {
       domainSummary = task.ipv4.domains[0] + (task.ipv4.domains.length > 1 ? ` (+${task.ipv4.domains.length - 1})` : '');
     } else if (task.ipv6?.domains && task.ipv6.domains.length > 0) {
@@ -569,13 +569,13 @@ export function renderTaskList() {
     html += `
       <div class="task-item-card ${isActive ? 'active' : ''}" onclick="switchTask(${idx})">
         <div class="task-item-head">
-          <div class="task-item-name" title="${task.name || '未命名任务'}">
+          <div class="task-item-name" title="${escapeHtml(task.name || t('task.unnamedTask'))}">
             <span class="dot" style="width:7px; height:7px; border-radius:50%; display:inline-block; ${dotStyle}"></span>
-            <span>${task.name || '未命名任务'}</span>
+            <span>${escapeHtml(task.name || t('task.unnamedTask'))}</span>
           </div>
-          <span class="task-item-provider-tag">${pName}</span>
+          <span class="task-item-provider-tag">${escapeHtml(pName)}</span>
         </div>
-        <div class="task-item-domain" title="${domainSummary}">${domainSummary}</div>
+        <div class="task-item-domain" title="${escapeHtml(domainSummary)}">${escapeHtml(domainSummary)}</div>
       </div>
     `;
   });
@@ -821,7 +821,7 @@ export function collectCurrentTaskFromForm(index) {
   const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
   const ipv6Urls = (document.getElementById('ipv6Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
 
-  const taskName = document.getElementById('currentTaskNameInput')?.value.trim() || `解析任务 ${index + 1}`;
+  const taskName = document.getElementById('currentTaskNameInput')?.value.trim() || `${t('task.nameLabel')} ${index + 1}`;
   const taskEnabled = document.getElementById('currentTaskEnabled') ? document.getElementById('currentTaskEnabled').checked : true;
 
   globalConfig.dns_tasks[index] = {
@@ -865,8 +865,9 @@ export function addNewTask() {
   collectCurrentTaskFromForm(currentTaskIndex);
 
   const nextNum = (globalConfig?.dns_tasks ? globalConfig.dns_tasks.length : 0) + 1;
+  const defaultTaskName = `${t('task.nameLabel')} ${nextNum}`;
   const newTask = {
-    name: `解析任务 ${nextNum}`,
+    name: defaultTaskName,
     enabled: true,
     provider: { type: 'cloudflare', api_token: '' },
     ttl: null,
@@ -897,7 +898,7 @@ export function addNewTask() {
 
   populateCurrentTaskForm(newTask);
   renderTaskList();
-  showToast(`已新建任务【${newTask.name}】！`, 'success');
+  showToast(t('task.newSuccess', { name: newTask.name }), 'success');
 
   // 聚焦任务名称输入框
   const nameInput = document.getElementById('currentTaskNameInput');
@@ -910,12 +911,12 @@ export function addNewTask() {
 // 删除当前选中的任务
 export function deleteCurrentTask() {
   if (!globalConfig || !globalConfig.dns_tasks || globalConfig.dns_tasks.length <= 1) {
-    showToast('系统至少需要保留一个解析任务！', 'warning');
+    showToast(t('task.deleteMinWarning'), 'warning');
     return;
   }
 
-  const taskName = globalConfig.dns_tasks[currentTaskIndex]?.name || '当前任务';
-  if (!confirm(`确定要删除任务【${taskName}】吗？\n\n注意：此操作将在点击右上角【保存配置】后正式持久化生效。`)) {
+  const taskName = globalConfig.dns_tasks[currentTaskIndex]?.name || t('task.unnamedTask');
+  if (!confirm(t('task.deleteConfirm', { name: taskName }))) {
     return;
   }
 
@@ -926,7 +927,7 @@ export function deleteCurrentTask() {
 
   populateCurrentTaskForm(globalConfig.dns_tasks[currentTaskIndex]);
   renderTaskList();
-  showToast(`已删除任务【${taskName}】`, 'success');
+  showToast(t('task.deleteSuccess', { name: taskName }), 'success');
 }
 
 // 复制克隆当前任务
@@ -935,20 +936,20 @@ export function cloneCurrentTask() {
 
   collectCurrentTaskFromForm(currentTaskIndex);
   const cloned = JSON.parse(JSON.stringify(globalConfig.dns_tasks[currentTaskIndex]));
-  cloned.name = `${cloned.name || '解析任务'} - 副本`;
+  cloned.name = `${cloned.name || t('task.unnamedTask')} - ${t('task.cloneSuffix')}`;
 
   globalConfig.dns_tasks.push(cloned);
   currentTaskIndex = globalConfig.dns_tasks.length - 1;
 
   populateCurrentTaskForm(cloned);
   renderTaskList();
-  showToast(`已复制当前任务配置并生成【${cloned.name}】！`, 'success');
+  showToast(t('task.cloneSuccess', { name: cloned.name }), 'success');
 }
 
 // 实时任务名称输入响应
 export function onTaskNameChange(val) {
   if (globalConfig && globalConfig.dns_tasks && globalConfig.dns_tasks[currentTaskIndex]) {
-    globalConfig.dns_tasks[currentTaskIndex].name = val.trim() || '未命名任务';
+    globalConfig.dns_tasks[currentTaskIndex].name = val.trim() || t('task.unnamedTask');
     renderTaskList();
   }
 }
@@ -964,6 +965,7 @@ export function onTaskEnabledChange(checked) {
 // 测试探测 IP
 export async function testIp(type) {
   const isV4 = type === 'ipv4';
+  const typeUpper = type.toUpperCase();
   const badgeEl = document.getElementById(`${type}ProbeResult`);
   const btnEl = document.getElementById(`${type}TestBtn`);
   
@@ -982,7 +984,7 @@ export async function testIp(type) {
   if (badgeEl) {
     badgeEl.style.display = 'inline-flex';
     badgeEl.className = 'ip-probe-badge loading';
-    badgeEl.innerHTML = `<span class="live-dot" style="background:var(--primary); box-shadow:0 0 6px var(--primary);"></span> <span>正在探测...</span>`;
+    badgeEl.innerHTML = `<span class="live-dot" style="background:var(--primary); box-shadow:0 0 6px var(--primary);"></span> <span>${escapeHtml(t('dns.probing'))}</span>`;
   }
   if (btnEl) btnEl.disabled = true;
 
@@ -997,30 +999,39 @@ export async function testIp(type) {
       if (val) {
         if (badgeEl) {
           badgeEl.className = 'ip-probe-badge success';
-          badgeEl.innerHTML = `<span class="icon" style="color:var(--success);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <span>当前 ${type.toUpperCase()}: <span class="ip-text">${val}</span></span>`;
+          badgeEl.innerHTML = `<span class="icon" style="color:var(--success);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <span>${escapeHtml(t('dns.probeSuccess', { type: typeUpper, ip: '' }))}<span class="ip-text">${escapeHtml(val)}</span></span>`;
         }
-        showToast(`成功探测到 ${type.toUpperCase()}: ${val}`, 'success');
+        showToast(t('dns.probeToastSuccess', { type: typeUpper, ip: val }), 'success');
       } else {
         if (badgeEl) {
           badgeEl.className = 'ip-probe-badge error';
-          badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>未探测到有效 ${type.toUpperCase()}</span>`;
+          badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>${escapeHtml(t('dns.probeNone', { type: typeUpper }))}</span>`;
         }
-        showToast(`未能获取到有效 ${type.toUpperCase()} 地址`, 'error');
+        showToast(t('dns.probeToastNone', { type: typeUpper }), 'error');
       }
     } else {
       if (badgeEl) {
         badgeEl.className = 'ip-probe-badge error';
-        badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>探测失败: ${json.message}</span>`;
+        badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>${escapeHtml(t('dns.probeFailed', { message: json.message }))}</span>`;
       }
-      showToast(`探测失败: ${json.message}`, 'error');
+      showToast(t('dns.probeFailed', { message: json.message }), 'error');
     }
   } catch (e) {
     if (badgeEl) {
       badgeEl.className = 'ip-probe-badge error';
-      badgeEl.innerHTML = `<span>请求异常: ${e}</span>`;
+      badgeEl.innerHTML = `<span>${escapeHtml(t('common.requestError', { error: e }))}</span>`;
     }
-    showToast('请求异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   } finally {
     if (btnEl) btnEl.disabled = false;
   }
 }
+
+// 监听语言切换事件，动态重绘列表与表单选项
+onLocaleChange(() => {
+  renderTaskList();
+  renderHttpInterfaceOptions();
+  renderProviderFields();
+  renderIpFields('ipv4');
+  renderIpFields('ipv6');
+});

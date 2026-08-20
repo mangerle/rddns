@@ -3,6 +3,7 @@
 // ==========================================
 
 import { showToast } from './toast.js';
+import { t } from './i18n/index.js';
 
 let activeEventSource = null;
 
@@ -46,7 +47,7 @@ export function appendLog(entry) {
 export function clearLogs() {
   const container = document.getElementById('logContainer');
   if (container) container.innerHTML = '';
-  showToast('日志已清空', 'info');
+  showToast(t('modal.logsCleared'), 'info');
 }
 
 export function initSSE() {

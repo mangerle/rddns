@@ -4,6 +4,7 @@
 
 import { apiFetch } from './api.js';
 import { showToast } from './toast.js';
+import { t } from './i18n/index.js';
 
 // 常用邮箱预设数据字典
 export const EMAIL_PRESETS = {
@@ -169,7 +170,7 @@ export async function testSingleNotify(channelKey) {
     const templateId = document.getElementById('wxOfficialTemplateId')?.value.trim();
     const toUser = document.getElementById('wxOfficialToUser')?.value.trim();
     if (!appId || !appSecret || !templateId || !toUser) {
-      showToast('请先完整填写微信公众号 AppID、AppSecret、模板ID 与 接收者 OpenID！', 'error');
+      showToast(t('notify.wxRequiredAlert'), 'error');
       return;
     }
     notifPayload.wechat_official = {
@@ -186,7 +187,7 @@ export async function testSingleNotify(channelKey) {
     if (mode === 'bot') {
       const webhookUrl = document.getElementById('wecomWebhookUrl')?.value.trim();
       if (!webhookUrl) {
-        showToast('请先填写企业微信群机器人 Webhook URL！', 'error');
+        showToast(t('notify.wecomBotRequired'), 'error');
         return;
       }
       notifPayload.wecom = {
@@ -199,7 +200,7 @@ export async function testSingleNotify(channelKey) {
       const corpSecret = document.getElementById('wecomCorpSecret')?.value.trim();
       const agentId = parseInt(document.getElementById('wecomAgentId')?.value);
       if (!corpId || !corpSecret || !agentId) {
-        showToast('请先完整填写企业微信 CorpID、CorpSecret 与 AgentID！', 'error');
+        showToast(t('notify.wecomAppRequired'), 'error');
         return;
       }
       notifPayload.wecom = {
@@ -218,7 +219,7 @@ export async function testSingleNotify(channelKey) {
     const fromAddress = document.getElementById('emailFrom')?.value.trim();
     const toAddresses = (document.getElementById('emailTo')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
     if (!smtpServer || !username || !password || !fromAddress || toAddresses.length === 0) {
-      showToast('请先完整填写 SMTP 服务器、账号、密码/授权码、发件人及收件人邮箱！', 'error');
+      showToast(t('notify.emailRequired'), 'error');
       return;
     }
     notifPayload.email = {
@@ -234,7 +235,7 @@ export async function testSingleNotify(channelKey) {
   } else if (channelKey === 'dingtalk') {
     const token = document.getElementById('dingtalkAccessToken')?.value.trim();
     if (!token) {
-      showToast('请先填写钉钉机器人的 AccessToken 或 Webhook 地址！', 'error');
+      showToast(t('notify.dingtalkRequired'), 'error');
       return;
     }
     notifPayload.dingtalk = {
@@ -245,7 +246,7 @@ export async function testSingleNotify(channelKey) {
   } else if (channelKey === 'feishu') {
     const hook = document.getElementById('feishuWebhookUrl')?.value.trim();
     if (!hook) {
-      showToast('请先填写飞书群机器人的 Webhook URL！', 'error');
+      showToast(t('notify.feishuRequired'), 'error');
       return;
     }
     notifPayload.feishu = {
@@ -257,7 +258,7 @@ export async function testSingleNotify(channelKey) {
     const token = document.getElementById('telegramBotToken')?.value.trim();
     const chatId = document.getElementById('telegramChatId')?.value.trim();
     if (!token || !chatId) {
-      showToast('请先填写 Telegram Bot Token 与 Chat ID！', 'error');
+      showToast(t('notify.telegramRequired'), 'error');
       return;
     }
     notifPayload.telegram = {
@@ -269,7 +270,7 @@ export async function testSingleNotify(channelKey) {
   } else if (channelKey === 'bark') {
     const devKey = document.getElementById('barkDeviceKey')?.value.trim();
     if (!devKey) {
-      showToast('请先填写 Bark 设备 Key！', 'error');
+      showToast(t('notify.barkRequired'), 'error');
       return;
     }
     notifPayload.bark = {
@@ -282,7 +283,7 @@ export async function testSingleNotify(channelKey) {
   } else if (channelKey === 'webhook') {
     const whUrl = document.getElementById('webhookUrl')?.value.trim();
     if (!whUrl) {
-      showToast('请先填写 Webhook URL 地址！', 'error');
+      showToast(t('notify.webhookRequired'), 'error');
       return;
     }
     let parsedHeaders = null;
@@ -299,7 +300,7 @@ export async function testSingleNotify(channelKey) {
     };
   }
 
-  showToast('正在发送测试通知...', 'info');
+  showToast(t('notify.testing'), 'info');
   try {
     const res = await apiFetch('/api/v1/test/notify', {
       method: 'POST',
@@ -307,12 +308,12 @@ export async function testSingleNotify(channelKey) {
     });
     const json = await res.json();
     if (json.success) {
-      showToast('测试消息已发出，请查看目标平台接收情况！', 'success');
+      showToast(t('notify.testSent'), 'success');
     } else {
-      showToast('发送失败: ' + json.message, 'error');
+      showToast(t('notify.testFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    showToast('请求异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   }
 }
 
@@ -329,11 +330,11 @@ export async function testNotifyAll(saveConfigFn) {
     });
     const json = await res.json();
     if (json.success) {
-      showToast('已向全部已启用的通知渠道发送测试消息！', 'success');
+      showToast(t('notify.testAllSent'), 'success');
     } else {
-      showToast('发送失败: ' + json.message, 'error');
+      showToast(t('notify.testFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    showToast('测试异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   }
 }

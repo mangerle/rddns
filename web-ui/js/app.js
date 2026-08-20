@@ -7,6 +7,13 @@ import { initTheme, toggleTheme } from './theme.js';
 import { showToast } from './toast.js';
 import { openLogModal, closeLogModal, clearLogs, handleBackdropClick, initSSE } from './modal.js';
 import {
+  t,
+  initI18n,
+  setLocale,
+  getLocale,
+  onLocaleChange
+} from './i18n/index.js';
+import {
   showLoginPage,
   showInitPage,
   showMainApp,
@@ -48,23 +55,29 @@ import {
   testNotifyAll
 } from './notify.js';
 
-// 侧边栏导航切换配置
-export const SECTION_INFO = {
-  'tab-dns': {
-    title: 'DNS 服务商与解析',
-    desc: '配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标'
-  },
-  'tab-notify': {
-    title: '通知与告警推送',
-    desc: '配置微信公众号、企业微信、SMTP 邮件等通道与告警触发策略'
-  },
-  'tab-system': {
-    title: '系统与安全设置',
-    desc: '配置全局轮询间隔、安全访问控制与 Web 登录身份认证'
-  }
-};
+let currentActiveTab = 'tab-dns';
+
+// 获取当前模块的标题与描述
+export function getSectionInfo(tabId) {
+  const sections = {
+    'tab-dns': {
+      title: t('nav.dnsTitle'),
+      desc: t('nav.dnsDesc')
+    },
+    'tab-notify': {
+      title: t('nav.notifyTitle'),
+      desc: t('nav.notifyDesc')
+    },
+    'tab-system': {
+      title: t('nav.systemTitle'),
+      desc: t('nav.systemDesc')
+    }
+  };
+  return sections[tabId] || sections['tab-dns'];
+}
 
 export function switchNav(tabId) {
+  currentActiveTab = tabId;
   document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   
@@ -91,15 +104,34 @@ export function switchNav(tabId) {
   } else {
     if (headerDnsTaskBar) headerDnsTaskBar.style.display = 'none';
     if (headerStandardBar) headerStandardBar.style.display = 'flex';
-    if (SECTION_INFO[tabId]) {
-      if (titleEl) titleEl.innerText = SECTION_INFO[tabId].title;
-      if (descEl) descEl.innerText = SECTION_INFO[tabId].desc;
+    const info = getSectionInfo(tabId);
+    if (info) {
+      if (titleEl) titleEl.innerText = info.title;
+      if (descEl) descEl.innerText = info.desc;
     }
   }
 
   // 切换标签页时将工作台滚动主体重置回顶部
   const workspaceBody = document.querySelector('.workspace-body');
   if (workspaceBody) workspaceBody.scrollTop = 0;
+}
+
+// 切换语言
+export function toggleLanguage() {
+  const current = getLocale();
+  const next = current === 'zh-CN' ? 'en-US' : 'zh-CN';
+  setLocale(next);
+  updateLangBtnText();
+  showToast(next === 'zh-CN' ? '已切换至简体中文' : 'Switched to English', 'info');
+}
+
+export function updateLangBtnText() {
+  const current = getLocale();
+  const text = current === 'zh-CN' ? 'EN' : '中';
+  ['langBtnText', 'loginLangBtnText', 'initLangBtnText'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
+  });
 }
 
 // 全局回显配置 (首次加载或刷新配置时触发)
@@ -120,7 +152,7 @@ export function populateForm(conf) {
   // 如果任务列表为空，自动补全默认任务
   if (!conf.dns_tasks || conf.dns_tasks.length === 0) {
     conf.dns_tasks = [{
-      name: "默认解析任务",
+      name: `${t('task.nameLabel')} 1`,
       enabled: true,
       provider: { type: 'cloudflare', api_token: '' },
       ttl: null,
@@ -269,7 +301,7 @@ export async function saveConfig() {
     });
     const json = await res.json();
     if (json.success) {
-      showToast('全部配置已成功保存并热更新生效！', 'success');
+      showToast(t('common.saveSuccess'), 'success');
       const newUsername = document.getElementById('sysUsername')?.value.trim();
       const newPassword = document.getElementById('sysPassword')?.value;
       if (newPassword) {
@@ -281,10 +313,10 @@ export async function saveConfig() {
       }
       renderTaskList();
     } else {
-      showToast('保存失败: ' + json.message, 'error');
+      showToast(t('common.saveFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    showToast('请求异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   }
 }
 
@@ -295,58 +327,85 @@ export async function triggerSync() {
     const json = await res.json();
     showToast(json.message, json.success ? 'success' : 'error');
   } catch (e) {
-    showToast('触发失败: ' + e, 'error');
+    showToast(t('common.syncTriggerFailed', { error: e }), 'error');
   }
 }
 
-// 检查版本更新
-export async function checkAppVersion(isManual) {
+// 检查版本更新 (仅在手动点击时触发)
+export async function checkAppVersion(isManual = true) {
+  if (isManual) {
+    showToast(t('common.checkingUpdate') || '正在检查更新...', 'info');
+  }
   try {
     const res = await apiFetch('/api/v1/version');
     const json = await res.json();
     if (json.success && json.data) {
       const info = json.data;
       const verTextEl = document.getElementById('versionText');
-      if (verTextEl) verTextEl.innerText = `v${info.current_version} 已连接`;
+      if (verTextEl) {
+        verTextEl.dataset.version = info.current_version;
+        verTextEl.innerText = t('common.connected', { version: `v${info.current_version}` });
+      }
       const updateNoticeEl = document.getElementById('updateNotice');
       if (info.has_update) {
         if (updateNoticeEl) {
           updateNoticeEl.style.display = 'block';
-          updateNoticeEl.innerHTML = `<span>🎉 发现新版本 v${info.latest_version} (点击升级)</span>`;
+          updateNoticeEl.innerHTML = `<span>${t('common.newVersionFound', { version: `v${info.latest_version}` })}</span>`;
         }
         if (isManual) {
-          if (confirm(`发现新版本 v${info.latest_version}！\n\n更新说明:\n${info.release_notes || '常规功能优化与 Bug 修复'}\n\n是否立即启动自动升级？`)) {
+          if (confirm(t('common.newVersionUpgradePrompt', { version: info.latest_version, notes: info.release_notes || 'Regular improvements' }))) {
             triggerWebUpgrade();
           }
         }
       } else if (isManual) {
-        alert(`✨ 当前已是最新版本 (v${info.current_version})！`);
+        alert(t('common.latestVersionAlert', { version: info.current_version }));
       }
     }
   } catch (e) {
-    if (isManual) alert('检查更新失败: ' + e.message);
+    if (isManual) alert(t('common.checkUpdateFailed', { error: e.message }));
   }
 }
 
 // 触发在线升级
 export async function triggerWebUpgrade() {
-  if (!confirm('确定要在后台自动下载并热替换最新版本吗？升级完成后请重启服务。')) return;
+  if (!confirm(t('common.upgradeConfirm'))) return;
   try {
     const res = await apiFetch('/api/v1/upgrade', { method: 'POST' });
     const json = await res.json();
     if (json.success) {
-      alert('🚀 ' + json.message);
+      alert(t('common.upgradeSuccess', { message: json.message }));
     } else {
-      alert('升级失败: ' + json.message);
+      alert(t('common.upgradeFailed', { message: json.message }));
     }
   } catch (e) {
-    alert('触发升级失败: ' + e.message);
+    alert(t('common.upgradeFailed', { message: e.message }));
   }
 }
 
+// 监听语言切换，同步更新顶部状态栏和当前模块标题
+onLocaleChange(() => {
+  updateLangBtnText();
+  if (currentActiveTab !== 'tab-dns') {
+    const titleEl = document.getElementById('currentSectionTitle');
+    const descEl = document.getElementById('currentSectionDesc');
+    const info = getSectionInfo(currentActiveTab);
+    if (info) {
+      if (titleEl) titleEl.innerText = info.title;
+      if (descEl) descEl.innerText = info.desc;
+    }
+  }
+  const verTextEl = document.getElementById('versionText');
+  if (verTextEl) {
+    const currentVer = verTextEl.dataset.version || '0.5.0';
+    verTextEl.innerText = t('common.connected', { version: `v${currentVer}` });
+  }
+});
+
 // 初始化应用生命周期
 async function initApp() {
+  initI18n();
   initTheme();
+  updateLangBtnText();
   renderProviderFields();
   renderIpFields('ipv4');
   renderIpFields('ipv6');
@@ -356,7 +415,6 @@ async function initApp() {
     loadConfig();
     loadNetworkInterfaces();
     initSSE();
-    checkAppVersion(false);
   });
 
   // 1. 检查后端是否需要初始化管理员账号
@@ -396,7 +454,6 @@ async function initApp() {
     showMainApp();
     loadNetworkInterfaces();
     initSSE();
-    checkAppVersion(false);
   } else {
     showLoginPage();
   }
@@ -405,6 +462,7 @@ async function initApp() {
 // 挂载所有供 HTML 内联事件调用的方法到全局 window 对象
 Object.assign(window, {
   toggleTheme,
+  toggleLanguage,
   openLogModal,
   closeLogModal,
   clearLogs,

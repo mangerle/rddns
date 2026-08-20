@@ -3,6 +3,7 @@
 // ==========================================
 
 import { showToast } from './toast.js';
+import { t } from './i18n/index.js';
 
 let onLoginSuccessCallback = null;
 
@@ -23,18 +24,18 @@ export function initPasswordToggles() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-toggle-eye';
-    btn.title = '显示明文';
+    btn.title = t('auth.showPassword');
     btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
     btn.onclick = (e) => {
       e.preventDefault();
       if (input.type === 'password') {
         input.type = 'text';
         btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
-        btn.title = '隐藏内容';
+        btn.title = t('auth.hidePassword');
       } else {
         input.type = 'password';
         btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
-        btn.title = '显示明文';
+        btn.title = t('auth.showPassword');
       }
     };
     wrapper.appendChild(btn);
@@ -89,25 +90,25 @@ export function updateLogoutBtn() {
 
 export function logout() {
   sessionStorage.removeItem('rddns_auth');
-  showToast('已退出登录', 'info');
+  showToast(t('common.logoutSuccess'), 'info');
   showLoginPage();
 }
 
 export async function submitInitAuth() {
-  const username = document.getElementById('initUsername').value.trim();
-  const password = document.getElementById('initPassword').value;
-  const confirm = document.getElementById('initPasswordConfirm').value;
+  const username = document.getElementById('initUsername')?.value.trim();
+  const password = document.getElementById('initPassword')?.value;
+  const confirm = document.getElementById('initPasswordConfirm')?.value;
 
   if (!username) {
-    showToast('请输入管理员用户名！', 'error');
+    showToast(t('auth.usernameEmpty'), 'error');
     return;
   }
   if (!password || password.length < 4) {
-    showToast('密码长度至少需要 4 位！', 'error');
+    showToast(t('auth.passwordMinLength'), 'error');
     return;
   }
   if (password !== confirm) {
-    showToast('两次输入的密码不一致！', 'error');
+    showToast(t('auth.passwordMismatch'), 'error');
     return;
   }
 
@@ -125,26 +126,26 @@ export async function submitInitAuth() {
       const authKey = btoa(username + ':' + password);
       sessionStorage.setItem('rddns_auth', authKey);
       showMainApp();
-      showToast('管理员账号初始化成功并已登录！', 'success');
+      showToast(t('auth.initSuccess'), 'success');
       if (onLoginSuccessCallback) {
         onLoginSuccessCallback();
       }
     } else {
-      showToast('初始化失败: ' + json.message, 'error');
+      showToast(t('auth.initFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    showToast('请求异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   } finally {
     if (submitBtn) submitBtn.disabled = false;
   }
 }
 
 export async function submitLogin() {
-  const username = document.getElementById('loginUsername').value.trim();
-  const password = document.getElementById('loginPassword').value;
+  const username = document.getElementById('loginUsername')?.value.trim();
+  const password = document.getElementById('loginPassword')?.value;
 
   if (!username || !password) {
-    showToast('请输入用户名和密码！', 'error');
+    showToast(t('auth.inputRequired'), 'error');
     return;
   }
 
@@ -162,15 +163,15 @@ export async function submitLogin() {
       const authKey = btoa(username + ':' + password);
       sessionStorage.setItem('rddns_auth', authKey);
       showMainApp();
-      showToast('登录成功，欢迎使用 rddns！', 'success');
+      showToast(t('auth.loginSuccess'), 'success');
       if (onLoginSuccessCallback) {
         onLoginSuccessCallback();
       }
     } else {
-      showToast('登录失败: ' + json.message, 'error');
+      showToast(t('auth.loginFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    showToast('请求异常: ' + e, 'error');
+    showToast(t('common.requestError', { error: e }), 'error');
   } finally {
     if (submitBtn) submitBtn.disabled = false;
   }
