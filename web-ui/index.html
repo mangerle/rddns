@@ -5,1071 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>rddns - 动态域名解析系统</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%2306b6d4'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><path d='M18 4L7 17h7l-1 11 11-13h-7l1-11z' fill='%23ffffff'/></svg>" type="image/svg+xml" />
-  <style>
-    :root {
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      --font-mono: "Cascadia Code", Consolas, Monaco, "Courier New", monospace;
-      
-      /* Dark Theme (默认暗色) */
-      --bg: #090e17;
-      --bg-sidebar: #0f172a;
-      --bg-surface: #131d31;
-      --bg-card: #1e293b;
-      --bg-input: #0b1120;
-      --bg-hover: #334155;
-      --border: #334155;
-      --border-focus: #6366f1;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      
-      --console-bg: #050811;
-      --console-text: #e2e8f0;
-      --console-border: #1e293b;
-      
-      --primary: #6366f1;
-      --primary-hover: #4f46e5;
-      --primary-light: rgba(99, 102, 241, 0.15);
-      --success: #10b981;
-      --success-light: rgba(16, 185, 129, 0.15);
-      --warning: #f59e0b;
-      --warning-light: rgba(245, 158, 11, 0.15);
-      --danger: #ef4444;
-      --danger-light: rgba(239, 68, 68, 0.15);
-      
-      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
-      --radius: 10px;
-    }
-
-    [data-theme="light"] {
-      --bg: #f1f5f9;
-      --bg-sidebar: #ffffff;
-      --bg-surface: #ffffff;
-      --bg-card: #ffffff;
-      --bg-input: #f8fafc;
-      --bg-hover: #f1f5f9;
-      --border: #e2e8f0;
-      --border-focus: #6366f1;
-      --text: #0f172a;
-      --text-muted: #64748b;
-      --text-dim: #94a3b8;
-      
-      --console-bg: #f8fafc;
-      --console-text: #1e293b;
-      --console-border: #e2e8f0;
-      
-      --primary: #4f46e5;
-      --primary-hover: #4338ca;
-      --primary-light: rgba(79, 70, 229, 0.08);
-      --success: #059669;
-      --success-light: rgba(5, 150, 105, 0.08);
-      --warning: #d97706;
-      --warning-light: rgba(217, 119, 6, 0.08);
-      --danger: #dc2626;
-      --danger-light: rgba(220, 38, 38, 0.08);
-      
-      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: var(--font-sans);
-      line-height: 1.5;
-      transition: background-color 0.25s ease, color 0.25s ease;
-      height: 100vh;
-      width: 100vw;
-      overflow: hidden;
-    }
-
-    /* 整体分栏布局：方案 C (垂直流式，顶部全屏通栏 + 下方多栏并排) */
-    .app-layout {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      width: 100vw;
-      overflow: hidden;
-    }
-
-    /* 顶部全局大通栏 (Global TopBar - 横跨全屏) */
-    .global-topbar {
-      height: 56px;
-      background-color: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      flex-shrink: 0;
-      z-index: 100;
-    }
-
-    .topbar-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .brand-logo {
-      background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
-      color: #ffffff;
-      font-weight: 800;
-      font-size: 1.05rem;
-      letter-spacing: -0.5px;
-      padding: 5px 10px;
-      border-radius: var(--radius);
-      box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-    }
-    .brand-title {
-      font-size: 1.02rem;
-      font-weight: 700;
-      color: var(--text);
-      letter-spacing: -0.3px;
-      white-space: nowrap;
-      line-height: 1.2;
-    }
-    .brand-desc {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-      white-space: nowrap;
-      line-height: 1.2;
-    }
-
-    .topbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-shrink: 0;
-    }
-
-    /* TopBar 下方的主体容器 (包含侧边栏与工作区) */
-    .app-body-container {
-      flex: 1;
-      display: flex;
-      height: calc(100vh - 56px);
-      width: 100vw;
-      overflow: hidden;
-    }
-
-    /* 第一栏：左侧一级导航侧边栏 (Sidebar) */
-    .sidebar {
-      width: 220px;
-      height: 100%;
-      background-color: var(--bg-sidebar);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 16px 12px;
-      flex-shrink: 0;
-      overflow-y: auto;
-      transition: all 0.25s ease;
-    }
-
-    /* 侧边栏导航链接 */
-    .nav-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      list-style: none;
-    }
-    .nav-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      color: var(--text-muted);
-      font-size: 0.9rem;
-      font-weight: 600;
-      cursor: pointer;
-      border: 1px solid transparent;
-      transition: all 0.2s ease;
-      user-select: none;
-    }
-    .nav-item:hover {
-      background-color: var(--bg-hover);
-      color: var(--text);
-    }
-    .nav-item.active {
-      background-color: var(--primary-light);
-      color: var(--primary);
-      border-color: rgba(99, 102, 241, 0.25);
-    }
-
-    /* 侧边栏底部信息 */
-    .sidebar-footer {
-      padding: 12px 4px 0 4px;
-      border-top: 1px solid var(--border);
-    }
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    /* 第三栏：右侧主工作台容器 (Main Workspace - 包含固定 Header 与滚动 Body) */
-    .main-workspace {
-      flex: 1;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      overflow: hidden;
-    }
-
-    /* 工作台固定顶栏 (与第二栏 Header 等高 52px 绝对水平对齐) */
-    .workspace-header {
-      height: 52px;
-      background-color: var(--bg-card);
-      border-bottom: 1px solid var(--border);
-      padding: 0 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-shrink: 0;
-      z-index: 10;
-    }
-
-    .workspace-header-dns {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      gap: 16px;
-    }
-
-    .workspace-header-standard {
-      display: flex;
-      align-items: center;
-      width: 100%;
-    }
-    .workspace-header-title {
-      font-size: 0.96rem;
-      font-weight: 700;
-      color: var(--text);
-      line-height: 1.2;
-    }
-    .workspace-header-desc {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-      line-height: 1.2;
-    }
-
-    /* 工作台可滚动主体内容区 */
-    .workspace-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 28px 48px 28px;
-      min-height: 0;
-    }
-
-    /* 现代极简内联滚动条美化 */
-    ::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-    ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 3px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: var(--text-dim);
-    }
-
-    /* 矢量图标通用样式 */
-    .icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      vertical-align: middle;
-      flex-shrink: 0;
-      line-height: 1;
-    }
-    .icon svg {
-      width: 1.15em;
-      height: 1.15em;
-      stroke: currentColor;
-    }
-
-    /* 按钮通用体系 */
-    button {
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      padding: 6px 14px;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 0.85rem;
-      border: 1px solid transparent;
-      transition: all 0.2s ease;
-      user-select: none;
-      white-space: nowrap;
-      flex-shrink: 0;
-      height: 34px;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
-      color: #ffffff;
-      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
-    }
-    .btn-primary:hover {
-      background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-    }
-    .btn-outline {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
-    .btn-outline:hover {
-      background: var(--bg-hover);
-      border-color: var(--text-dim);
-    }
-    .btn-theme {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 10px;
-      height: 34px;
-    }
-    .btn-theme:hover {
-      background: var(--bg-hover);
-    }
-    .btn-sm {
-      padding: 4px 10px;
-      font-size: 0.8rem;
-      height: 30px;
-      gap: 4px;
-    }
-
-    /* 卡片体系 */
-    .card {
-      background-color: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px 22px;
-      margin-bottom: 20px;
-      box-shadow: var(--shadow-md);
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    .card:hover {
-      border-color: rgba(99, 102, 241, 0.35);
-    }
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 18px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-    .card-title {
-      font-size: 1.05rem;
-      font-weight: 700;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .card-actions {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .card-badge {
-      font-size: 0.72rem;
-      padding: 2px 8px;
-      border-radius: 9999px;
-      font-weight: 600;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-    }
-    .card-badge.active {
-      background: var(--success-light);
-      color: var(--success);
-      border-color: rgba(16, 185, 129, 0.3);
-    }
-
-    /* IP 探测结果内联徽章 */
-    .ip-probe-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 12px;
-      border-radius: 6px;
-      font-size: 0.82rem;
-      font-family: var(--font-mono);
-      font-weight: 600;
-      transition: all 0.2s ease;
-      user-select: text;
-    }
-    .ip-probe-badge.loading {
-      background: var(--bg-surface);
-      color: var(--primary);
-      border: 1px dashed var(--primary);
-    }
-    .ip-probe-badge.success {
-      background: var(--success-light);
-      color: var(--success);
-      border: 1px solid rgba(16, 185, 129, 0.35);
-    }
-    .ip-probe-badge.error {
-      background: var(--danger-light);
-      color: var(--danger);
-      border: 1px solid rgba(239, 68, 68, 0.35);
-    }
-    .ip-probe-badge .ip-text {
-      font-weight: 700;
-      letter-spacing: 0.2px;
-    }
-
-    /* 表单与输入控件 */
-    .form-group {
-      margin-bottom: 16px;
-    }
-    label {
-      display: block;
-      font-size: 0.85rem;
-      font-weight: 600;
-      margin-bottom: 6px;
-      color: var(--text);
-    }
-    .label-hint {
-      font-size: 0.75rem;
-      font-weight: 400;
-      color: var(--text-muted);
-      margin-left: 6px;
-    }
-    input[type="text"], input[type="password"], input[type="number"], select, textarea {
-      width: 100%;
-      padding: 10px 14px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 0.88rem;
-      outline: none;
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    input:focus, select:focus, textarea:focus {
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-    }
-    .password-input-wrapper {
-      position: relative;
-      display: flex;
-      align-items: center;
-      width: 100%;
-    }
-    .password-input-wrapper input {
-      width: 100%;
-      padding-right: 40px !important;
-    }
-    .btn-toggle-eye {
-      position: absolute;
-      right: 6px;
-      top: 50%;
-      transform: translateY(-50%);
-      background: none;
-      border: none;
-      padding: 6px;
-      cursor: pointer;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 6px;
-      transition: color 0.2s, background-color 0.2s;
-      z-index: 2;
-    }
-    .btn-toggle-eye:hover {
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.08);
-    }
-    textarea {
-      resize: vertical;
-      font-family: var(--font-mono);
-      font-size: 0.84rem;
-      line-height: 1.5;
-    }
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-    .grid-3 {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 16px;
-    }
-
-    /* Switch 开关组件 */
-    .switch-wrapper {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      user-select: none;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .switch-label {
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--text);
-      white-space: nowrap;
-    }
-    input[type="checkbox"].toggle-switch {
-      appearance: none;
-      width: 40px;
-      height: 22px;
-      background: var(--border);
-      border-radius: 11px;
-      position: relative;
-      cursor: pointer;
-      outline: none;
-      transition: background 0.2s ease;
-      flex-shrink: 0;
-    }
-    input[type="checkbox"].toggle-switch::before {
-      content: "";
-      position: absolute;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      top: 3px;
-      left: 3px;
-      background: #ffffff;
-      transition: transform 0.2s ease;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-    }
-    input[type="checkbox"].toggle-switch:checked {
-      background: var(--success);
-    }
-    input[type="checkbox"].toggle-switch:checked::before {
-      transform: translateX(18px);
-    }
-
-    .form-tip {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-top: 5px;
-      line-height: 1.4;
-    }
-
-    /* 模态日志弹窗样式 (完全适配暗色与亮色主题) */
-    .modal-backdrop {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(4px);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      animation: fadeIn 0.2s ease forwards;
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    .modal-content {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      width: 100%;
-      max-width: 920px;
-      max-height: 85vh;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
-      overflow: hidden;
-      animation: zoomIn 0.2s ease forwards;
-    }
-    @keyframes zoomIn {
-      from { transform: scale(0.96); opacity: 0; }
-      to { transform: scale(1); opacity: 1; }
-    }
-    .modal-header {
-      padding: 14px 20px;
-      background: var(--bg-surface);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .modal-title {
-      font-size: 1rem;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: var(--text);
-    }
-    .version-tag {
-      font-size: 0.72rem;
-      background: var(--primary-light);
-      color: var(--primary);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 600;
-    }
-    .modal-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .modal-body {
-      flex: 1;
-      height: 480px;
-      min-height: 350px;
-      overflow-y: auto;
-      padding: 16px 20px;
-      background: var(--console-bg);
-      color: var(--console-text);
-      border-top: 1px solid var(--console-border);
-      font-family: var(--font-mono);
-      font-size: 0.84rem;
-      line-height: 1.6;
-      transition: background 0.25s ease, color 0.25s ease;
-    }
-    .live-dot {
-      width: 8px;
-      height: 8px;
-      background-color: var(--success);
-      border-radius: 50%;
-      display: inline-block;
-      box-shadow: 0 0 8px var(--success);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
-    }
-    .log-line {
-      margin-bottom: 4px;
-      word-break: break-all;
-    }
-    .log-time { color: var(--text-dim); margin-right: 8px; }
-    .log-target { color: var(--primary); margin-right: 8px; font-weight: 500; }
-    .log-lvl-INFO { color: #0284c7; font-weight: 600; }
-    [data-theme="dark"] .log-lvl-INFO { color: #38bdf8; }
-    .log-lvl-WARN { color: #d97706; font-weight: 600; }
-    [data-theme="dark"] .log-lvl-WARN { color: #f59e0b; }
-    .log-lvl-ERROR { color: #dc2626; font-weight: 700; }
-    [data-theme="dark"] .log-lvl-ERROR { color: #f87171; }
-    .log-lvl-DEBUG { color: #7c3aed; }
-    [data-theme="dark"] .log-lvl-DEBUG { color: #c084fc; }
-
-    /* Toast 浮动提示 */
-    .toast-container {
-      position: fixed;
-      top: 24px;
-      right: 24px;
-      z-index: 9999;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: none;
-    }
-    .toast-item {
-      background: var(--bg-card);
-      color: var(--text);
-      border: 1px solid var(--border);
-      padding: 12px 18px;
-      border-radius: 8px;
-      font-size: 0.875rem;
-      font-weight: 600;
-      box-shadow: var(--shadow-lg);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      pointer-events: auto;
-      animation: slideIn 0.25s ease forwards;
-    }
-    .toast-item.success { border-left: 4px solid var(--success); }
-    .toast-item.error { border-left: 4px solid var(--danger); }
-    .toast-item.info { border-left: 4px solid var(--primary); }
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateX(30px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
-
-    /* 全屏认证页面容器 (登录 & 初始化) */
-    .auth-page-wrapper {
-      min-height: 100vh;
-      width: 100vw;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(circle at 50% 15%, rgba(99, 102, 241, 0.18), transparent 70%), var(--bg);
-      padding: 24px;
-      position: relative;
-    }
-    .auth-card {
-      width: 100%;
-      max-width: 420px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 36px 32px;
-      box-shadow: var(--shadow-lg), 0 0 35px rgba(99, 102, 241, 0.12);
-      position: relative;
-      animation: fadeIn 0.3s ease-out forwards;
-    }
-    .auth-header {
-      text-align: center;
-      margin-bottom: 28px;
-    }
-    .auth-logo {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 58px;
-      height: 58px;
-      background: linear-gradient(135deg, #6366f1, #06b6d4);
-      color: #ffffff;
-      border-radius: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
-    }
-    .auth-logo svg {
-      width: 32px;
-      height: 32px;
-    }
-    .auth-title {
-      font-size: 1.5rem;
-      font-weight: 700;
-      color: var(--text);
-      letter-spacing: -0.02em;
-    }
-    .auth-desc {
-      font-size: 0.875rem;
-      color: var(--text-muted);
-      margin-top: 6px;
-      line-height: 1.4;
-    }
-    .auth-theme-btn {
-      position: absolute;
-      top: 24px;
-      right: 24px;
-    }
-
-    /* ========================================== */
-    /* 核心多栏架构：第二栏任务子侧边栏 (Sub-Sidebar) */
-    /* ========================================== */
-    .dns-sub-sidebar {
-      width: 250px;
-      height: 100%;
-      background-color: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-      overflow: hidden;
-      transition: all 0.25s ease;
-    }
-
-    .sub-sidebar-header {
-      height: 52px;
-      box-sizing: border-box;
-      padding: 0 14px;
-      background-color: var(--bg-card);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-shrink: 0;
-    }
-
-    .sub-sidebar-title {
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      white-space: nowrap;
-      line-height: 1;
-    }
-
-    .sub-sidebar-badge {
-      font-size: 0.72rem;
-      background: var(--primary-light);
-      color: var(--primary);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 600;
-      line-height: 1;
-    }
-
-    .btn-add-task {
-      background: var(--primary);
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      padding: 0 10px;
-      font-size: 0.76rem;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      transition: all 0.2s ease;
-      height: 30px;
-      box-sizing: border-box;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .btn-add-task:hover {
-      background: var(--primary-hover);
-      transform: translateY(-1px);
-    }
-
-    .sub-sidebar-list {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .task-item-card {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid transparent;
-      background: transparent;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .task-item-card:hover {
-      background: var(--bg-hover);
-    }
-    .task-item-card.active {
-      background: var(--primary-light);
-      border-color: var(--border-focus);
-    }
-
-    .task-item-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .task-item-name {
-      font-size: 0.86rem;
-      font-weight: 600;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 140px;
-    }
-
-    .task-item-provider-tag {
-      font-size: 0.7rem;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--text-muted);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-weight: 500;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .task-item-card.active .task-item-provider-tag {
-      background: rgba(99, 102, 241, 0.25);
-      color: #fff;
-    }
-
-    .task-item-domain {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      padding-left: 14px;
-    }
-
-    /* 通用页面模块标题卡片 (通知与系统设置顶部) */
-    .tab-page-header-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px 20px;
-      margin-bottom: 16px;
-      box-shadow: var(--shadow-sm);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .tab-page-header-title {
-      font-size: 1.05rem;
-      font-weight: 700;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .tab-page-header-desc {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
-    /* 任务专属操作栏卡片 (下移置于表单顶部) */
-    .task-toolbar-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 12px 18px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      box-shadow: var(--shadow-sm);
-      flex-wrap: wrap;
-    }
-
-    .task-name-edit-wrap {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex: 1;
-      min-width: 200px;
-      height: 30px;
-    }
-    .task-name-edit-wrap label {
-      display: inline-flex;
-      align-items: center;
-      margin: 0;
-      padding: 0;
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: var(--text);
-      white-space: nowrap;
-      height: 30px;
-      line-height: 1;
-    }
-    .task-name-edit-wrap input {
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 0 10px;
-      border-radius: 6px;
-      font-size: 0.86rem;
-      font-weight: 600;
-      outline: none;
-      width: 180px;
-      height: 30px;
-      box-sizing: border-box;
-      line-height: 28px;
-      transition: border-color 0.2s ease;
-    }
-    .task-name-edit-wrap input:focus {
-      border-color: var(--border-focus);
-    }
-
-    .task-toolbar-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-shrink: 0;
-      height: 30px;
-    }
-    .task-toolbar-actions .switch-wrapper {
-      height: 30px;
-      display: inline-flex;
-      align-items: center;
-      margin: 0;
-    }
-    .task-toolbar-actions .btn-outline {
-      height: 30px;
-      padding: 0 10px;
-      box-sizing: border-box;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .btn-del-hover:hover {
-      color: var(--danger) !important;
-      border-color: rgba(239, 68, 68, 0.4) !important;
-    }
-
-    @media (max-width: 1080px) {
-      .dns-master-detail-layout {
-        flex-direction: column;
-      }
-      .task-master-col {
-        width: 100%;
-        position: static;
-        height: auto;
-        max-height: 240px;
-      }
-      .task-master-list {
-        max-height: 180px;
-      }
-    }
-
-    .btn-del-hover:hover {
-      color: var(--danger) !important;
-      border-color: rgba(239, 68, 68, 0.4) !important;
-    }
-
-    @media (max-width: 960px) {
-      .app-layout { flex-direction: column; }
-      .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 12px 16px; }
-      .nav-list { flex-direction: row; overflow-x: auto; }
-      .sidebar-footer { display: none; }
-      .sub-sidebar { width: 100%; height: auto; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
-      .content-body { padding: 20px 16px; }
-      .grid-2, .grid-3 { grid-template-columns: 1fr; }
-      .top-header { flex-direction: column; align-items: flex-start; gap: 12px; padding: 14px 16px; }
-      .header-task-toolbar { width: 100%; flex-wrap: wrap; }
-      .task-name-input-box input { width: 160px; }
-      .header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-    }
-  </style>
+  <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <div class="toast-container" id="toastContainer"></div>
@@ -1433,7 +369,7 @@
               <div class="card-header">
                 <div class="card-title">
                   <label class="switch-wrapper">
-                    <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked onchange="toggleIpSection('ipv4')" />
+                    <input type="checkbox" id="ipv4Enable" class="toggle-switch" checked />
                     <span class="switch-label">启用 IPv4 解析</span>
                   </label>
                 </div>
@@ -1476,7 +412,7 @@
               <div class="card-header">
                 <div class="card-title">
                   <label class="switch-wrapper">
-                    <input type="checkbox" id="ipv6Enable" class="toggle-switch" onchange="toggleIpSection('ipv6')" />
+                    <input type="checkbox" id="ipv6Enable" class="toggle-switch" />
                     <span class="switch-label">启用 IPv6 解析</span>
                   </label>
                 </div>
@@ -1516,2549 +452,565 @@
             </div>
           </div>
 
-        <!-- ========================================== -->
-        <!-- TAB 2: 通知与告警推送 -->
-        <!-- ========================================== -->
-        <div id="tab-notify" class="tab-content" style="display:none;">
-          <!-- 策略控制顶栏 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                  </svg>
-                </span>
-                <span>全局通知触发策略</span>
-              </div>
-              <button class="btn-primary btn-sm" onclick="testNotifyAll()">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                  </svg>
-                </span>
-                <span>测试全部已启用渠道</span>
-              </button>
-            </div>
-            <div class="grid-2">
-              <label class="switch-wrapper">
-                <input type="checkbox" id="notifyOnSuccess" class="toggle-switch" checked />
-                <span class="switch-label">IP 变动并同步成功时通知</span>
-              </label>
-              <label class="switch-wrapper">
-                <input type="checkbox" id="notifyOnFailure" class="toggle-switch" checked />
-                <span class="switch-label">同步失败或异常时告警</span>
-              </label>
-            </div>
-          </div>
-
-          <!-- 微信公众号官方原生模板消息 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                  </svg>
-                </span>
-                <span>微信公众号 (官方原生模板消息直推)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('wechat_official')">
+          <!-- ========================================== -->
+          <!-- TAB 2: 通知与告警推送 -->
+          <!-- ========================================== -->
+          <div id="tab-notify" class="tab-content" style="display:none;">
+            <!-- 策略控制顶栏 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                  </span>
+                  <span>全局通知触发策略</span>
+                </div>
+                <button class="btn-primary btn-sm" onclick="testNotifyAll()">
                   <span class="icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <line x1="22" y1="2" x2="11" y2="13"></line>
                       <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                     </svg>
                   </span>
-                  <span>测试当前渠道</span>
+                  <span>测试全部已启用渠道</span>
                 </button>
+              </div>
+              <div class="grid-2">
                 <label class="switch-wrapper">
-                  <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
+                  <input type="checkbox" id="notifyOnSuccess" class="toggle-switch" checked />
+                  <span class="switch-label">IP 变动并同步成功时通知</span>
+                </label>
+                <label class="switch-wrapper">
+                  <input type="checkbox" id="notifyOnFailure" class="toggle-switch" checked />
+                  <span class="switch-label">同步失败或异常时告警</span>
                 </label>
               </div>
             </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>公众号 AppID</label>
-                <input type="text" id="wxOfficialAppId" placeholder="例如 wx8888888888888888" />
+
+            <!-- 微信公众号官方原生模板消息 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                  </span>
+                  <span>微信公众号 (官方原生模板消息直推)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('wechat_official')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="wxOfficialEnable" class="toggle-switch" />
+                  </label>
+                </div>
               </div>
-              <div class="form-group">
-                <label>公众号 AppSecret</label>
-                <input type="password" id="wxOfficialAppSecret" placeholder="开发者密码 AppSecret" />
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>公众号 AppID</label>
+                  <input type="text" id="wxOfficialAppId" placeholder="例如 wx8888888888888888" />
+                </div>
+                <div class="form-group">
+                  <label>公众号 AppSecret</label>
+                  <input type="password" id="wxOfficialAppSecret" placeholder="开发者密码 AppSecret" />
+                </div>
               </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>模板消息 ID (template_id)</label>
-                <input type="text" id="wxOfficialTemplateId" placeholder="微信公众平台模板库中的模板ID" />
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>模板消息 ID (template_id)</label>
+                  <input type="text" id="wxOfficialTemplateId" placeholder="微信公众平台模板库中的模板ID" />
+                </div>
+                <div class="form-group">
+                  <label>接收者 OpenID (多个用户用英文逗号隔开)</label>
+                  <input type="text" id="wxOfficialToUser" placeholder="关注公众号后生成的 OpenID (如 oABCD...)" />
+                </div>
               </div>
-              <div class="form-group">
-                <label>接收者 OpenID (多个用户用英文逗号隔开)</label>
-                <input type="text" id="wxOfficialToUser" placeholder="关注公众号后生成的 OpenID (如 oABCD...)" />
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>点击卡片跳转 URL (可选)</label>
+                  <input type="text" id="wxOfficialUrl" placeholder="例如 http://your-nas.local" />
+                </div>
+                <div class="form-group">
+                  <label>自定义模板 JSON 结构 (可选，留空使用标准通用结构)</label>
+                  <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
+                </div>
               </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>点击卡片跳转 URL (可选)</label>
-                <input type="text" id="wxOfficialUrl" placeholder="例如 http://your-nas.local" />
-              </div>
-              <div class="form-group">
-                <label>自定义模板 JSON 结构 (可选，留空使用标准通用结构)</label>
-                <input type="text" id="wxOfficialTmplData" placeholder='支持 #{status}, #{taskName}, #{ipv4Addr}, #{domains}, #{details}' />
-              </div>
-            </div>
-            <div class="form-tip" style="background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 12px; margin-top: 10px;">
-              <div style="font-weight: 600; color: var(--text); margin-bottom: 6px;">💡 微信公众平台模板消息设置指南：</div>
-              <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.6;">
-                1. 推荐在微信官方 <b>「公众平台测试号」</b> 中新增模板，标题填写：<code>DDNS动态解析通知</code><br />
-                2. <b>模板内容</b> 直接复制粘贴下方标准模板（系统已自动映射）：<br />
-                <code style="display:block; background:var(--bg-input); padding:8px 10px; border-radius:6px; margin:6px 0; color:var(--primary); user-select:all;">{{first.DATA}}
+              <div class="form-tip" style="background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 12px; margin-top: 10px;">
+                <div style="font-weight: 600; color: var(--text); margin-bottom: 6px;">💡 微信公众平台模板消息设置指南：</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.6;">
+                  1. 推荐在微信官方 <b>「公众平台测试号」</b> 中新增模板，标题填写：<code>DDNS动态解析通知</code><br />
+                  2. <b>模板内容</b> 直接复制粘贴下方标准模板（系统已自动映射）：<br />
+                  <code style="display:block; background:var(--bg-input); padding:8px 10px; border-radius:6px; margin:6px 0; color:var(--primary); user-select:all;">{{first.DATA}}
 任务名称：{{keyword1.DATA}}
 当前 IP：{{keyword2.DATA}}
 解析域名：{{keyword3.DATA}}
 更新时间：{{keyword4.DATA}}
 {{remark.DATA}}</code>
-                <i>（测试号扫码关注后可在页面右侧「微信号」列获取您的专属 OpenID）</i>
+                  <i>（测试号扫码关注后可在页面右侧「微信号」列获取您的专属 OpenID）</i>
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- 企业微信 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                    <line x1="9" y1="22" x2="9" y2="22.01"></line>
-                    <line x1="15" y1="22" x2="15" y2="22.01"></line>
-                    <line x1="9" y1="6" x2="9" y2="6.01"></line>
-                    <line x1="15" y1="6" x2="15" y2="6.01"></line>
-                    <line x1="9" y1="10" x2="9" y2="10.01"></line>
-                    <line x1="15" y1="10" x2="15" y2="10.01"></line>
-                    <line x1="9" y1="14" x2="9" y2="14.01"></line>
-                    <line x1="15" y1="14" x2="15" y2="14.01"></line>
-                    <line x1="9" y1="18" x2="9" y2="18.01"></line>
-                    <line x1="15" y1="18" x2="15" y2="18.01"></line>
-                  </svg>
-                </span>
-                <span>企业微信 (群机器人 / 自建应用推送)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('wecom')">
+            <!-- 企业微信 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
                   <span class="icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+                      <line x1="9" y1="22" x2="9" y2="22.01"></line>
+                      <line x1="15" y1="22" x2="15" y2="22.01"></line>
+                      <line x1="9" y1="6" x2="9" y2="6.01"></line>
+                      <line x1="15" y1="6" x2="15" y2="6.01"></line>
+                      <line x1="9" y1="10" x2="9" y2="10.01"></line>
+                      <line x1="15" y1="10" x2="15" y2="10.01"></line>
+                      <line x1="9" y1="14" x2="9" y2="14.01"></line>
+                      <line x1="15" y1="14" x2="15" y2="14.01"></line>
+                      <line x1="9" y1="18" x2="9" y2="18.01"></line>
+                      <line x1="15" y1="18" x2="15" y2="18.01"></line>
                     </svg>
                   </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="wecomEnable" class="toggle-switch" />
-                </label>
+                  <span>企业微信 (群机器人 / 自建应用推送)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('wecom')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="wecomEnable" class="toggle-switch" />
+                  </label>
+                </div>
               </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>推送模式</label>
-                <select id="wecomMode" onchange="toggleWecomMode()">
-                  <option value="bot">群机器人 Webhook</option>
-                  <option value="app">自建应用消息推送 (配合微信插件可直接弹窗置顶个人微信)</option>
-                </select>
-              </div>
-              <div class="form-group" id="wecomBotField">
-                <label>群机器人 Webhook URL</label>
-                <input type="text" id="wecomWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
-              </div>
-            </div>
-            <div id="wecomAppFields" style="display:none;">
               <div class="grid-2">
                 <div class="form-group">
-                  <label>企业 ID (CorpID)</label>
-                  <input type="text" id="wecomCorpId" />
+                  <label>推送模式</label>
+                  <select id="wecomMode" onchange="toggleWecomMode()">
+                    <option value="bot">群机器人 Webhook</option>
+                    <option value="app">自建应用消息推送 (配合微信插件可直接弹窗置顶个人微信)</option>
+                  </select>
+                </div>
+                <div class="form-group" id="wecomBotField">
+                  <label>群机器人 Webhook URL</label>
+                  <input type="text" id="wecomWebhookUrl" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+                </div>
+              </div>
+              <div id="wecomAppFields" style="display:none;">
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>企业 ID (CorpID)</label>
+                    <input type="text" id="wecomCorpId" />
+                  </div>
+                  <div class="form-group">
+                    <label>应用 Secret (CorpSecret)</label>
+                    <input type="password" id="wecomCorpSecret" />
+                  </div>
+                  <div class="form-group">
+                    <label>应用 AgentID</label>
+                    <input type="number" id="wecomAgentId" />
+                  </div>
+                  <div class="form-group">
+                    <label>接收成员 (默认 @all)</label>
+                    <input type="text" id="wecomToUser" placeholder="@all 或 指定成员账号" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- SMTP 邮件通知 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                      <polyline points="22,6 12,13 2,6"></polyline>
+                    </svg>
+                  </span>
+                  <span>SMTP 邮件通知 (支持常用服务商一键配置)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('email')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="emailEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>常用邮箱服务商预设</label>
+                  <select id="emailPreset" onchange="applyEmailPreset()">
+                    <option value="custom">自定义 SMTP 服务器</option>
+                    <option value="qq">QQ 邮箱 (smtp.qq.com:465)</option>
+                    <option value="163">163 网易邮箱 (smtp.163.com:465)</option>
+                    <option value="126">126 网易邮箱 (smtp.126.com:465)</option>
+                    <option value="qq_enterprise">腾讯企业邮箱 / Foxmail (smtp.exmail.qq.com:465)</option>
+                    <option value="aliyun">阿里云个人/企业邮箱 (smtp.aliyun.com:465)</option>
+                    <option value="gmail">Google Gmail (smtp.gmail.com:465)</option>
+                    <option value="outlook">微软 Outlook / Office 365 (smtp.office365.com:587)</option>
+                    <option value="139">139 移动邮箱 (smtp.139.com:465)</option>
+                  </select>
                 </div>
                 <div class="form-group">
-                  <label>应用 Secret (CorpSecret)</label>
-                  <input type="password" id="wecomCorpSecret" />
+                  <label>SMTP 服务器地址</label>
+                  <input type="text" id="emailSmtpServer" placeholder="例如 smtp.qq.com" />
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>SMTP 端口</label>
+                  <input type="number" id="emailSmtpPort" placeholder="465 (SSL) 或 587 (STARTTLS)" value="465" />
                 </div>
                 <div class="form-group">
-                  <label>应用 AgentID</label>
-                  <input type="number" id="wecomAgentId" />
+                  <label>发信邮箱账号 / 用户名</label>
+                  <input type="text" id="emailUsername" oninput="autoFillFromAddress()" placeholder="your_email@example.com" />
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>邮箱独立授权码 / 密码<span class="label-hint">主流邮箱需在设置中开启 POP3/SMTP 并生成授权码</span></label>
+                  <input type="password" id="emailPassword" placeholder="SMTP 独立授权码（非邮箱登录密码）" />
                 </div>
                 <div class="form-group">
-                  <label>接收成员 (默认 @all)</label>
-                  <input type="text" id="wecomToUser" placeholder="@all 或 指定成员账号" />
+                  <label>发件人邮箱 (From)</label>
+                  <input type="text" id="emailFrom" placeholder="your_email@example.com" />
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>收件人邮箱 (To，多个用英文逗号分隔，可填自己)</label>
+                  <input type="text" id="emailTo" placeholder="receiver@example.com" />
+                </div>
+                <div class="form-group" style="display:flex; align-items:flex-end; padding-bottom:12px;">
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="emailUseSsl" class="toggle-switch" checked />
+                    <span class="switch-label">启用 SSL / TLS 加密 (465 端口推荐开启)</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- 钉钉群机器人 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>钉钉群机器人 (DingTalk Bot)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('dingtalk')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="dingtalkEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>AccessToken (或完整 Webhook URL)</label>
+                  <input type="text" id="dingtalkAccessToken" placeholder="例如 e188b776... 或完整 Webhook 地址" />
+                </div>
+                <div class="form-group">
+                  <label>加签安全密钥 Secret (可选)</label>
+                  <input type="password" id="dingtalkSecret" placeholder="SEC...（机器人安全设置勾选加签时填写）" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 飞书群机器人 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                      <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+                    </svg>
+                  </span>
+                  <span>飞书群机器人 (Feishu / Lark Bot)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('feishu')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="feishuEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>飞书群机器人 Webhook URL</label>
+                  <input type="text" id="feishuWebhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" />
+                </div>
+                <div class="form-group">
+                  <label>签名校验 Secret (可选)</label>
+                  <input type="password" id="feishuSecret" placeholder="机器人安全设置勾选签名校验时填写" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Telegram 机器人 -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </span>
+                  <span>Telegram 机器人 (Bot 推送)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('telegram')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="telegramEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-3">
+                <div class="form-group">
+                  <label>Bot Token</label>
+                  <input type="text" id="telegramBotToken" placeholder="例如 123456789:AAHKX..." />
+                </div>
+                <div class="form-group">
+                  <label>接收 Chat ID</label>
+                  <input type="text" id="telegramChatId" placeholder="例如 12345678 或 -100123456" />
+                </div>
+                <div class="form-group">
+                  <label>API 反向代理 URL (可选)</label>
+                  <input type="text" id="telegramApiProxy" placeholder="例如 https://api.telegram-proxy.com" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Bark (iOS) -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+                      <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                    </svg>
+                  </span>
+                  <span>Bark (苹果 iOS 客户端实时通知)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('bark')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="barkEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>Bark 服务器地址 (支持自建)</label>
+                  <input type="text" id="barkServerUrl" value="https://api.day.app" placeholder="https://api.day.app" />
+                </div>
+                <div class="form-group">
+                  <label>设备 Key (Device Key)</label>
+                  <input type="text" id="barkDeviceKey" placeholder="Bark App 中的设备 Key" />
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>消息分组 Group (可选)</label>
+                  <input type="text" id="barkGroup" placeholder="rddns" />
+                </div>
+                <div class="form-group">
+                  <label>提示音 Sound (可选)</label>
+                  <input type="text" id="barkSound" placeholder="例如 bell / glass" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 通用自定义 Webhook -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
+                  <span class="icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="18" cy="5" r="3"></circle>
+                      <circle cx="6" cy="12" r="3"></circle>
+                      <circle cx="18" cy="19" r="3"></circle>
+                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                    </svg>
+                  </span>
+                  <span>通用自定义 Webhook (HTTP 回调推送)</span>
+                </div>
+                <div class="card-actions">
+                  <button class="btn-outline btn-sm" onclick="testSingleNotify('webhook')">
+                    <span class="icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      </svg>
+                    </span>
+                    <span>测试当前渠道</span>
+                  </button>
+                  <label class="switch-wrapper">
+                    <input type="checkbox" id="webhookEnable" class="toggle-switch" />
+                  </label>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>Webhook URL (支持 #{status}, #{ipv4}, #{domains})</label>
+                  <input type="text" id="webhookUrl" placeholder="https://api.example.com/notify?ip=#{ipv4}" />
+                </div>
+                <div class="form-group">
+                  <label>HTTP 方法</label>
+                  <select id="webhookMethod">
+                    <option value="POST">POST</option>
+                    <option value="GET">GET</option>
+                    <option value="PUT">PUT</option>
+                  </select>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>自定义 Headers (JSON 格式，可选)</label>
+                  <input type="text" id="webhookHeaders" placeholder='{"Authorization": "Bearer xxx"}' />
+                </div>
+                <div class="form-group">
+                  <label>自定义 Body 内容 (可选，支持变量替换)</label>
+                  <input type="text" id="webhookBody" placeholder='{"text": "IP变动: #{ipv4}", "domains": "#{domains}"}' />
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- SMTP 邮件通知 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                    <polyline points="22,6 12,13 2,6"></polyline>
-                  </svg>
-                </span>
-                <span>SMTP 邮件通知 (支持常用服务商一键配置)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('email')">
+          <!-- ========================================== -->
+          <!-- TAB 3: 系统与安全配置 -->
+          <!-- ========================================== -->
+          <div id="tab-system" class="tab-content" style="display:none;">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
                   <span class="icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <polyline points="12 6 12 12 16 14"></polyline>
                     </svg>
                   </span>
-                  <span>测试当前渠道</span>
-                </button>
+                  <span>核心运行与轮询设置</span>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>全局同步间隔 (秒)</label>
+                  <input type="number" id="sysInterval" value="300" />
+                  <p class="form-tip">默认 300 秒（5 分钟）定期检查并自动同步 IP</p>
+                </div>
+                <div class="form-group">
+                  <label>CacheTimes 缓存比对次数</label>
+                  <input type="number" id="sysCacheTimes" value="10" />
+                  <p class="form-tip">每 N 次探测 IP 无变化后，比对一次远程 DNS 解析记录</p>
+                </div>
+              </div>
+              <div class="form-group" style="margin-top:8px;">
                 <label class="switch-wrapper">
-                  <input type="checkbox" id="emailEnable" class="toggle-switch" />
+                  <input type="checkbox" id="sysNotAllowWan" class="toggle-switch" />
+                  <span class="switch-label">禁止公网访问 Web 界面</span>
                 </label>
               </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>常用邮箱服务商预设</label>
-                <select id="emailPreset" onchange="applyEmailPreset()">
-                  <option value="custom">自定义 SMTP 服务器</option>
-                  <option value="qq">QQ 邮箱 (smtp.qq.com:465)</option>
-                  <option value="163">163 网易邮箱 (smtp.163.com:465)</option>
-                  <option value="126">126 网易邮箱 (smtp.126.com:465)</option>
-                  <option value="qq_enterprise">腾讯企业邮箱 / Foxmail (smtp.exmail.qq.com:465)</option>
-                  <option value="aliyun">阿里云个人/企业邮箱 (smtp.aliyun.com:465)</option>
-                  <option value="gmail">Google Gmail (smtp.gmail.com:465)</option>
-                  <option value="outlook">微软 Outlook / Office 365 (smtp.office365.com:587)</option>
-                  <option value="139">139 移动邮箱 (smtp.139.com:465)</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>SMTP 服务器地址</label>
-                <input type="text" id="emailSmtpServer" placeholder="例如 smtp.qq.com" />
+              <div class="form-group" style="margin-top:12px;">
+                <label>自定义 DNS 递归解析服务器 (DNS Server) <span style="font-size:0.75rem;color:var(--text-muted);">(抗 Local DNS 缓存污染)</span></label>
+                <input type="text" id="sysDnsServer" placeholder="留空使用系统默认 DNS；推荐 223.5.5.5 或 1.1.1.1:53" />
+                <p class="form-tip">用于直接向指定公共 DNS 节点发起递归查询比对记录，防止本地运营商 DNS 劫持与缓存滞后</p>
               </div>
             </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>SMTP 端口</label>
-                <input type="number" id="emailSmtpPort" placeholder="465 (SSL) 或 587 (STARTTLS)" value="465" />
-              </div>
-              <div class="form-group">
-                <label>发信邮箱账号 / 用户名</label>
-                <input type="text" id="emailUsername" oninput="autoFillFromAddress()" placeholder="your_email@example.com" />
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>邮箱独立授权码 / 密码<span class="label-hint">主流邮箱需在设置中开启 POP3/SMTP 并生成授权码</span></label>
-                <input type="password" id="emailPassword" placeholder="SMTP 独立授权码（非邮箱登录密码）" />
-              </div>
-              <div class="form-group">
-                <label>发件人邮箱 (From)</label>
-                <input type="text" id="emailFrom" placeholder="your_email@example.com" />
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>收件人邮箱 (To，多个用英文逗号分隔，可填自己)</label>
-                <input type="text" id="emailTo" placeholder="receiver@example.com" />
-              </div>
-              <div class="form-group" style="display:flex; align-items:flex-end; padding-bottom:12px;">
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="emailUseSsl" class="toggle-switch" checked />
-                  <span class="switch-label">启用 SSL / TLS 加密 (465 端口推荐开启)</span>
-                </label>
-              </div>
-            </div>
-          </div>
 
-          <!-- 钉钉群机器人 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                  </svg>
-                </span>
-                <span>钉钉群机器人 (DingTalk Bot)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('dingtalk')">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">
                   <span class="icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
                     </svg>
                   </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="dingtalkEnable" class="toggle-switch" />
-                </label>
+                  <span>Web 管理员身份认证 (Basic Auth)</span>
+                </div>
               </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>AccessToken (或完整 Webhook URL)</label>
-                <input type="text" id="dingtalkAccessToken" placeholder="例如 e188b776... 或完整 Webhook 地址" />
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>管理员账号</label>
+                  <input type="text" id="sysUsername" placeholder="留空则不开启登录认证" />
+                </div>
+                <div class="form-group">
+                  <label>管理员密码</label>
+                  <input type="password" id="sysPassword" placeholder="留空表示不修改密码" />
+                </div>
               </div>
-              <div class="form-group">
-                <label>加签安全密钥 Secret (可选)</label>
-                <input type="password" id="dingtalkSecret" placeholder="SEC...（机器人安全设置勾选加签时填写）" />
-              </div>
+              <p class="form-tip">提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。</p>
             </div>
           </div>
-
-          <!-- 飞书群机器人 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-                  </svg>
-                </span>
-                <span>飞书群机器人 (Feishu / Lark Bot)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('feishu')">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                  </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="feishuEnable" class="toggle-switch" />
-                </label>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>飞书群机器人 Webhook URL</label>
-                <input type="text" id="feishuWebhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx" />
-              </div>
-              <div class="form-group">
-                <label>签名校验 Secret (可选)</label>
-                <input type="password" id="feishuSecret" placeholder="机器人安全设置勾选签名校验时填写" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Telegram 机器人 -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                  </svg>
-                </span>
-                <span>Telegram 机器人 (Bot 推送)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('telegram')">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                  </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="telegramEnable" class="toggle-switch" />
-                </label>
-              </div>
-            </div>
-            <div class="grid-3">
-              <div class="form-group">
-                <label>Bot Token</label>
-                <input type="text" id="telegramBotToken" placeholder="例如 123456789:AAHKX..." />
-              </div>
-              <div class="form-group">
-                <label>接收 Chat ID</label>
-                <input type="text" id="telegramChatId" placeholder="例如 12345678 或 -100123456" />
-              </div>
-              <div class="form-group">
-                <label>API 反向代理 URL (可选)</label>
-                <input type="text" id="telegramApiProxy" placeholder="例如 https://api.telegram-proxy.com" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Bark (iOS) -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
-                    <line x1="12" y1="18" x2="12.01" y2="18"></line>
-                  </svg>
-                </span>
-                <span>Bark (苹果 iOS 客户端实时通知)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('bark')">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                  </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="barkEnable" class="toggle-switch" />
-                </label>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>Bark 服务器地址 (支持自建)</label>
-                <input type="text" id="barkServerUrl" value="https://api.day.app" placeholder="https://api.day.app" />
-              </div>
-              <div class="form-group">
-                <label>设备 Key (Device Key)</label>
-                <input type="text" id="barkDeviceKey" placeholder="Bark App 中的设备 Key" />
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>消息分组 Group (可选)</label>
-                <input type="text" id="barkGroup" placeholder="rddns" />
-              </div>
-              <div class="form-group">
-                <label>提示音 Sound (可选)</label>
-                <input type="text" id="barkSound" placeholder="例如 bell / glass" />
-              </div>
-            </div>
-          </div>
-
-          <!-- 通用自定义 Webhook -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="18" cy="5" r="3"></circle>
-                    <circle cx="6" cy="12" r="3"></circle>
-                    <circle cx="18" cy="19" r="3"></circle>
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-                  </svg>
-                </span>
-                <span>通用自定义 Webhook (HTTP 回调推送)</span>
-              </div>
-              <div class="card-actions">
-                <button class="btn-outline btn-sm" onclick="testSingleNotify('webhook')">
-                  <span class="icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="22" y1="2" x2="11" y2="13"></line>
-                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                  </span>
-                  <span>测试当前渠道</span>
-                </button>
-                <label class="switch-wrapper">
-                  <input type="checkbox" id="webhookEnable" class="toggle-switch" />
-                </label>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>Webhook URL (支持 #{status}, #{ipv4}, #{domains})</label>
-                <input type="text" id="webhookUrl" placeholder="https://api.example.com/notify?ip=#{ipv4}" />
-              </div>
-              <div class="form-group">
-                <label>HTTP 方法</label>
-                <select id="webhookMethod">
-                  <option value="POST">POST</option>
-                  <option value="GET">GET</option>
-                  <option value="PUT">PUT</option>
-                </select>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>自定义 Headers (JSON 格式，可选)</label>
-                <input type="text" id="webhookHeaders" placeholder='{"Authorization": "Bearer xxx"}' />
-              </div>
-              <div class="form-group">
-                <label>自定义 Body 内容 (可选，支持变量替换)</label>
-                <input type="text" id="webhookBody" placeholder='{"text": "IP变动: #{ipv4}", "domains": "#{domains}"}' />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ========================================== -->
-        <!-- TAB 3: 系统与安全配置 -->
-        <!-- ========================================== -->
-        <div id="tab-system" class="tab-content" style="display:none;">
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <polyline points="12 6 12 12 16 14"></polyline>
-                  </svg>
-                </span>
-                <span>核心运行与轮询设置</span>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>全局同步间隔 (秒)</label>
-                <input type="number" id="sysInterval" value="300" />
-                <p class="form-tip">默认 300 秒（5 分钟）定期检查并自动同步 IP</p>
-              </div>
-              <div class="form-group">
-                <label>CacheTimes 缓存比对次数</label>
-                <input type="number" id="sysCacheTimes" value="10" />
-                <p class="form-tip">每 N 次探测 IP 无变化后，比对一次远程 DNS 解析记录</p>
-              </div>
-            </div>
-            <div class="form-group" style="margin-top:8px;">
-              <label class="switch-wrapper">
-                <input type="checkbox" id="sysNotAllowWan" class="toggle-switch" />
-                <span class="switch-label">禁止公网访问 Web 界面</span>
-              </label>
-            </div>
-            <div class="form-group" style="margin-top:12px;">
-              <label>自定义 DNS 递归解析服务器 (DNS Server) <span style="font-size:0.75rem;color:var(--text-muted);">(抗 Local DNS 缓存污染)</span></label>
-              <input type="text" id="sysDnsServer" placeholder="留空使用系统默认 DNS；推荐 223.5.5.5 或 1.1.1.1:53" />
-              <p class="form-tip">用于直接向指定公共 DNS 节点发起递归查询比对记录，防止本地运营商 DNS 劫持与缓存滞后</p>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <span class="icon">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                  </svg>
-                </span>
-                <span>Web 管理员身份认证 (Basic Auth)</span>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div class="form-group">
-                <label>管理员账号</label>
-                <input type="text" id="sysUsername" placeholder="留空则不开启登录认证" />
-              </div>
-              <div class="form-group">
-                <label>管理员密码</label>
-                <input type="password" id="sysPassword" placeholder="留空表示不修改密码" />
-              </div>
-            </div>
-            <p class="form-tip">提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。</p>
-          </div>
-        </div>
         </div> <!-- /.workspace-body -->
       </main>
     </div> <!-- /.app-body-container -->
   </div>
 
-  <script>
-    // ==========================================
-    // 全局状态与数据字典
-    // ==========================================
-    let globalConfig = null;
-    let availableInterfaces = [];
-    let savedIpv4NetIf = '';
-    let savedIpv6NetIf = '';
-
-    // HTML 安全字符转义函数
-    function escapeHtml(str) {
-      if (str === null || str === undefined) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
-
-    // 矢量 Sun / Moon 图标模板
-    const SUN_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>`;
-    const MOON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"></path></svg>`;
-
-    // 初始化主题模式 (支持 localStorage 记忆与系统色彩偏好)
-    function initTheme() {
-      const savedTheme = localStorage.getItem('rddns_theme');
-      if (savedTheme) {
-        document.documentElement.setAttribute('data-theme', savedTheme);
-      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-        document.documentElement.setAttribute('data-theme', 'light');
-      } else {
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
-      updateThemeBtnIcon();
-    }
-
-    function toggleTheme() {
-      const current = document.documentElement.getAttribute('data-theme') || 'dark';
-      const nextTheme = current === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', nextTheme);
-      localStorage.setItem('rddns_theme', nextTheme);
-      updateThemeBtnIcon();
-      showToast(`已切换至${nextTheme === 'dark' ? '暗色' : '亮色'}主题`, 'info');
-    }
-
-    function updateThemeBtnIcon() {
-      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-      const iconSvg = isDark ? SUN_SVG : MOON_SVG;
-      ['themeIcon', 'loginThemeIcon', 'initThemeIcon'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.innerHTML = iconSvg;
-      });
-    }
-
-    // 优雅浮动 Toast
-    function showToast(message, type = 'success') {
-      const container = document.getElementById('toastContainer');
-      const toast = document.createElement('div');
-      toast.className = `toast-item ${type}`;
-      
-      let iconSvg = '';
-      if (type === 'success') {
-        iconSvg = `<span class="icon" style="color:var(--success)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>`;
-      } else if (type === 'error') {
-        iconSvg = `<span class="icon" style="color:var(--danger)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>`;
-      } else {
-        iconSvg = `<span class="icon" style="color:var(--primary)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></span>`;
-      }
-      
-      toast.innerHTML = `${iconSvg} <span>${message}</span>`;
-      container.appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateY(-10px)';
-        toast.style.transition = 'all 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-      }, 3500);
-    }
-
-    // 模态日志控制
-    function openLogModal() {
-      document.getElementById('logModal').style.display = 'flex';
-      const container = document.getElementById('logContainer');
-      if (container) container.scrollTop = container.scrollHeight;
-    }
-
-    function closeLogModal() {
-      document.getElementById('logModal').style.display = 'none';
-    }
-
-    function handleBackdropClick(e) {
-      if (e.target.id === 'logModal') {
-        closeLogModal();
-      }
-    }
-
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') {
-        closeLogModal();
-      }
-    });
-
-    // 统一 API 请求拦截封装（自动附加 Basic Auth 认证凭据）
-    async function apiFetch(url, options = {}) {
-      options.headers = options.headers || {};
-      const auth = sessionStorage.getItem('rddns_auth');
-      if (auth) {
-        options.headers['Authorization'] = 'Basic ' + auth;
-      }
-      if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData) && typeof options.body !== 'string') {
-        options.headers['Content-Type'] = 'application/json';
-        options.body = JSON.stringify(options.body);
-      }
-
-      try {
-        const res = await fetch(url, options);
-        if (res.status === 401) {
-          showLoginPage();
-        }
-        return res;
-      } catch (err) {
-        console.error('API 请求异常:', err);
-        throw err;
-      }
-    }
-
-    // 视图切换控制 (全屏登录页 / 全屏初始化页 / 主控制台)
-    function showLoginPage() {
-      const loginPage = document.getElementById('loginPage');
-      const initPage = document.getElementById('initPage');
-      const mainApp = document.getElementById('mainApp');
-      if (loginPage) loginPage.style.display = 'flex';
-      if (initPage) initPage.style.display = 'none';
-      if (mainApp) mainApp.style.display = 'none';
-      initPasswordToggles();
-      setTimeout(() => {
-        const u = document.getElementById('loginUsername');
-        const p = document.getElementById('loginPassword');
-        if (u && !u.value) u.focus();
-        else if (p) p.focus();
-      }, 100);
-    }
-
-    function showInitPage() {
-      const loginPage = document.getElementById('loginPage');
-      const initPage = document.getElementById('initPage');
-      const mainApp = document.getElementById('mainApp');
-      if (initPage) initPage.style.display = 'flex';
-      if (loginPage) loginPage.style.display = 'none';
-      if (mainApp) mainApp.style.display = 'none';
-      initPasswordToggles();
-      setTimeout(() => document.getElementById('initPassword')?.focus(), 100);
-    }
-
-    function showMainApp() {
-      const loginPage = document.getElementById('loginPage');
-      const initPage = document.getElementById('initPage');
-      const mainApp = document.getElementById('mainApp');
-      if (loginPage) loginPage.style.display = 'none';
-      if (initPage) initPage.style.display = 'none';
-      if (mainApp) mainApp.style.display = 'flex';
-      initPasswordToggles();
-      updateLogoutBtn();
-    }
-
-    function updateLogoutBtn() {
-      const btn = document.getElementById('logoutBtn');
-      if (btn) {
-        btn.style.display = sessionStorage.getItem('rddns_auth') ? 'inline-flex' : 'none';
-      }
-    }
-
-    function logout() {
-      sessionStorage.removeItem('rddns_auth');
-      showToast('已退出登录', 'info');
-      showLoginPage();
-    }
-
-    async function submitInitAuth() {
-      const username = document.getElementById('initUsername').value.trim();
-      const password = document.getElementById('initPassword').value;
-      const confirm = document.getElementById('initPasswordConfirm').value;
-
-      if (!username) {
-        showToast('请输入管理员用户名！', 'error');
-        return;
-      }
-      if (!password || password.length < 4) {
-        showToast('密码长度至少需要 4 位！', 'error');
-        return;
-      }
-      if (password !== confirm) {
-        showToast('两次输入的密码不一致！', 'error');
-        return;
-      }
-
-      const submitBtn = document.getElementById('initSubmitBtn');
-      if (submitBtn) submitBtn.disabled = true;
-
-      try {
-        const res = await fetch('/api/v1/auth/init', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const json = await res.json();
-        if (json.success) {
-          const authKey = btoa(username + ':' + password);
-          sessionStorage.setItem('rddns_auth', authKey);
-          showMainApp();
-          showToast('管理员账号初始化成功并已登录！', 'success');
-          loadConfig();
-          loadNetworkInterfaces();
-          initSSE();
-        } else {
-          showToast('初始化失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('请求异常: ' + e, 'error');
-      } finally {
-        if (submitBtn) submitBtn.disabled = false;
-      }
-    }
-
-    async function submitLogin() {
-      const username = document.getElementById('loginUsername').value.trim();
-      const password = document.getElementById('loginPassword').value;
-
-      if (!username || !password) {
-        showToast('请输入用户名和密码！', 'error');
-        return;
-      }
-
-      const submitBtn = document.getElementById('loginSubmitBtn');
-      if (submitBtn) submitBtn.disabled = true;
-
-      try {
-        const res = await fetch('/api/v1/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const json = await res.json();
-        if (json.success) {
-          const authKey = btoa(username + ':' + password);
-          sessionStorage.setItem('rddns_auth', authKey);
-          showMainApp();
-          showToast('登录成功，欢迎使用 rddns！', 'success');
-          loadConfig();
-          loadNetworkInterfaces();
-          initSSE();
-        } else {
-          showToast('登录失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('请求异常: ' + e, 'error');
-      } finally {
-        if (submitBtn) submitBtn.disabled = false;
-      }
-    }
-
-    // 侧边栏导航切换
-    const SECTION_INFO = {
-      'tab-dns': {
-        title: 'DNS 服务商与解析',
-        desc: '配置域名服务商凭据、IPv4 / IPv6 获取规则与动态解析目标'
-      },
-      'tab-notify': {
-        title: '通知与告警推送',
-        desc: '配置微信公众号、企业微信、SMTP 邮件等通道与告警触发策略'
-      },
-      'tab-system': {
-        title: '系统与安全设置',
-        desc: '配置全局轮询间隔、安全访问控制与 Web 登录身份认证'
-      }
-    };
-
-    function switchNav(tabId) {
-      document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-      
-      const activeTab = document.getElementById(tabId);
-      if (activeTab) activeTab.style.display = 'block';
-      
-      const navItem = document.getElementById(`nav-${tabId}`);
-      if (navItem) navItem.classList.add('active');
-
-      const dnsSubSidebar = document.getElementById('dnsSubSidebar');
-      if (dnsSubSidebar) {
-        dnsSubSidebar.style.display = (tabId === 'tab-dns') ? 'flex' : 'none';
-      }
-
-      // 控制工作台吸顶 Header 展示内容 (DNS 模式展示任务栏，其它模式展示模块标题)
-      const headerDnsTaskBar = document.getElementById('headerDnsTaskBar');
-      const headerStandardBar = document.getElementById('headerStandardBar');
-      const titleEl = document.getElementById('currentSectionTitle');
-      const descEl = document.getElementById('currentSectionDesc');
-
-      if (tabId === 'tab-dns') {
-        if (headerDnsTaskBar) headerDnsTaskBar.style.display = 'flex';
-        if (headerStandardBar) headerStandardBar.style.display = 'none';
-      } else {
-        if (headerDnsTaskBar) headerDnsTaskBar.style.display = 'none';
-        if (headerStandardBar) headerStandardBar.style.display = 'flex';
-        if (SECTION_INFO[tabId]) {
-          if (titleEl) titleEl.innerText = SECTION_INFO[tabId].title;
-          if (descEl) descEl.innerText = SECTION_INFO[tabId].desc;
-        }
-      }
-
-      // 切换标签页时将工作台滚动主体重置回顶部
-      const workspaceBody = document.querySelector('.workspace-body');
-      if (workspaceBody) workspaceBody.scrollTop = 0;
-    }
-
-    // 常用邮箱预设数据字典
-    const EMAIL_PRESETS = {
-      qq: { server: 'smtp.qq.com', port: 465, ssl: true },
-      '163': { server: 'smtp.163.com', port: 465, ssl: true },
-      '126': { server: 'smtp.126.com', port: 465, ssl: true },
-      qq_enterprise: { server: 'smtp.exmail.qq.com', port: 465, ssl: true },
-      aliyun: { server: 'smtp.aliyun.com', port: 465, ssl: true },
-      gmail: { server: 'smtp.gmail.com', port: 465, ssl: true },
-      outlook: { server: 'smtp.office365.com', port: 587, ssl: false },
-      '139': { server: 'smtp.139.com', port: 465, ssl: true }
-    };
-
-    function applyEmailPreset() {
-      const val = document.getElementById('emailPreset').value;
-      if (val && EMAIL_PRESETS[val]) {
-        const p = EMAIL_PRESETS[val];
-        document.getElementById('emailSmtpServer').value = p.server;
-        document.getElementById('emailSmtpPort').value = p.port;
-        document.getElementById('emailUseSsl').checked = p.ssl;
-      }
-    }
-
-    // 初始化所有密码输入框的显隐切换（小眼睛按钮）
-    function initPasswordToggles() {
-      document.querySelectorAll('input[type="password"], input.password-toggleable').forEach(input => {
-        if (input.parentElement && input.parentElement.classList.contains('password-input-wrapper')) return;
-        input.classList.add('password-toggleable');
-        const wrapper = document.createElement('div');
-        wrapper.className = 'password-input-wrapper';
-        input.parentNode.insertBefore(wrapper, input);
-        wrapper.appendChild(input);
-
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn-toggle-eye';
-        btn.title = '显示明文';
-        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
-        btn.onclick = (e) => {
-          e.preventDefault();
-          if (input.type === 'password') {
-            input.type = 'text';
-            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
-            btn.title = '隐藏内容';
-          } else {
-            input.type = 'password';
-            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
-            btn.title = '显示明文';
-          }
-        };
-        wrapper.appendChild(btn);
-      });
-    }
-
-    function autoFillFromAddress() {
-      const username = document.getElementById('emailUsername').value.trim();
-      const fromInput = document.getElementById('emailFrom');
-      if (username.includes('@') && (!fromInput.value || fromInput.dataset.autofilled === "true")) {
-        fromInput.value = username;
-        fromInput.dataset.autofilled = "true";
-      }
-    }
-
-    function toggleWecomMode() {
-      const mode = document.getElementById('wecomMode').value;
-      document.getElementById('wecomBotField').style.display = mode === 'bot' ? 'block' : 'none';
-      document.getElementById('wecomAppFields').style.display = mode === 'app' ? 'block' : 'none';
-    }
-
-    // 渲染出站物理网卡下拉选项
-    function renderHttpInterfaceOptions(selectedVal) {
-      const selectEl = document.getElementById('dnsHttpInterface');
-      if (!selectEl) return;
-      const current = selectedVal !== undefined ? selectedVal : (selectEl.value || '');
-      let html = '<option value="">使用默认系统路由 (推荐)</option>';
-      availableInterfaces.forEach(iface => {
-        const isSel = (iface.name === current) ? 'selected' : '';
-        html += `<option value="${escapeHtml(iface.name)}" ${isSel}>${escapeHtml(iface.display_name || iface.name)}</option>`;
-      });
-      if (current && !availableInterfaces.some(i => i.name === current)) {
-        html += `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (自定义/已离线)</option>`;
-      }
-      selectEl.innerHTML = html;
-    }
-
-    // 异步拉取系统物理与虚拟网卡列表
-    async function loadNetworkInterfaces() {
-      try {
-        const res = await apiFetch('/api/v1/network-interfaces');
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          availableInterfaces = json.data;
-          renderHttpInterfaceOptions();
-          if (document.getElementById('ipv4SourceType')?.value === 'net_interface') {
-            renderIpFields('ipv4');
-          }
-          if (document.getElementById('ipv6SourceType')?.value === 'net_interface') {
-            renderIpFields('ipv6');
-          }
-        }
-      } catch (e) {
-        console.warn('获取网卡列表失败:', e);
-      }
-    }
-
-    // 处理网卡下拉框选择变化
-    function handleNetIfSelect(vType) {
-      const selVal = document.getElementById(`${vType}NetIfSelect`)?.value;
-      const customInput = document.getElementById(`${vType}NetIfCustom`);
-      if (selVal === '__custom__') {
-        if (customInput) {
-          customInput.style.display = 'block';
-          customInput.focus();
-        }
-      } else {
-        if (customInput) {
-          customInput.style.display = 'none';
-          customInput.value = selVal || '';
-        }
-      }
-      if (vType === 'ipv4') {
-        savedIpv4NetIf = getNetIfValue('ipv4') || '';
-      } else {
-        savedIpv6NetIf = getNetIfValue('ipv6') || '';
-      }
-    }
-
-    // 获取选定网卡名称值
-    function getNetIfValue(vType) {
-      const selectEl = document.getElementById(`${vType}NetIfSelect`);
-      if (!selectEl) return null;
-      if (selectEl.value === '__custom__') {
-        return document.getElementById(`${vType}NetIfCustom`)?.value.trim() || null;
-      }
-      return selectEl.value.trim() || null;
-    }
-
-    // 处理 TTL 下拉框选择变化
-    function handleTtlSelect() {
-      const selVal = document.getElementById('dnsTtlSelect')?.value;
-      const customInput = document.getElementById('dnsTtlCustom');
-      if (selVal === '__custom__') {
-        if (customInput) {
-          customInput.style.display = 'block';
-          customInput.focus();
-        }
-      } else {
-        if (customInput) {
-          customInput.style.display = 'none';
-          customInput.value = '';
-        }
-      }
-    }
-
-    // 获取选定的 TTL 数值 (秒)
-    function getTtlValue() {
-      const selectEl = document.getElementById('dnsTtlSelect');
-      if (!selectEl) return null;
-      if (selectEl.value === '__custom__') {
-        const raw = document.getElementById('dnsTtlCustom')?.value.trim();
-        const val = parseInt(raw);
-        return isNaN(val) ? null : val;
-      }
-      if (!selectEl.value) return null;
-      const val = parseInt(selectEl.value);
-      return isNaN(val) ? null : val;
-    }
-
-    // 回显设置 TTL 状态
-    function setTtlValue(ttl) {
-      const selectEl = document.getElementById('dnsTtlSelect');
-      const customInput = document.getElementById('dnsTtlCustom');
-      if (!selectEl || !customInput) return;
-      if (ttl === undefined || ttl === null || ttl === '' || ttl === 0) {
-        selectEl.value = '';
-        customInput.style.display = 'none';
-        customInput.value = '';
-      } else {
-        const strTtl = String(ttl);
-        const hasOption = Array.from(selectEl.options).some(opt => opt.value === strTtl);
-        if (hasOption) {
-          selectEl.value = strTtl;
-          customInput.style.display = 'none';
-          customInput.value = '';
-        } else {
-          selectEl.value = '__custom__';
-          customInput.style.display = 'block';
-          customInput.value = strTtl;
-        }
-      }
-    }
-
-    // 渲染 DNS 服务商动态凭据表单
-    function renderProviderFields() {
-      const type = document.getElementById('dnsProviderType')?.value || 'cloudflare';
-      const container = document.getElementById('providerDynamicFields');
-      if (!container) return;
-      if (type === 'cloudflare') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API Token (推荐)</label>
-              <input type="password" id="cfApiToken" placeholder="Cloudflare API 令牌 (编辑 Zone 权限)" />
-            </div>
-            <div class="form-group">
-              <label>或使用 Global API Key</label>
-              <input type="password" id="cfApiKey" placeholder="Global API Key (如不使用 Token)" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Cloudflare 注册邮箱 (仅搭配 Global API Key 使用时必填)</label>
-            <input type="text" id="cfEmail" placeholder="your_email@example.com" />
-          </div>`;
-      } else if (type === 'ali_dns') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessKey ID</label>
-              <input type="text" id="aliAccessKeyId" placeholder="阿里云 RAM AccessKey ID" />
-            </div>
-            <div class="form-group">
-              <label>AccessKey Secret</label>
-              <input type="password" id="aliAccessKeySecret" placeholder="阿里云 RAM AccessKey Secret" />
-            </div>
-          </div>`;
-      } else if (type === 'tencent_cloud') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>SecretId</label>
-              <input type="text" id="tcSecretId" placeholder="腾讯云 API SecretId" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey</label>
-              <input type="password" id="tcSecretKey" placeholder="腾讯云 API SecretKey" />
-            </div>
-          </div>`;
-      } else if (type === 'huawei_cloud') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessKey ID (AK)</label>
-              <input type="text" id="hwAccessKeyId" placeholder="华为云 访问密钥 AK" />
-            </div>
-            <div class="form-group">
-              <label>Secret Access Key (SK)</label>
-              <input type="password" id="hwSecretAccessKey" placeholder="华为云 访问密钥 SK" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label>自定义 Endpoint (可选，默认 https://dns.myhuaweicloud.com)</label>
-            <input type="text" id="hwEndpoint" placeholder="https://dns.myhuaweicloud.com" />
-          </div>`;
-      } else if (type === 'porkbun') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API Key</label>
-              <input type="text" id="pbApiKey" placeholder="pk1_..." />
-            </div>
-            <div class="form-group">
-              <label>Secret API Key</label>
-              <input type="password" id="pbSecretKey" placeholder="sk1_..." />
-            </div>
-          </div>`;
-      } else if (type === 'godaddy') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API Key</label>
-              <input type="text" id="gdApiKey" placeholder="GoDaddy API Key" />
-            </div>
-            <div class="form-group">
-              <label>API Secret</label>
-              <input type="password" id="gdApiSecret" placeholder="GoDaddy API Secret" />
-            </div>
-          </div>`;
-      } else if (type === 'dynv6') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>HTTP Token</label>
-            <input type="password" id="dynv6Token" placeholder="Dynv6 API Token" />
-          </div>`;
-      } else if (type === 'baidu_cloud') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessKey (AK)</label>
-              <input type="text" id="bdAccessKeyId" placeholder="百度云 AccessKey ID" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey (SK)</label>
-              <input type="password" id="bdSecretAccessKey" placeholder="百度云 Secret Access Key" />
-            </div>
-          </div>`;
-      } else if (type === 'traffic_route') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessKey ID (AK)</label>
-              <input type="text" id="volcAccessKeyId" placeholder="火山引擎 AccessKey ID" />
-            </div>
-            <div class="form-group">
-              <label>Secret Access Key (SK)</label>
-              <input type="password" id="volcSecretAccessKey" placeholder="火山引擎 Secret Access Key" />
-            </div>
-          </div>`;
-      } else if (type === 'namecheap') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>动态 DNS 密码 (Dynamic DNS Password)</label>
-            <input type="password" id="ncPassword" placeholder="Namecheap Advanced DNS 动态解析密码" />
-          </div>`;
-      } else if (type === 'namesilo') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>API Key</label>
-            <input type="password" id="nsApiKey" placeholder="NameSilo API 密钥" />
-          </div>`;
-      } else if (type === 'spaceship') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API Key (X-API-Key)</label>
-              <input type="text" id="spApiKey" placeholder="Spaceship API Key" />
-            </div>
-            <div class="form-group">
-              <label>API Secret (X-API-Secret)</label>
-              <input type="password" id="spApiSecret" placeholder="Spaceship API Secret" />
-            </div>
-          </div>`;
-      } else if (type === 'dynadot') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>动态 DNS 密码 (Dynamic DNS Password)</label>
-            <input type="password" id="ddPassword" placeholder="Dynadot 域名设置中的动态 DNS 密码" />
-          </div>`;
-      } else if (type === 'vercel') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>Vercel Token</label>
-              <input type="password" id="vcToken" placeholder="Vercel 个人 Access Token" />
-            </div>
-            <div class="form-group">
-              <label>Team ID (团队域名选填)</label>
-              <input type="text" id="vcTeamId" placeholder="team_xxxx (个人账户留空)" />
-            </div>
-          </div>`;
-      } else if (type === 'rainyun') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API Key (x-api-key)</label>
-              <input type="password" id="ryApiKey" placeholder="雨云控制台 API 密钥" />
-            </div>
-            <div class="form-group">
-              <label>Domain ID (域名编号/选填)</label>
-              <input type="text" id="ryDomainId" placeholder="自动根据域名查询 / 可手动指定" />
-            </div>
-          </div>`;
-      } else if (type === 'cloudns') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>Auth ID (或 sub-auth-id)</label>
-              <input type="text" id="cldAuthId" placeholder="ClouDNS HTTP API Auth ID" />
-            </div>
-            <div class="form-group">
-              <label>Auth Password</label>
-              <input type="password" id="cldAuthPassword" placeholder="ClouDNS API 密码" />
-            </div>
-          </div>`;
-      } else if (type === 'gcore') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>API Key (Permanent API-Key)</label>
-            <input type="password" id="gcApiKey" placeholder="Gcore 永久 API 令牌 (APIKey xxx)" />
-          </div>`;
-      } else if (type === 'name_com') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>用户名 (Username)</label>
-              <input type="text" id="ncUsername" placeholder="Name.com 用户名" />
-            </div>
-            <div class="form-group">
-              <label>API Token</label>
-              <input type="password" id="ncApiToken" placeholder="Name.com API Token" />
-            </div>
-          </div>`;
-      } else if (type === 'dnsla') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>API ID</label>
-              <input type="text" id="dnslaApiId" placeholder="DNS.LA API ID" />
-            </div>
-            <div class="form-group">
-              <label>API 密钥 (API Secret)</label>
-              <input type="password" id="dnslaApiSecret" placeholder="DNS.LA API 密钥" />
-            </div>
-          </div>`;
-      } else if (type === 'aliesa') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessKey ID</label>
-              <input type="text" id="esaAccessKeyId" placeholder="阿里云 AccessKey ID" />
-            </div>
-            <div class="form-group">
-              <label>AccessKey Secret</label>
-              <input type="password" id="esaAccessKeySecret" placeholder="阿里云 AccessKey Secret" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label>自定义 ESA Endpoint (选填)</label>
-            <input type="text" id="esaEndpoint" placeholder="默认: https://esa.cn-hangzhou.aliyuncs.com" />
-          </div>`;
-      } else if (type === 'edgeone') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>SecretId</label>
-              <input type="text" id="eoSecretId" placeholder="腾讯云 API SecretId" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey</label>
-              <input type="password" id="eoSecretKey" placeholder="腾讯云 API SecretKey" />
-            </div>
-          </div>
-          <p class="form-tip">💡 提示：支持普通 DNS 解析同步，亦支持动态源站组更新。如需同步源站组，可在下方域名中追加参数，例如 <code>yourdomain.com?GroupId=og-xxxx</code> 或 <code>yourdomain.com?OriginGroupName=MyOrigin</code></p>`;
-      } else if (type === 'nowcn') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessInstanceID</label>
-              <input type="text" id="nowcnId" placeholder="时代互联 AccessInstanceID" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey (密钥)</label>
-              <input type="password" id="nowcnSecret" placeholder="时代互联 API 密钥" />
-            </div>
-          </div>`;
-      } else if (type === 'eranet') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessInstanceID</label>
-              <input type="text" id="eranetId" placeholder="时代互联国际版 AccessInstanceID" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey (密钥)</label>
-              <input type="password" id="eranetSecret" placeholder="时代互联国际版 API 密钥" />
-            </div>
-          </div>`;
-      } else if (type === 'tnethk') {
-        container.innerHTML = `
-          <div class="grid-2">
-            <div class="form-group">
-              <label>AccessInstanceID</label>
-              <input type="text" id="tnetId" placeholder="TNetHK AccessInstanceID" />
-            </div>
-            <div class="form-group">
-              <label>SecretKey (密钥)</label>
-              <input type="password" id="tnetSecret" placeholder="TNetHK API 密钥" />
-            </div>
-          </div>`;
-      } else if (type === 'nsone') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>API Key (Secret)</label>
-            <input type="password" id="nsoneApiKey" placeholder="IBM NS1 Connect API Key" />
-          </div>`;
-      } else if (type === 'hipm_dnsmgr') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>API Token</label>
-            <input type="password" id="hipmApiToken" placeholder="HiPM DNSMgr API Token" />
-          </div>
-          <div class="form-group">
-            <label>DNSMgr 服务地址 (选填)</label>
-            <input type="text" id="hipmEndpoint" placeholder="默认: https://dnsmgr.example.com" />
-          </div>`;
-      } else if (type === 'callback') {
-        container.innerHTML = `
-          <div class="form-group">
-            <label>Callback URL (支持宏变量: #{ip}, #{domain}, #{recordType})</label>
-            <input type="text" id="cbUrl" placeholder="https://api.myprovider.com/update?ip=#{ip}&domain=#{domain}" />
-          </div>`;
-      }
-    }
-
-    // 渲染 IP 获取途径表单
-    function renderIpFields(vType) {
-      const rawSource = document.getElementById(`${vType}SourceType`)?.value || 'url';
-      const sourceType = (rawSource === 'netInterface' || rawSource === 'net_interface') ? 'net_interface' : (rawSource === 'cmd' ? 'command' : rawSource);
-      const fieldContainer = document.getElementById(`${vType}DynamicField`);
-      if (!fieldContainer) return;
-
-      if (sourceType === 'url') {
-        const defaultUrls = vType === 'ipv4'
-          ? 'https://api.ipify.org, https://myip.ipip.net/ip, https://ddns.oray.com/checkip'
-          : 'https://api64.ipify.org, https://speed.neu6.edu.cn/getIP.php, https://6.ipw.cn';
-        fieldContainer.innerHTML = `
-          <label>探测 URL (多个接口用英文逗号分隔，失败自动回退)</label>
-          <input type="text" id="${vType}Urls" value="${defaultUrls}" />`;
-      } else if (sourceType === 'net_interface') {
-        const currentSaved = (vType === 'ipv4' ? savedIpv4NetIf : savedIpv6NetIf) || '';
-        let optionsHtml = `<option value="">-- 请选择网卡设备 --</option>`;
-        let matched = false;
-
-        availableInterfaces.forEach(iface => {
-          const isSelected = (iface.name === currentSaved);
-          if (isSelected) matched = true;
-          optionsHtml += `<option value="${escapeHtml(iface.name)}" ${isSelected ? 'selected' : ''}>${escapeHtml(iface.display_name || iface.name)}</option>`;
-        });
-
-        const isCustomSelected = (!matched && currentSaved);
-        optionsHtml += `<option value="__custom__" ${isCustomSelected ? 'selected' : ''}>手动输入自定义网卡名称...</option>`;
-
-        fieldContainer.innerHTML = `
-          <label>选择网卡设备 (自动探测当前主机网卡)</label>
-          <select id="${vType}NetIfSelect" onchange="handleNetIfSelect('${vType}')">
-            ${optionsHtml}
-          </select>
-          <input type="text" id="${vType}NetIfCustom" placeholder="例如 eth0 或 以太网" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? escapeHtml(currentSaved) : ''}" />`;
-      } else if (sourceType === 'command') {
-        fieldContainer.innerHTML = `
-          <label>执行命令 / 脚本</label>
-          <input type="text" id="${vType}Cmd" placeholder="例如 curl -s http://ip.sb" />`;
-      }
-    }
-
-    // 加载配置
-    async function loadConfig() {
-      try {
-        const res = await apiFetch('/api/v1/config');
-        if (res.status === 401) {
-          showLoginPage();
-          return;
-        }
-        const json = await res.json();
-        if (json.success) {
-          globalConfig = json.data;
-          populateForm(globalConfig);
-          showMainApp();
-        }
-      } catch (e) {
-        console.error('加载配置异常:', e);
-      }
-    }
-
-    // ==========================================
-    // 多任务状态管理 (Master-Detail 双栏主从架构)
-    // ==========================================
-    let currentTaskIndex = 0;
-
-    const PROVIDER_DISPLAY_NAMES = {
-      cloudflare: 'Cloudflare',
-      ali_dns: '阿里云 AliDNS',
-      tencent_cloud: '腾讯云 DNSPod',
-      huawei_cloud: '华为云',
-      porkbun: 'Porkbun',
-      godaddy: 'GoDaddy',
-      dynv6: 'Dynv6',
-      baidu_cloud: '百度智能云',
-      traffic_route: '火山引擎',
-      namecheap: 'Namecheap',
-      namesilo: 'NameSilo',
-      spaceship: 'Spaceship',
-      dynadot: 'Dynadot',
-      vercel: 'Vercel',
-      rainyun: '雨云',
-      cloudns: 'ClouDNS',
-      gcore: 'Gcore',
-      name_com: 'Name.com',
-      dnsla: 'DNS.LA',
-      aliesa: '阿里 ESA',
-      edgeone: '腾讯 EdgeOne',
-      nowcn: '时代互联',
-      eranet: 'Eranet 国际',
-      tnethk: 'TNetHK',
-      nsone: 'IBM NS1',
-      hipm_dnsmgr: 'HiPM DNSMgr',
-      callback: '自定义 Callback'
-    };
-
-    function getProviderDisplayName(pType) {
-      return PROVIDER_DISPLAY_NAMES[pType] || pType || '未配置服务商';
-    }
-
-    // 渲染左侧解析任务列表 (Master)
-    function renderTaskList() {
-      const container = document.getElementById('taskMasterList');
-      const badge = document.getElementById('taskCountBadge');
-      if (!container || !globalConfig) return;
-
-      const tasks = globalConfig.dns_tasks || [];
-      if (badge) badge.innerText = tasks.length.toString();
-
-      if (tasks.length === 0) {
-        container.innerHTML = `<div style="text-align:center; padding:20px; color:var(--text-dim); font-size:0.8rem;">暂无解析任务，点击上方新建</div>`;
-        return;
-      }
-
-      if (currentTaskIndex >= tasks.length) {
-        currentTaskIndex = tasks.length - 1;
-      }
-
-      let html = '';
-      tasks.forEach((task, idx) => {
-        const isActive = idx === currentTaskIndex;
-        const isEnabled = task.enabled !== false;
-        const pName = getProviderDisplayName(task.provider?.type);
-        
-        let domainSummary = '未配置解析域名';
-        if (task.ipv4?.domains && task.ipv4.domains.length > 0) {
-          domainSummary = task.ipv4.domains[0] + (task.ipv4.domains.length > 1 ? ` (+${task.ipv4.domains.length - 1})` : '');
-        } else if (task.ipv6?.domains && task.ipv6.domains.length > 0) {
-          domainSummary = task.ipv6.domains[0] + (task.ipv6.domains.length > 1 ? ` (+${task.ipv6.domains.length - 1})` : '');
-        }
-
-        const dotStyle = isEnabled 
-          ? 'background:var(--success); box-shadow:0 0 6px var(--success);' 
-          : 'background:var(--text-dim); box-shadow:none;';
-
-        html += `
-          <div class="task-item-card ${isActive ? 'active' : ''}" onclick="switchTask(${idx})">
-            <div class="task-item-head">
-              <div class="task-item-name" title="${task.name || '未命名任务'}">
-                <span class="dot" style="width:7px; height:7px; border-radius:50%; display:inline-block; ${dotStyle}"></span>
-                <span>${task.name || '未命名任务'}</span>
-              </div>
-              <span class="task-item-provider-tag">${pName}</span>
-            </div>
-            <div class="task-item-domain" title="${domainSummary}">${domainSummary}</div>
-          </div>
-        `;
-      });
-
-      container.innerHTML = html;
-    }
-
-    // 填充单个任务的配置到右侧表单 (Detail)
-    function populateCurrentTaskForm(task) {
-      if (!task) return;
-
-      // 1. 任务基础信息
-      const nameInput = document.getElementById('currentTaskNameInput');
-      if (nameInput) nameInput.value = task.name || '';
-      
-      const enabledCheck = document.getElementById('currentTaskEnabled');
-      if (enabledCheck) enabledCheck.checked = task.enabled !== false;
-
-      // 2. TTL
-      setTtlValue(task.ttl);
-
-      // 3. DNS Provider
-      if (task.provider && task.provider.type) {
-        document.getElementById('dnsProviderType').value = task.provider.type;
-        renderProviderFields();
-
-        if (task.provider.type === 'cloudflare') {
-          if (document.getElementById('cfApiToken')) document.getElementById('cfApiToken').value = task.provider.api_token || '';
-          if (document.getElementById('cfApiKey')) document.getElementById('cfApiKey').value = task.provider.api_key || '';
-          if (document.getElementById('cfEmail')) document.getElementById('cfEmail').value = task.provider.email || '';
-        } else if (task.provider.type === 'ali_dns') {
-          if (document.getElementById('aliAccessKeyId')) document.getElementById('aliAccessKeyId').value = task.provider.access_key_id || '';
-          if (document.getElementById('aliAccessKeySecret')) document.getElementById('aliAccessKeySecret').value = task.provider.access_key_secret || '';
-        } else if (task.provider.type === 'tencent_cloud') {
-          if (document.getElementById('tcSecretId')) document.getElementById('tcSecretId').value = task.provider.secret_id || '';
-          if (document.getElementById('tcSecretKey')) document.getElementById('tcSecretKey').value = task.provider.secret_key || '';
-        } else if (task.provider.type === 'huawei_cloud') {
-          if (document.getElementById('hwAccessKeyId')) document.getElementById('hwAccessKeyId').value = task.provider.access_key_id || '';
-          if (document.getElementById('hwSecretAccessKey')) document.getElementById('hwSecretAccessKey').value = task.provider.secret_access_key || '';
-          if (document.getElementById('hwEndpoint')) document.getElementById('hwEndpoint').value = task.provider.endpoint || '';
-        } else if (task.provider.type === 'porkbun') {
-          if (document.getElementById('pbApiKey')) document.getElementById('pbApiKey').value = task.provider.api_key || '';
-          if (document.getElementById('pbSecretKey')) document.getElementById('pbSecretKey').value = task.provider.secret_key || '';
-        } else if (task.provider.type === 'godaddy') {
-          if (document.getElementById('gdApiKey')) document.getElementById('gdApiKey').value = task.provider.api_key || '';
-          if (document.getElementById('gdApiSecret')) document.getElementById('gdApiSecret').value = task.provider.api_secret || '';
-        } else if (task.provider.type === 'dynv6') {
-          if (document.getElementById('dynv6Token')) document.getElementById('dynv6Token').value = task.provider.token || '';
-        } else if (task.provider.type === 'baidu_cloud') {
-          if (document.getElementById('bdAccessKeyId')) document.getElementById('bdAccessKeyId').value = task.provider.access_key_id || '';
-          if (document.getElementById('bdSecretAccessKey')) document.getElementById('bdSecretAccessKey').value = task.provider.secret_access_key || '';
-        } else if (task.provider.type === 'traffic_route') {
-          if (document.getElementById('volcAccessKeyId')) document.getElementById('volcAccessKeyId').value = task.provider.access_key_id || '';
-          if (document.getElementById('volcSecretAccessKey')) document.getElementById('volcSecretAccessKey').value = task.provider.secret_access_key || '';
-        } else if (task.provider.type === 'namecheap') {
-          if (document.getElementById('ncPassword')) document.getElementById('ncPassword').value = task.provider.password || '';
-        } else if (task.provider.type === 'namesilo') {
-          if (document.getElementById('nsApiKey')) document.getElementById('nsApiKey').value = task.provider.api_key || '';
-        } else if (task.provider.type === 'spaceship') {
-          if (document.getElementById('spApiKey')) document.getElementById('spApiKey').value = task.provider.api_key || '';
-          if (document.getElementById('spApiSecret')) document.getElementById('spApiSecret').value = task.provider.api_secret || '';
-        } else if (task.provider.type === 'dynadot') {
-          if (document.getElementById('ddPassword')) document.getElementById('ddPassword').value = task.provider.password || '';
-        } else if (task.provider.type === 'vercel') {
-          if (document.getElementById('vcToken')) document.getElementById('vcToken').value = task.provider.token || '';
-          if (document.getElementById('vcTeamId')) document.getElementById('vcTeamId').value = task.provider.team_id || '';
-        } else if (task.provider.type === 'rainyun') {
-          if (document.getElementById('ryApiKey')) document.getElementById('ryApiKey').value = task.provider.api_key || '';
-          if (document.getElementById('ryDomainId')) document.getElementById('ryDomainId').value = task.provider.domain_id || '';
-        } else if (task.provider.type === 'cloudns') {
-          if (document.getElementById('cldAuthId')) document.getElementById('cldAuthId').value = task.provider.auth_id || '';
-          if (document.getElementById('cldAuthPassword')) document.getElementById('cldAuthPassword').value = task.provider.auth_password || '';
-        } else if (task.provider.type === 'gcore') {
-          if (document.getElementById('gcApiKey')) document.getElementById('gcApiKey').value = task.provider.api_key || '';
-        } else if (task.provider.type === 'name_com') {
-          if (document.getElementById('ncUsername')) document.getElementById('ncUsername').value = task.provider.username || '';
-          if (document.getElementById('ncApiToken')) document.getElementById('ncApiToken').value = task.provider.api_token || '';
-        } else if (task.provider.type === 'dnsla') {
-          if (document.getElementById('dnslaApiId')) document.getElementById('dnslaApiId').value = task.provider.api_id || '';
-          if (document.getElementById('dnslaApiSecret')) document.getElementById('dnslaApiSecret').value = task.provider.api_secret || '';
-        } else if (task.provider.type === 'aliesa') {
-          if (document.getElementById('esaAccessKeyId')) document.getElementById('esaAccessKeyId').value = task.provider.access_key_id || '';
-          if (document.getElementById('esaAccessKeySecret')) document.getElementById('esaAccessKeySecret').value = task.provider.secret_access_key || '';
-          if (document.getElementById('esaEndpoint')) document.getElementById('esaEndpoint').value = task.provider.endpoint || '';
-        } else if (task.provider.type === 'edgeone') {
-          if (document.getElementById('eoSecretId')) document.getElementById('eoSecretId').value = task.provider.secret_id || '';
-          if (document.getElementById('eoSecretKey')) document.getElementById('eoSecretKey').value = task.provider.secret_key || '';
-        } else if (task.provider.type === 'nowcn') {
-          if (document.getElementById('nowcnId')) document.getElementById('nowcnId').value = task.provider.id || '';
-          if (document.getElementById('nowcnSecret')) document.getElementById('nowcnSecret').value = task.provider.secret || '';
-        } else if (task.provider.type === 'eranet') {
-          if (document.getElementById('eranetId')) document.getElementById('eranetId').value = task.provider.id || '';
-          if (document.getElementById('eranetSecret')) document.getElementById('eranetSecret').value = task.provider.secret || '';
-        } else if (task.provider.type === 'tnethk') {
-          if (document.getElementById('tnetId')) document.getElementById('tnetId').value = task.provider.id || '';
-          if (document.getElementById('tnetSecret')) document.getElementById('tnetSecret').value = task.provider.secret || '';
-        } else if (task.provider.type === 'nsone') {
-          if (document.getElementById('nsoneApiKey')) document.getElementById('nsoneApiKey').value = task.provider.api_key || '';
-        } else if (task.provider.type === 'hipm_dnsmgr') {
-          if (document.getElementById('hipmApiToken')) document.getElementById('hipmApiToken').value = task.provider.api_token || '';
-          if (document.getElementById('hipmEndpoint')) document.getElementById('hipmEndpoint').value = task.provider.endpoint || '';
-        }
-      }
-
-      // 3.5. 出站物理网卡 (HTTP Interface)
-      renderHttpInterfaceOptions(task.http_interface || '');
-
-      // 4. IPv4
-      if (task.ipv4) {
-        document.getElementById('ipv4Enable').checked = task.ipv4.enabled !== false;
-        const v4Src = (task.ipv4.source_type === 'netInterface' || task.ipv4.source_type === 'net_interface') ? 'net_interface' : (task.ipv4.source_type || 'url');
-        document.getElementById('ipv4SourceType').value = v4Src;
-        savedIpv4NetIf = task.ipv4.net_interface || '';
-        renderIpFields('ipv4');
-        if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
-          document.getElementById('ipv4Urls').value = task.ipv4.url_endpoints.join(', ');
-        }
-        if (task.ipv4.cmd && document.getElementById('ipv4Cmd')) {
-          document.getElementById('ipv4Cmd').value = task.ipv4.cmd;
-        }
-        document.getElementById('ipv4Regex').value = task.ipv4.regex || '';
-        document.getElementById('ipv4Domains').value = (task.ipv4.domains || []).join('\n');
-      }
-
-      // 5. IPv6
-      if (task.ipv6) {
-        document.getElementById('ipv6Enable').checked = task.ipv6.enabled !== false;
-        const v6Src = (task.ipv6.source_type === 'netInterface' || task.ipv6.source_type === 'net_interface') ? 'net_interface' : (task.ipv6.source_type || 'net_interface');
-        document.getElementById('ipv6SourceType').value = v6Src;
-        savedIpv6NetIf = task.ipv6.net_interface || '';
-        renderIpFields('ipv6');
-        if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
-          document.getElementById('ipv6Urls').value = task.ipv6.url_endpoints.join(', ');
-        }
-        if (task.ipv6.cmd && document.getElementById('ipv6Cmd')) {
-          document.getElementById('ipv6Cmd').value = task.ipv6.cmd;
-        }
-        document.getElementById('ipv6Regex').value = task.ipv6.regex || '';
-        document.getElementById('ipv6Domains').value = (task.ipv6.domains || []).join('\n');
-      }
-
-      initPasswordToggles();
-    }
-
-    // 从右侧表单采集当前任务数据，同步更新回 globalConfig.dns_tasks[index]
-    function collectCurrentTaskFromForm(index) {
-      if (!globalConfig || !globalConfig.dns_tasks || !globalConfig.dns_tasks[index]) return;
-
-      const pType = document.getElementById('dnsProviderType').value;
-      let providerObj = { type: pType };
-
-      if (pType === 'cloudflare') {
-        providerObj.api_token = document.getElementById('cfApiToken')?.value || null;
-        providerObj.api_key = document.getElementById('cfApiKey')?.value || null;
-        providerObj.email = document.getElementById('cfEmail')?.value || null;
-      } else if (pType === 'ali_dns') {
-        providerObj.access_key_id = document.getElementById('aliAccessKeyId')?.value || '';
-        providerObj.access_key_secret = document.getElementById('aliAccessKeySecret')?.value || '';
-      } else if (pType === 'tencent_cloud') {
-        providerObj.secret_id = document.getElementById('tcSecretId')?.value || '';
-        providerObj.secret_key = document.getElementById('tcSecretKey')?.value || '';
-      } else if (pType === 'huawei_cloud') {
-        providerObj.access_key_id = document.getElementById('hwAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('hwSecretAccessKey')?.value || '';
-        const ep = document.getElementById('hwEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      } else if (pType === 'porkbun') {
-        providerObj.api_key = document.getElementById('pbApiKey')?.value || '';
-        providerObj.secret_key = document.getElementById('pbSecretKey')?.value || '';
-      } else if (pType === 'godaddy') {
-        providerObj.api_key = document.getElementById('gdApiKey')?.value || '';
-        providerObj.api_secret = document.getElementById('gdApiSecret')?.value || '';
-      } else if (pType === 'dynv6') {
-        providerObj.token = document.getElementById('dynv6Token')?.value || '';
-      } else if (pType === 'baidu_cloud') {
-        providerObj.access_key_id = document.getElementById('bdAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('bdSecretAccessKey')?.value || '';
-      } else if (pType === 'traffic_route') {
-        providerObj.access_key_id = document.getElementById('volcAccessKeyId')?.value || '';
-        providerObj.secret_access_key = document.getElementById('volcSecretAccessKey')?.value || '';
-      } else if (pType === 'namecheap') {
-        providerObj.password = document.getElementById('ncPassword')?.value || '';
-      } else if (pType === 'namesilo') {
-        providerObj.api_key = document.getElementById('nsApiKey')?.value || '';
-      } else if (pType === 'spaceship') {
-        providerObj.api_key = document.getElementById('spApiKey')?.value || '';
-        providerObj.api_secret = document.getElementById('spApiSecret')?.value || '';
-      } else if (pType === 'dynadot') {
-        providerObj.password = document.getElementById('ddPassword')?.value || '';
-      } else if (pType === 'vercel') {
-        providerObj.token = document.getElementById('vcToken')?.value || '';
-        const tid = document.getElementById('vcTeamId')?.value?.trim();
-        if (tid) providerObj.team_id = tid;
-      } else if (pType === 'rainyun') {
-        providerObj.api_key = document.getElementById('ryApiKey')?.value || '';
-        const did = document.getElementById('ryDomainId')?.value?.trim();
-        if (did) providerObj.domain_id = did;
-      } else if (pType === 'cloudns') {
-        providerObj.auth_id = document.getElementById('cldAuthId')?.value || '';
-        providerObj.auth_password = document.getElementById('cldAuthPassword')?.value || '';
-      } else if (pType === 'gcore') {
-        providerObj.api_key = document.getElementById('gcApiKey')?.value || '';
-      } else if (pType === 'name_com') {
-        providerObj.username = document.getElementById('ncUsername')?.value || '';
-        providerObj.api_token = document.getElementById('ncApiToken')?.value || '';
-      } else if (pType === 'dnsla') {
-        providerObj.api_id = document.getElementById('dnslaApiId')?.value || '';
-        providerObj.api_secret = document.getElementById('dnslaApiSecret')?.value || '';
-      } else if (pType === 'aliesa') {
-        providerObj.access_key_id = document.getElementById('esaAccessKeyId')?.value || '';
-        providerObj.access_key_secret = document.getElementById('esaAccessKeySecret')?.value || '';
-        const ep = document.getElementById('esaEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      } else if (pType === 'edgeone') {
-        providerObj.secret_id = document.getElementById('eoSecretId')?.value || '';
-        providerObj.secret_key = document.getElementById('eoSecretKey')?.value || '';
-      } else if (pType === 'nowcn') {
-        providerObj.id = document.getElementById('nowcnId')?.value || '';
-        providerObj.secret = document.getElementById('nowcnSecret')?.value || '';
-      } else if (pType === 'eranet') {
-        providerObj.id = document.getElementById('eranetId')?.value || '';
-        providerObj.secret = document.getElementById('eranetSecret')?.value || '';
-      } else if (pType === 'tnethk') {
-        providerObj.id = document.getElementById('tnetId')?.value || '';
-        providerObj.secret = document.getElementById('tnetSecret')?.value || '';
-      } else if (pType === 'nsone') {
-        providerObj.api_key = document.getElementById('nsoneApiKey')?.value || '';
-      } else if (pType === 'hipm_dnsmgr') {
-        providerObj.api_token = document.getElementById('hipmApiToken')?.value || '';
-        const ep = document.getElementById('hipmEndpoint')?.value?.trim();
-        if (ep) providerObj.endpoint = ep;
-      }
-
-      const ipv4Urls = (document.getElementById('ipv4Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-      const ipv6Urls = (document.getElementById('ipv6Urls')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-
-      const taskName = document.getElementById('currentTaskNameInput')?.value.trim() || `解析任务 ${index + 1}`;
-      const taskEnabled = document.getElementById('currentTaskEnabled') ? document.getElementById('currentTaskEnabled').checked : true;
-
-      globalConfig.dns_tasks[index] = {
-        name: taskName,
-        enabled: taskEnabled,
-        provider: providerObj,
-        ttl: getTtlValue(),
-        http_interface: document.getElementById('dnsHttpInterface')?.value || null,
-        ipv4: {
-          enabled: document.getElementById('ipv4Enable').checked,
-          source_type: document.getElementById('ipv4SourceType').value,
-          url_endpoints: ipv4Urls,
-          net_interface: getNetIfValue('ipv4'),
-          cmd: document.getElementById('ipv4Cmd')?.value || null,
-          regex: document.getElementById('ipv4Regex').value || null,
-          domains: document.getElementById('ipv4Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
-        },
-        ipv6: {
-          enabled: document.getElementById('ipv6Enable').checked,
-          source_type: document.getElementById('ipv6SourceType').value,
-          url_endpoints: ipv6Urls,
-          net_interface: getNetIfValue('ipv6'),
-          cmd: document.getElementById('ipv6Cmd')?.value || null,
-          regex: document.getElementById('ipv6Regex').value || null,
-          domains: document.getElementById('ipv6Domains').value.split('\n').map(s => s.trim()).filter(Boolean)
-        }
-      };
-    }
-
-    // 切换当前激活的任务
-    function switchTask(targetIndex) {
-      if (targetIndex === currentTaskIndex) return;
-      collectCurrentTaskFromForm(currentTaskIndex);
-      currentTaskIndex = targetIndex;
-      populateCurrentTaskForm(globalConfig.dns_tasks[currentTaskIndex]);
-      renderTaskList();
-    }
-
-    // 新增解析任务
-    function addNewTask() {
-      collectCurrentTaskFromForm(currentTaskIndex);
-
-      const nextNum = (globalConfig.dns_tasks ? globalConfig.dns_tasks.length : 0) + 1;
-      const newTask = {
-        name: `解析任务 ${nextNum}`,
-        enabled: true,
-        provider: { type: 'cloudflare', api_token: '' },
-        ttl: null,
-        http_interface: null,
-        ipv4: {
-          enabled: true,
-          source_type: 'url',
-          url_endpoints: ['https://api.ipify.org', 'https://myip.ipip.net/ip', 'https://ddns.oray.com/checkip'],
-          net_interface: null,
-          cmd: null,
-          regex: null,
-          domains: []
-        },
-        ipv6: {
-          enabled: true,
-          source_type: 'net_interface',
-          url_endpoints: [],
-          net_interface: null,
-          cmd: null,
-          regex: null,
-          domains: []
-        }
-      };
-
-      if (!globalConfig.dns_tasks) globalConfig.dns_tasks = [];
-      globalConfig.dns_tasks.push(newTask);
-      currentTaskIndex = globalConfig.dns_tasks.length - 1;
-
-      populateCurrentTaskForm(newTask);
-      renderTaskList();
-      showToast(`已新建任务【${newTask.name}】！`, 'success');
-
-      // 聚焦任务名称输入框
-      const nameInput = document.getElementById('currentTaskNameInput');
-      if (nameInput) {
-        nameInput.focus();
-        nameInput.select();
-      }
-    }
-
-    // 删除当前选中的任务
-    function deleteCurrentTask() {
-      if (!globalConfig || !globalConfig.dns_tasks || globalConfig.dns_tasks.length <= 1) {
-        showToast('系统至少需要保留一个解析任务！', 'warning');
-        return;
-      }
-
-      const taskName = globalConfig.dns_tasks[currentTaskIndex]?.name || '当前任务';
-      if (!confirm(`确定要删除任务【${taskName}】吗？\n\n注意：此操作将在点击右上角【保存配置】后正式持久化生效。`)) {
-        return;
-      }
-
-      globalConfig.dns_tasks.splice(currentTaskIndex, 1);
-      if (currentTaskIndex >= globalConfig.dns_tasks.length) {
-        currentTaskIndex = globalConfig.dns_tasks.length - 1;
-      }
-
-      populateCurrentTaskForm(globalConfig.dns_tasks[currentTaskIndex]);
-      renderTaskList();
-      showToast(`已删除任务【${taskName}】`, 'success');
-    }
-
-    // 复制克隆当前任务
-    function cloneCurrentTask() {
-      if (!globalConfig || !globalConfig.dns_tasks || !globalConfig.dns_tasks[currentTaskIndex]) return;
-
-      collectCurrentTaskFromForm(currentTaskIndex);
-      const cloned = JSON.parse(JSON.stringify(globalConfig.dns_tasks[currentTaskIndex]));
-      cloned.name = `${cloned.name || '解析任务'} - 副本`;
-
-      globalConfig.dns_tasks.push(cloned);
-      currentTaskIndex = globalConfig.dns_tasks.length - 1;
-
-      populateCurrentTaskForm(cloned);
-      renderTaskList();
-      showToast(`已复制当前任务配置并生成【${cloned.name}】！`, 'success');
-    }
-
-    // 实时任务名称输入响应
-    function onTaskNameChange(val) {
-      if (globalConfig && globalConfig.dns_tasks && globalConfig.dns_tasks[currentTaskIndex]) {
-        globalConfig.dns_tasks[currentTaskIndex].name = val.trim() || '未命名任务';
-        renderTaskList();
-      }
-    }
-
-    // 实时任务启用状态响应
-    function onTaskEnabledChange(checked) {
-      if (globalConfig && globalConfig.dns_tasks && globalConfig.dns_tasks[currentTaskIndex]) {
-        globalConfig.dns_tasks[currentTaskIndex].enabled = checked;
-        renderTaskList();
-      }
-    }
-
-    // 全局回显配置 (首次加载或刷新配置时触发)
-    function populateForm(conf) {
-      document.getElementById('sysInterval').value = conf.interval_secs || 300;
-      document.getElementById('sysCacheTimes').value = conf.cache_times || 10;
-      document.getElementById('sysNotAllowWan').checked = conf.not_allow_wan_access;
-      document.getElementById('sysDnsServer').value = conf.dns_server || '';
-
-      if (conf.auth) {
-        document.getElementById('sysUsername').value = conf.auth.username;
-      }
-
-      // 如果任务列表为空，自动补全默认任务
-      if (!conf.dns_tasks || conf.dns_tasks.length === 0) {
-        conf.dns_tasks = [{
-          name: "默认解析任务",
-          enabled: true,
-          provider: { type: 'cloudflare', api_token: '' },
-          ttl: null,
-          ipv4: { enabled: true, source_type: 'url', url_endpoints: ['https://api.ipify.org'], net_interface: null, cmd: null, regex: null, domains: [] },
-          ipv6: { enabled: true, source_type: 'net_interface', url_endpoints: [], net_interface: null, cmd: null, regex: null, domains: [] }
-        }];
-      }
-
-      currentTaskIndex = 0;
-      renderTaskList();
-      populateCurrentTaskForm(conf.dns_tasks[currentTaskIndex]);
-
-      // Notifications
-      if (conf.notifications) {
-        const notif = conf.notifications;
-        document.getElementById('notifyOnSuccess').checked = notif.on_success !== false;
-        document.getElementById('notifyOnFailure').checked = notif.on_failure !== false;
-
-        if (notif.wechat_official) {
-          document.getElementById('wxOfficialEnable').checked = notif.wechat_official.enabled;
-          document.getElementById('wxOfficialAppId').value = notif.wechat_official.app_id || '';
-          document.getElementById('wxOfficialAppSecret').value = notif.wechat_official.app_secret || '';
-          document.getElementById('wxOfficialTemplateId').value = notif.wechat_official.template_id || '';
-          document.getElementById('wxOfficialToUser').value = notif.wechat_official.to_user || '';
-          document.getElementById('wxOfficialUrl').value = notif.wechat_official.url || '';
-          document.getElementById('wxOfficialTmplData').value = notif.wechat_official.template_data || '';
-        }
-        if (notif.wecom) {
-          document.getElementById('wecomEnable').checked = notif.wecom.enabled;
-          document.getElementById('wecomMode').value = notif.wecom.mode || 'bot';
-          toggleWecomMode();
-          document.getElementById('wecomWebhookUrl').value = notif.wecom.webhook_url || '';
-          document.getElementById('wecomCorpId').value = notif.wecom.corp_id || '';
-          document.getElementById('wecomCorpSecret').value = notif.wecom.corp_secret || '';
-          document.getElementById('wecomAgentId').value = notif.wecom.agent_id || '';
-          document.getElementById('wecomToUser').value = notif.wecom.to_user || '';
-        }
-        if (notif.email) {
-          document.getElementById('emailEnable').checked = notif.email.enabled;
-          document.getElementById('emailSmtpServer').value = notif.email.smtp_server || '';
-          document.getElementById('emailSmtpPort').value = notif.email.smtp_port || 465;
-          document.getElementById('emailUsername').value = notif.email.username || '';
-          document.getElementById('emailPassword').value = notif.email.password || '';
-          document.getElementById('emailFrom').value = notif.email.from_address || '';
-          document.getElementById('emailTo').value = (notif.email.to_addresses || []).join(', ');
-          document.getElementById('emailUseSsl').checked = notif.email.use_ssl !== false;
-
-          let matchedPreset = 'custom';
-          for (const [key, preset] of Object.entries(EMAIL_PRESETS)) {
-            if (preset.server.toLowerCase() === (notif.email.smtp_server || '').toLowerCase()) {
-              matchedPreset = key;
-              break;
-            }
-          }
-          document.getElementById('emailPreset').value = matchedPreset;
-        }
-        if (notif.dingtalk) {
-          document.getElementById('dingtalkEnable').checked = notif.dingtalk.enabled;
-          document.getElementById('dingtalkAccessToken').value = notif.dingtalk.access_token || '';
-          document.getElementById('dingtalkSecret').value = notif.dingtalk.secret || '';
-        }
-        if (notif.feishu) {
-          document.getElementById('feishuEnable').checked = notif.feishu.enabled;
-          document.getElementById('feishuWebhookUrl').value = notif.feishu.webhook_url || '';
-          document.getElementById('feishuSecret').value = notif.feishu.secret || '';
-        }
-        if (notif.telegram) {
-          document.getElementById('telegramEnable').checked = notif.telegram.enabled;
-          document.getElementById('telegramBotToken').value = notif.telegram.bot_token || '';
-          document.getElementById('telegramChatId').value = notif.telegram.chat_id || '';
-          document.getElementById('telegramApiProxy').value = notif.telegram.api_proxy || '';
-        }
-        if (notif.bark) {
-          document.getElementById('barkEnable').checked = notif.bark.enabled;
-          document.getElementById('barkServerUrl').value = notif.bark.server_url || 'https://api.day.app';
-          document.getElementById('barkDeviceKey').value = notif.bark.device_key || '';
-          document.getElementById('barkGroup').value = notif.bark.group || '';
-          document.getElementById('barkSound').value = notif.bark.sound || '';
-        }
-        if (notif.webhook) {
-          document.getElementById('webhookEnable').checked = notif.webhook.enabled;
-          document.getElementById('webhookUrl').value = notif.webhook.url || '';
-          document.getElementById('webhookMethod').value = notif.webhook.method || 'POST';
-          document.getElementById('webhookHeaders').value = notif.webhook.headers ? JSON.stringify(notif.webhook.headers) : '';
-          document.getElementById('webhookBody').value = notif.webhook.body || '';
-        }
-      }
-      initPasswordToggles();
-    }
-
-    // 保存全局配置 (包含所有多任务与系统通知)
-    async function saveConfig() {
-      // 1. 先将当前正在编辑的任务表单同步写回 globalConfig.dns_tasks[currentTaskIndex]
-      collectCurrentTaskFromForm(currentTaskIndex);
-
-      const notifications = collectNotificationConfig();
-
-      const payload = {
-        config: {
-          listen_port: globalConfig?.listen_port || 9876,
-          interval_secs: parseInt(document.getElementById('sysInterval').value) || 300,
-          cache_times: parseInt(document.getElementById('sysCacheTimes').value) || 10,
-          not_allow_wan_access: document.getElementById('sysNotAllowWan').checked,
-          auth: document.getElementById('sysUsername').value ? {
-            username: document.getElementById('sysUsername').value
-          } : null,
-          dns_server: document.getElementById('sysDnsServer')?.value?.trim() || null,
-          dns_tasks: globalConfig.dns_tasks || [],
-          notifications
-        },
-        new_password: document.getElementById('sysPassword').value || null
-      };
-
-      try {
-        const res = await apiFetch('/api/v1/config', {
-          method: 'POST',
-          body: payload
-        });
-        const json = await res.json();
-        if (json.success) {
-          showToast('全部配置已成功保存并热更新生效！', 'success');
-          // 若修改了管理员用户名/密码，则同步更新本地 Basic Auth 凭据
-          const newUsername = document.getElementById('sysUsername').value.trim();
-          const newPassword = document.getElementById('sysPassword').value;
-          if (newPassword) {
-            sessionStorage.setItem('rddns_auth', btoa(newUsername + ':' + newPassword));
-            updateLogoutBtn();
-          }
-          document.getElementById('sysPassword').value = '';
-          renderTaskList();
-        } else {
-          showToast('保存失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('请求异常: ' + e, 'error');
-      }
-    }
-
-    // 收集通知配置
-    function collectNotificationConfig() {
-      const cfg = {
-        on_ip_change_only: true,
-        on_success: document.getElementById('notifyOnSuccess').checked,
-        on_failure: document.getElementById('notifyOnFailure').checked
-      };
-
-      const wxAppId = document.getElementById('wxOfficialAppId').value.trim();
-      if (wxAppId) {
-        cfg.wechat_official = {
-          enabled: document.getElementById('wxOfficialEnable').checked,
-          app_id: wxAppId,
-          app_secret: document.getElementById('wxOfficialAppSecret').value.trim(),
-          template_id: document.getElementById('wxOfficialTemplateId').value.trim(),
-          to_user: document.getElementById('wxOfficialToUser').value.trim(),
-          url: document.getElementById('wxOfficialUrl').value.trim() || null,
-          template_data: document.getElementById('wxOfficialTmplData').value.trim() || null,
-        };
-      }
-
-      const wecomMode = document.getElementById('wecomMode').value;
-      const wecomHook = document.getElementById('wecomWebhookUrl')?.value.trim();
-      const wecomCorp = document.getElementById('wecomCorpId')?.value.trim();
-      if (wecomHook || wecomCorp) {
-        cfg.wecom = {
-          enabled: document.getElementById('wecomEnable').checked,
-          mode: wecomMode,
-          webhook_url: wecomHook || null,
-          corp_id: wecomCorp || null,
-          corp_secret: document.getElementById('wecomCorpSecret')?.value.trim() || null,
-          agent_id: parseInt(document.getElementById('wecomAgentId')?.value) || null,
-          to_user: document.getElementById('wecomToUser')?.value.trim() || null
-        };
-      }
-
-      const smtpServer = document.getElementById('emailSmtpServer').value.trim();
-      if (smtpServer) {
-        cfg.email = {
-          enabled: document.getElementById('emailEnable').checked,
-          smtp_server: smtpServer,
-          smtp_port: parseInt(document.getElementById('emailSmtpPort').value) || 465,
-          use_ssl: document.getElementById('emailUseSsl').checked,
-          username: document.getElementById('emailUsername').value.trim(),
-          password: document.getElementById('emailPassword').value.trim(),
-          from_address: document.getElementById('emailFrom').value.trim(),
-          to_addresses: (document.getElementById('emailTo').value || '').split(',').map(s => s.trim()).filter(Boolean)
-        };
-      }
-
-      const dtToken = document.getElementById('dingtalkAccessToken')?.value.trim();
-      if (dtToken) {
-        cfg.dingtalk = {
-          enabled: document.getElementById('dingtalkEnable').checked,
-          access_token: dtToken,
-          secret: document.getElementById('dingtalkSecret')?.value.trim() || null
-        };
-      }
-
-      const fsHook = document.getElementById('feishuWebhookUrl')?.value.trim();
-      if (fsHook) {
-        cfg.feishu = {
-          enabled: document.getElementById('feishuEnable').checked,
-          webhook_url: fsHook,
-          secret: document.getElementById('feishuSecret')?.value.trim() || null
-        };
-      }
-
-      const tgToken = document.getElementById('telegramBotToken')?.value.trim();
-      if (tgToken) {
-        cfg.telegram = {
-          enabled: document.getElementById('telegramEnable').checked,
-          bot_token: tgToken,
-          chat_id: document.getElementById('telegramChatId')?.value.trim() || '',
-          api_proxy: document.getElementById('telegramApiProxy')?.value.trim() || null
-        };
-      }
-
-      const barkKey = document.getElementById('barkDeviceKey')?.value.trim();
-      if (barkKey) {
-        cfg.bark = {
-          enabled: document.getElementById('barkEnable').checked,
-          server_url: document.getElementById('barkServerUrl')?.value.trim() || 'https://api.day.app',
-          device_key: barkKey,
-          group: document.getElementById('barkGroup')?.value.trim() || null,
-          sound: document.getElementById('barkSound')?.value.trim() || null
-        };
-      }
-
-      const whUrl = document.getElementById('webhookUrl')?.value.trim();
-      if (whUrl) {
-        let parsedHeaders = null;
-        try {
-          const hStr = document.getElementById('webhookHeaders')?.value.trim();
-          if (hStr) parsedHeaders = JSON.parse(hStr);
-        } catch (_) {}
-        cfg.webhook = {
-          enabled: document.getElementById('webhookEnable').checked,
-          url: whUrl,
-          method: document.getElementById('webhookMethod')?.value || 'POST',
-          headers: parsedHeaders,
-          body: document.getElementById('webhookBody')?.value.trim() || null
-        };
-      }
-
-      return cfg;
-    }
-
-
-
-    // 立即触发全量同步
-    async function triggerSync() {
-      try {
-        const res = await apiFetch('/api/v1/sync', { method: 'POST' });
-        const json = await res.json();
-        showToast(json.message, json.success ? 'success' : 'error');
-      } catch (e) {
-        showToast('触发失败: ' + e, 'error');
-      }
-    }
-
-    // 测试探测 IP
-    async function testIp(type) {
-      const isV4 = type === 'ipv4';
-      const badgeEl = document.getElementById(`${type}ProbeResult`);
-      const btnEl = document.getElementById(`${type}TestBtn`);
-      
-      const urls = (document.getElementById(`${type}Urls`)?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-      const payload = {
-        ip_type: type,
-        enabled: true,
-        source_type: document.getElementById(`${type}SourceType`).value,
-        url_endpoints: urls,
-        net_interface: getNetIfValue(type),
-        cmd: document.getElementById(`${type}Cmd`)?.value || null,
-        regex: document.getElementById(`${type}Regex`).value || null,
-        domains: []
-      };
-
-      if (badgeEl) {
-        badgeEl.style.display = 'inline-flex';
-        badgeEl.className = 'ip-probe-badge loading';
-        badgeEl.innerHTML = `<span class="live-dot" style="background:var(--primary); box-shadow:0 0 6px var(--primary);"></span> <span>正在探测...</span>`;
-      }
-      if (btnEl) btnEl.disabled = true;
-
-      try {
-        const res = await apiFetch('/api/v1/test/ip', {
-          method: 'POST',
-          body: payload
-        });
-        const json = await res.json();
-        if (json.success) {
-          const val = isV4 ? json.data.ipv4 : json.data.ipv6;
-          if (val) {
-            if (badgeEl) {
-              badgeEl.className = 'ip-probe-badge success';
-              badgeEl.innerHTML = `<span class="icon" style="color:var(--success);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span> <span>当前 ${type.toUpperCase()}: <span class="ip-text">${val}</span></span>`;
-            }
-            showToast(`成功探测到 ${type.toUpperCase()}: ${val}`, 'success');
-          } else {
-            if (badgeEl) {
-              badgeEl.className = 'ip-probe-badge error';
-              badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>未探测到有效 ${type.toUpperCase()}</span>`;
-            }
-            showToast(`未能获取到有效 ${type.toUpperCase()} 地址`, 'error');
-          }
-        } else {
-          if (badgeEl) {
-            badgeEl.className = 'ip-probe-badge error';
-            badgeEl.innerHTML = `<span class="icon" style="color:var(--danger);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span> <span>探测失败: ${json.message}</span>`;
-          }
-          showToast(`探测失败: ${json.message}`, 'error');
-        }
-      } catch (e) {
-        if (badgeEl) {
-          badgeEl.className = 'ip-probe-badge error';
-          badgeEl.innerHTML = `<span>请求异常: ${e}</span>`;
-        }
-        showToast('请求异常: ' + e, 'error');
-      } finally {
-        if (btnEl) btnEl.disabled = false;
-      }
-    }
-
-    // 发送单项渠道测试通知
-    async function testSingleNotify(channelKey) {
-      let notifPayload = {
-        on_ip_change_only: false,
-        on_success: true,
-        on_failure: true
-      };
-
-      if (channelKey === 'wechat_official') {
-        const appId = document.getElementById('wxOfficialAppId').value.trim();
-        const appSecret = document.getElementById('wxOfficialAppSecret').value.trim();
-        const templateId = document.getElementById('wxOfficialTemplateId').value.trim();
-        const toUser = document.getElementById('wxOfficialToUser').value.trim();
-        if (!appId || !appSecret || !templateId || !toUser) {
-          showToast('请先完整填写微信公众号 AppID、AppSecret、模板ID 与 接收者 OpenID！', 'error');
-          return;
-        }
-        notifPayload.wechat_official = {
-          enabled: true,
-          app_id: appId,
-          app_secret: appSecret,
-          template_id: templateId,
-          to_user: toUser,
-          url: document.getElementById('wxOfficialUrl').value.trim() || null,
-          template_data: document.getElementById('wxOfficialTmplData').value.trim() || null,
-        };
-      } else if (channelKey === 'wecom') {
-        const mode = document.getElementById('wecomMode').value;
-        if (mode === 'bot') {
-          const webhookUrl = document.getElementById('wecomWebhookUrl').value.trim();
-          if (!webhookUrl) {
-            showToast('请先填写企业微信群机器人 Webhook URL！', 'error');
-            return;
-          }
-          notifPayload.wecom = {
-            enabled: true,
-            mode: 'bot',
-            webhook_url: webhookUrl
-          };
-        } else {
-          const corpId = document.getElementById('wecomCorpId').value.trim();
-          const corpSecret = document.getElementById('wecomCorpSecret').value.trim();
-          const agentId = parseInt(document.getElementById('wecomAgentId').value);
-          if (!corpId || !corpSecret || !agentId) {
-            showToast('请先完整填写企业微信 CorpID、CorpSecret 与 AgentID！', 'error');
-            return;
-          }
-          notifPayload.wecom = {
-            enabled: true,
-            mode: 'app',
-            corp_id: corpId,
-            corp_secret: corpSecret,
-            agent_id: agentId,
-            to_user: document.getElementById('wecomToUser').value.trim() || '@all'
-          };
-        }
-      } else if (channelKey === 'email') {
-        const smtpServer = document.getElementById('emailSmtpServer').value.trim();
-        const username = document.getElementById('emailUsername').value.trim();
-        const password = document.getElementById('emailPassword').value.trim();
-        const fromAddress = document.getElementById('emailFrom').value.trim();
-        const toAddresses = (document.getElementById('emailTo').value || '').split(',').map(s => s.trim()).filter(Boolean);
-        if (!smtpServer || !username || !password || !fromAddress || toAddresses.length === 0) {
-          showToast('请先完整填写 SMTP 服务器、账号、密码/授权码、发件人及收件人邮箱！', 'error');
-          return;
-        }
-        notifPayload.email = {
-          enabled: true,
-          smtp_server: smtpServer,
-          smtp_port: parseInt(document.getElementById('emailSmtpPort').value) || 465,
-          use_ssl: document.getElementById('emailUseSsl').checked,
-          username,
-          password,
-          from_address: fromAddress,
-          to_addresses: toAddresses
-        };
-      } else if (channelKey === 'dingtalk') {
-        const token = document.getElementById('dingtalkAccessToken').value.trim();
-        if (!token) {
-          showToast('请先填写钉钉机器人的 AccessToken 或 Webhook 地址！', 'error');
-          return;
-        }
-        notifPayload.dingtalk = {
-          enabled: true,
-          access_token: token,
-          secret: document.getElementById('dingtalkSecret').value.trim() || null
-        };
-      } else if (channelKey === 'feishu') {
-        const hook = document.getElementById('feishuWebhookUrl').value.trim();
-        if (!hook) {
-          showToast('请先填写飞书群机器人的 Webhook URL！', 'error');
-          return;
-        }
-        notifPayload.feishu = {
-          enabled: true,
-          webhook_url: hook,
-          secret: document.getElementById('feishuSecret').value.trim() || null
-        };
-      } else if (channelKey === 'telegram') {
-        const token = document.getElementById('telegramBotToken').value.trim();
-        const chatId = document.getElementById('telegramChatId').value.trim();
-        if (!token || !chatId) {
-          showToast('请先填写 Telegram Bot Token 与 Chat ID！', 'error');
-          return;
-        }
-        notifPayload.telegram = {
-          enabled: true,
-          bot_token: token,
-          chat_id: chatId,
-          api_proxy: document.getElementById('telegramApiProxy').value.trim() || null
-        };
-      } else if (channelKey === 'bark') {
-        const devKey = document.getElementById('barkDeviceKey').value.trim();
-        if (!devKey) {
-          showToast('请先填写 Bark 设备 Key！', 'error');
-          return;
-        }
-        notifPayload.bark = {
-          enabled: true,
-          server_url: document.getElementById('barkServerUrl').value.trim() || 'https://api.day.app',
-          device_key: devKey,
-          group: document.getElementById('barkGroup').value.trim() || null,
-          sound: document.getElementById('barkSound').value.trim() || null
-        };
-      } else if (channelKey === 'webhook') {
-        const whUrl = document.getElementById('webhookUrl').value.trim();
-        if (!whUrl) {
-          showToast('请先填写 Webhook URL 地址！', 'error');
-          return;
-        }
-        let parsedHeaders = null;
-        try {
-          const hStr = document.getElementById('webhookHeaders').value.trim();
-          if (hStr) parsedHeaders = JSON.parse(hStr);
-        } catch (_) {}
-        notifPayload.webhook = {
-          enabled: true,
-          url: whUrl,
-          method: document.getElementById('webhookMethod').value || 'POST',
-          headers: parsedHeaders,
-          body: document.getElementById('webhookBody').value.trim() || null
-        };
-      }
-
-      showToast('正在发送测试通知...', 'info');
-      try {
-        const res = await apiFetch('/api/v1/test/notify', {
-          method: 'POST',
-          body: notifPayload
-        });
-        const json = await res.json();
-        if (json.success) {
-          showToast('测试消息已发出，请查看目标平台接收情况！', 'success');
-        } else {
-          showToast('发送失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('请求异常: ' + e, 'error');
-      }
-    }
-
-    // 发送全部已启用渠道的测试通知
-    async function testNotifyAll() {
-      await saveConfig();
-      const notifPayload = collectNotificationConfig();
-      try {
-        const res = await apiFetch('/api/v1/test/notify', {
-          method: 'POST',
-          body: notifPayload
-        });
-        const json = await res.json();
-        if (json.success) {
-          showToast('已向全部已启用的通知渠道发送测试消息！', 'success');
-        } else {
-          showToast('发送失败: ' + json.message, 'error');
-        }
-      } catch (e) {
-        showToast('测试异常: ' + e, 'error');
-      }
-    }
-
-    // 日志追加与 SSE 连接
-    function appendLog(entry) {
-      const container = document.getElementById('logContainer');
-      if (!container) return;
-      const div = document.createElement('div');
-      div.className = 'log-line';
-      div.innerHTML = `<span class="log-time">[${entry.timestamp}]</span> <span class="log-lvl-${entry.level}">[${entry.level}]</span> <span class="log-target">[${entry.target}]</span> ${entry.message}`;
-      container.appendChild(div);
-      container.scrollTop = container.scrollHeight;
-    }
-
-    function clearLogs() {
-      const container = document.getElementById('logContainer');
-      if (container) container.innerHTML = '';
-      showToast('日志已清空', 'info');
-    }
-
-    let activeEventSource = null;
-
-    function initSSE() {
-      if (activeEventSource) {
-        try { activeEventSource.close(); } catch (_) {}
-        activeEventSource = null;
-      }
-      const auth = sessionStorage.getItem('rddns_auth');
-      const sseUrl = auth ? `/api/v1/logs/sse?auth=${encodeURIComponent(auth)}` : '/api/v1/logs/sse';
-      const es = new EventSource(sseUrl);
-      activeEventSource = es;
-
-      es.onmessage = function(e) {
-        try {
-          const entry = JSON.parse(e.data);
-          appendLog(entry);
-        } catch (err) {
-          console.error(err);
-        }
-      };
-      es.onerror = function() {
-        es.close();
-        if (activeEventSource === es) {
-          activeEventSource = null;
-        }
-        setTimeout(initSSE, 3000);
-      };
-    }
-
-    // 页面加载入口
-    window.onload = async function() {
-      initTheme();
-      renderProviderFields();
-      renderIpFields('ipv4');
-      renderIpFields('ipv6');
-
-      // 1. 检查后端是否需要初始化管理员账号
-      try {
-        const statusRes = await fetch('/api/v1/auth/status');
-        const statusJson = await statusRes.json();
-        if (statusJson.success) {
-          if (statusJson.data.need_init) {
-            showInitPage();
-            return;
-          }
-          if (statusJson.data.username && document.getElementById('loginUsername')) {
-            document.getElementById('loginUsername').value = statusJson.data.username;
-          }
-        }
-      } catch (e) {
-        console.error('检查认证状态异常:', e);
-      }
-
-      // 2. 如果已完成初始化，检查本地凭据
-      const auth = sessionStorage.getItem('rddns_auth');
-      if (!auth) {
-        // 无本地凭据，展示全屏登录页
-        showLoginPage();
-        return;
-      }
-
-      // 3. 携带本地凭据拉取配置
-      const configRes = await apiFetch('/api/v1/config');
-      if (configRes.status === 401) {
-        showLoginPage();
-        return;
-      }
-      const configJson = await configRes.json();
-      if (configJson.success) {
-        globalConfig = configJson.data;
-        populateForm(globalConfig);
-        showMainApp();
-        loadNetworkInterfaces();
-        initSSE();
-        checkAppVersion(false);
-      } else {
-        showLoginPage();
-      }
-    };
-
-    // 检查版本更新
-    async function checkAppVersion(isManual) {
-      try {
-        const res = await apiFetch('/api/v1/version');
-        const json = await res.json();
-        if (json.success && json.data) {
-          const info = json.data;
-          document.getElementById('versionText').innerText = `v${info.current_version} 已连接`;
-          if (info.has_update) {
-            document.getElementById('updateNotice').style.display = 'block';
-            document.getElementById('updateNotice').innerHTML = `<span>🎉 发现新版本 v${info.latest_version} (点击升级)</span>`;
-            if (isManual) {
-              if (confirm(`发现新版本 v${info.latest_version}！\n\n更新说明:\n${info.release_notes || '常规功能优化与 Bug 修复'}\n\n是否立即启动自动升级？`)) {
-                triggerWebUpgrade();
-              }
-            }
-          } else if (isManual) {
-            alert(`✨ 当前已是最新版本 (v${info.current_version})！`);
-          }
-        }
-      } catch (e) {
-        if (isManual) alert('检查更新失败: ' + e.message);
-      }
-    }
-
-    // 触发在线升级
-    async function triggerWebUpgrade() {
-      if (!confirm('确定要在后台自动下载并热替换最新版本吗？升级完成后请重启服务。')) return;
-      try {
-        const res = await apiFetch('/api/v1/upgrade', { method: 'POST' });
-        const json = await res.json();
-        if (json.success) {
-          alert('🚀 ' + json.message);
-        } else {
-          alert('升级失败: ' + json.message);
-        }
-      } catch (e) {
-        alert('触发升级失败: ' + e.message);
-      }
-    }
-  </script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,348 @@
+/* ========================================== */
+/* 页面结构与栅格流式布局 */
+/* ========================================== */
+
+/* 整体分栏布局 (垂直流式，顶部全屏通栏 + 下方多栏并排) */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* 顶部全局大通栏 (Global TopBar - 横跨全屏) */
+.global-topbar {
+  height: 56px;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-logo {
+  background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.5px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.brand-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.brand-desc {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* TopBar 下方的主体容器 (包含侧边栏与工作区) */
+.app-body-container {
+  flex: 1;
+  display: flex;
+  height: calc(100vh - 56px);
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* 第一栏：左侧一级导航侧边栏 (Sidebar) */
+.sidebar {
+  width: 220px;
+  height: 100%;
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px 12px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  transition: all 0.25s ease;
+}
+
+/* 侧边栏导航链接 */
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.nav-item:hover {
+  background-color: var(--bg-hover);
+  color: var(--text);
+}
+.nav-item.active {
+  background-color: var(--primary-light);
+  color: var(--primary);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+
+/* 侧边栏底部信息 */
+.sidebar-footer {
+  padding: 12px 4px 0 4px;
+  border-top: 1px solid var(--border);
+}
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 第二栏：任务子侧边栏 (Sub-Sidebar) */
+.dns-sub-sidebar {
+  width: 250px;
+  height: 100%;
+  background-color: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: all 0.25s ease;
+}
+
+.sub-sidebar-header {
+  height: 52px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sub-sidebar-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.sub-sidebar-badge {
+  font-size: 0.72rem;
+  background: var(--primary-light);
+  color: var(--primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sub-sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 第三栏：右侧主工作台容器 (Main Workspace) */
+.main-workspace {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 工作台固定顶栏 (与第二栏 Header 等高 52px 绝对水平对齐) */
+.workspace-header {
+  height: 52px;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.workspace-header-dns {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
+}
+
+.workspace-header-standard {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.workspace-header-title {
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+.workspace-header-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.2;
+}
+
+/* 工作台可滚动主体内容区 */
+.workspace-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px 48px 28px;
+  min-height: 0;
+}
+
+/* 栅格布局 */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+}
+
+/* 全屏认证页面容器 (登录 & 初始化) */
+.auth-page-wrapper {
+  min-height: 100vh;
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 15%, rgba(99, 102, 241, 0.18), transparent 70%), var(--bg);
+  padding: 24px;
+  position: relative;
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 36px 32px;
+  box-shadow: var(--shadow-lg), 0 0 35px rgba(99, 102, 241, 0.12);
+  position: relative;
+  animation: fadeIn 0.3s ease-out forwards;
+}
+.auth-header {
+  text-align: center;
+  margin-bottom: 28px;
+}
+.auth-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  background: linear-gradient(135deg, #6366f1, #06b6d4);
+  color: #ffffff;
+  border-radius: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+.auth-logo svg {
+  width: 32px;
+  height: 32px;
+}
+.auth-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+.auth-desc {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.auth-theme-btn {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+}
+
+/* 响应式移动端适配 */
+@media (max-width: 1080px) {
+  .dns-master-detail-layout {
+    flex-direction: column;
+  }
+  .task-master-col {
+    width: 100%;
+    position: static;
+    height: auto;
+    max-height: 240px;
+  }
+  .task-master-list {
+    max-height: 180px;
+  }
+}
+
+@media (max-width: 960px) {
+  .app-layout { flex-direction: column; }
+  .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 12px 16px; }
+  .nav-list { flex-direction: row; overflow-x: auto; }
+  .sidebar-footer { display: none; }
+  .dns-sub-sidebar { width: 100%; height: auto; max-height: 200px; border-right: none; border-bottom: 1px solid var(--border); }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
