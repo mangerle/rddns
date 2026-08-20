@@ -376,13 +376,13 @@
                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                       </svg>
                     </span>
-                    <span data-i18n="dns.probeBtn">立即探测 IPv4</span>
+                    <span data-i18n="dns.probeBtnV4">立即探测 IPv4</span>
                   </button>
                 </div>
               </div>
               <div class="grid-2">
                 <div class="form-group">
-                  <label data-i18n="dns.sourceTypeLabel">IPv4 获取途径</label>
+                  <label data-i18n="dns.sourceTypeLabelV4">IPv4 获取途径</label>
                   <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
                     <option value="url" data-i18n="dns.sourceUrl">远程 URL 接口获取 (智能多接口回退)</option>
                     <option value="net_interface" data-i18n="dns.sourceNetIf">本地网卡设备直读 (支持自动枚举物理/虚拟网卡)</option>
@@ -396,7 +396,7 @@
                 <input type="text" id="ipv4Regex" placeholder="例如: \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b" data-i18n-placeholder="dns.regexPlaceholder" />
               </div>
               <div class="form-group">
-                <label><span data-i18n="dns.domainsLabel">解析的 IPv4 域名列表 (一行一个)</span> <span style="font-size:0.75rem;color:var(--text-muted);" data-i18n="dns.domainsHint">(支持 @ 或子域名，支持冒号语法 如 home:example.com)</span></label>
+                <label><span data-i18n="dns.domainsLabelV4">解析的 IPv4 域名列表 (一行一个)</span> <span style="font-size:0.75rem;color:var(--text-muted);" data-i18n="dns.domainsHint">(支持 @ 或子域名，支持冒号语法 如 home:example.com)</span></label>
                 <textarea id="ipv4Domains" rows="3" placeholder="home.example.com&#10;test.example.com" data-i18n-placeholder="dns.domainsPlaceholderV4"></textarea>
               </div>
             </div>
@@ -419,13 +419,13 @@
                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                       </svg>
                     </span>
-                    <span data-i18n="dns.probeBtn">立即探测 IPv6</span>
+                    <span data-i18n="dns.probeBtnV6">立即探测 IPv6</span>
                   </button>
                 </div>
               </div>
               <div class="grid-2">
                 <div class="form-group">
-                  <label data-i18n="dns.sourceTypeLabel">IPv6 获取途径</label>
+                  <label data-i18n="dns.sourceTypeLabelV6">IPv6 获取途径</label>
                   <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
                     <option value="url" data-i18n="dns.sourceUrlV6">远程 URL 接口获取 (推荐)</option>
                     <option value="net_interface" data-i18n="dns.sourceNetIfV6">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
@@ -440,7 +440,7 @@
                 <p class="form-tip" data-i18n="dns.regexV6Tip">支持填入正则表达式筛选前缀，或输入 <code>@1</code>、<code>@2</code> 快捷指定网卡第 N 个全球单播地址</p>
               </div>
               <div class="form-group">
-                <label data-i18n="dns.domainsLabel">解析的 IPv6 域名列表 (一行一个)</label>
+                <label data-i18n="dns.domainsLabelV6">解析的 IPv6 域名列表 (一行一个)</label>
                 <textarea id="ipv6Domains" rows="3" placeholder="v6.example.com&#10;nas:example.com" data-i18n-placeholder="dns.domainsPlaceholderV6"></textarea>
               </div>
             </div>
