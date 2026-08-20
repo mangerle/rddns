@@ -44,6 +44,9 @@ jobs:
           # Windows 64位
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          # Windows 32位 (遗留工控机与 32 位 Windows 系统)
+          - target: i686-pc-windows-msvc
+            os: windows-latest
           # Linux x86_64 纯静态 musl (兼容所有 Linux 发行版与 OpenWrt)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
@@ -52,6 +55,18 @@ jobs:
             os: ubuntu-latest
           # Linux ARMv7 (老款树莓派, 32位 ARM 软路由)
           - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+          # Linux ARMv6 (第一代树莓派 1/1B+, Raspberry Pi Zero)
+          - target: arm-unknown-linux-musleabihf
+            os: ubuntu-latest
+          # Linux RISC-V 64位 (全志 D1, Milk-V 等 RISC-V 开发板与网关)
+          - target: riscv64gc-unknown-linux-gnu
+            os: ubuntu-latest
+          # Linux 龙芯 64位 (国产 LoongArch 3A5000/3C5000 等信创平台)
+          - target: loongarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          # FreeBSD x86_64 (pfSense, OPNsense 等专业防火墙系统)
+          - target: x86_64-unknown-freebsd
             os: ubuntu-latest
           # macOS Intel 架构 (在 macos-latest 上直接交叉编译)
           - target: x86_64-apple-darwin
@@ -66,8 +81,11 @@ jobs:
 
       - name: 配置 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
+
+      - name: 配置交叉编译工具链 (自动配置龙芯与特殊交叉目标)
+        uses: taiki-e/setup-cross-toolchain-action@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - name: 构建并发布二进制产物
         uses: taiki-e/upload-rust-binary-action@v1
