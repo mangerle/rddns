@@ -1,4 +1,4 @@
-use super::{ApiResponse, AppError, AppState};
+use super::{ApiResponse, AppState};
 use crate::ip_fetcher::net_interface::list_system_interfaces;
 use crate::util::logging::LogEntry;
 use crate::util::update::{VersionInfo, check_version, restart_process, upgrade_self};
@@ -25,10 +25,23 @@ pub async fn get_network_interfaces_handler() -> impl IntoResponse {
     Json(ApiResponse::ok(ifaces))
 }
 
-/// 获取系统版本与更新信息
-pub async fn get_version_handler() -> Result<Json<ApiResponse<VersionInfo>>, AppError> {
-    let info = check_version().await?;
-    Ok(Json(ApiResponse::ok(info)))
+/// 获取系统版本与更新信息 (支持优雅降级，GitHub 连接失败时不抛 500 且不刷 ERROR 日志)
+pub async fn get_version_handler() -> impl IntoResponse {
+    match check_version().await {
+        Ok(info) => Json(ApiResponse::ok(info)),
+        Err(e) => {
+            log::debug!("获取 GitHub 最新版本失败 (已安全降级为本地版本): {:#}", e);
+            let current_version = env!("CARGO_PKG_VERSION").to_string();
+            let fallback_info = VersionInfo {
+                current_version: current_version.clone(),
+                latest_version: current_version,
+                has_update: false,
+                release_url: String::new(),
+                release_notes: String::new(),
+            };
+            Json(ApiResponse::ok(fallback_info))
+        }
+    }
 }
 
 /// 触发在线自动更新并平滑热重启

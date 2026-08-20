@@ -68,10 +68,7 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                 );
             } else if let Ok(etag) = HeaderValue::from_str(&etag_str) {
                 headers.insert(ETAG, etag);
-                headers.insert(
-                    CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=31536000, immutable"),
-                );
+                headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             }
 
             let mut resp = Response::builder()
