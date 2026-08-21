@@ -274,6 +274,16 @@ pub enum ProviderConfig {
     },
 }
 
+#[inline]
+fn not_empty(s: &str) -> bool {
+    !s.trim().is_empty()
+}
+
+#[inline]
+fn opt_not_empty(s: &Option<String>) -> bool {
+    s.as_deref().map(not_empty).unwrap_or(false)
+}
+
 impl ProviderConfig {
     /// 判断是否已配置了有效的认证凭据
     pub fn is_configured(&self) -> bool {
@@ -282,88 +292,73 @@ impl ProviderConfig {
                 api_token,
                 api_key,
                 email,
-            } => {
-                let has_token = api_token
-                    .as_ref()
-                    .map(|t| !t.trim().is_empty())
-                    .unwrap_or(false);
-                let has_key = api_key
-                    .as_ref()
-                    .map(|k| !k.trim().is_empty())
-                    .unwrap_or(false);
-                let has_email = email
-                    .as_ref()
-                    .map(|e| !e.trim().is_empty())
-                    .unwrap_or(false);
-                has_token || (has_key && has_email)
-            }
+            } => opt_not_empty(api_token) || (opt_not_empty(api_key) && opt_not_empty(email)),
             Self::AliDns {
                 access_key_id,
                 access_key_secret,
                 ..
-            } => !access_key_id.trim().is_empty() && !access_key_secret.trim().is_empty(),
+            }
+            | Self::AliEsa {
+                access_key_id,
+                access_key_secret,
+                ..
+            } => not_empty(access_key_id) && not_empty(access_key_secret),
             Self::TencentCloud {
                 secret_id,
                 secret_key,
-            } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
+            }
+            | Self::EdgeOne {
+                secret_id,
+                secret_key,
+            } => not_empty(secret_id) && not_empty(secret_key),
             Self::HuaweiCloud {
                 access_key_id,
                 secret_access_key,
                 ..
-            } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
+            }
+            | Self::BaiduCloud {
+                access_key_id,
+                secret_access_key,
+            }
+            | Self::TrafficRoute {
+                access_key_id,
+                secret_access_key,
+            } => not_empty(access_key_id) && not_empty(secret_access_key),
             Self::Porkbun {
                 api_key,
                 secret_key,
-            } => !api_key.trim().is_empty() && !secret_key.trim().is_empty(),
+            } => not_empty(api_key) && not_empty(secret_key),
             Self::GoDaddy {
                 api_key,
                 api_secret,
-            } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
-            Self::Dynv6 { token } => !token.trim().is_empty(),
-            Self::BaiduCloud {
-                access_key_id,
-                secret_access_key,
-            } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
-            Self::TrafficRoute {
-                access_key_id,
-                secret_access_key,
-            } => !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty(),
-            Self::Namecheap { password } => !password.trim().is_empty(),
-            Self::NameSilo { api_key } => !api_key.trim().is_empty(),
-            Self::Spaceship {
+            }
+            | Self::Spaceship {
                 api_key,
                 api_secret,
-            } => !api_key.trim().is_empty() && !api_secret.trim().is_empty(),
-            Self::Dynadot { password } => !password.trim().is_empty(),
-            Self::Vercel { token, .. } => !token.trim().is_empty(),
-            Self::RainYun { api_key, .. } => !api_key.trim().is_empty(),
+            }
+            | Self::DnsLa {
+                api_id: api_key,
+                api_secret,
+            } => not_empty(api_key) && not_empty(api_secret),
             Self::ClouDNS {
                 auth_id,
                 auth_password,
-            } => !auth_id.trim().is_empty() && !auth_password.trim().is_empty(),
-            Self::Gcore { api_key } => !api_key.trim().is_empty(),
+            } => not_empty(auth_id) && not_empty(auth_password),
             Self::NameCom {
                 username,
                 api_token,
-            } => !username.trim().is_empty() && !api_token.trim().is_empty(),
-            Self::DnsLa { api_id, api_secret } => {
-                !api_id.trim().is_empty() && !api_secret.trim().is_empty()
-            }
-            Self::AliEsa {
-                access_key_id,
-                access_key_secret,
-                ..
-            } => !access_key_id.trim().is_empty() && !access_key_secret.trim().is_empty(),
-            Self::EdgeOne {
-                secret_id,
-                secret_key,
-            } => !secret_id.trim().is_empty() && !secret_key.trim().is_empty(),
-            Self::NowCn { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
-            Self::Eranet { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
-            Self::TNetHk { id, secret } => !id.trim().is_empty() && !secret.trim().is_empty(),
-            Self::NsOne { api_key } => !api_key.trim().is_empty(),
-            Self::HipmDnsMgr { api_token, .. } => !api_token.trim().is_empty(),
-            Self::Callback { url, .. } => !url.trim().is_empty(),
+            } => not_empty(username) && not_empty(api_token),
+            Self::NowCn { id, secret }
+            | Self::Eranet { id, secret }
+            | Self::TNetHk { id, secret } => not_empty(id) && not_empty(secret),
+            Self::Namecheap { password } | Self::Dynadot { password } => not_empty(password),
+            Self::Dynv6 { token } | Self::Vercel { token, .. } => not_empty(token),
+            Self::NameSilo { api_key }
+            | Self::RainYun { api_key, .. }
+            | Self::Gcore { api_key }
+            | Self::NsOne { api_key } => not_empty(api_key),
+            Self::HipmDnsMgr { api_token, .. } => not_empty(api_token),
+            Self::Callback { url, .. } => not_empty(url),
         }
     }
 }
