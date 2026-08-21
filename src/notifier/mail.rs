@@ -222,7 +222,7 @@ impl Notifier for EmailNotifier {
                     valid_to_count += 1;
                 }
                 Err(e) => {
-                    warn!("⚠️ 收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
+                    warn!("收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
                 }
             }
         }

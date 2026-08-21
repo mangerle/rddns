@@ -72,7 +72,7 @@ impl Notifier for CustomWebhookNotifier {
                     }
                     _ => {
                         warn!(
-                            "⚠️ Webhook 自定义 Header [{}: {}] 格式不合法，已跳过",
+                            "Webhook 自定义 Header [{}: {}] 格式不合法，已跳过",
                             k, rendered_v
                         );
                     }

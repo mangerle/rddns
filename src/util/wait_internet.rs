@@ -78,15 +78,13 @@ pub async fn wait_for_internet(max_wait_secs: u64, probe_interval_secs: u64) -> 
         return true;
     }
 
-    warn!(
-        "⏳ [网络就绪探测] 检测到当前网络未连通（可能刚开机处于宽带拨号中），正在进入等待队列..."
-    );
+    warn!("[网络就绪探测] 检测到当前网络未连通（可能刚开机处于宽带拨号中），正在进入等待队列...");
 
     loop {
         let elapsed = start_time.elapsed();
         if elapsed >= max_wait {
             warn!(
-                "⚠️ [网络就绪探测] 已达到最大等待时限 ({} 秒)，网络仍未就绪，继续尝试启动业务...",
+                "[网络就绪探测] 已达到最大等待时限 ({} 秒)，网络仍未就绪，继续尝试启动业务...",
                 max_wait_secs
             );
             return false;
@@ -97,7 +95,7 @@ pub async fn wait_for_internet(max_wait_secs: u64, probe_interval_secs: u64) -> 
         if check_internet_once().await {
             let total_waited = start_time.elapsed().as_secs();
             info!(
-                "✅ [网络就绪探测] 网络连接已恢复就绪！(累计等待 {} 秒，尝试 {} 次)",
+                "[网络就绪探测] 网络连接已恢复就绪！(累计等待 {} 秒，尝试 {} 次)",
                 total_waited, attempt
             );
             return true;
@@ -105,7 +103,7 @@ pub async fn wait_for_internet(max_wait_secs: u64, probe_interval_secs: u64) -> 
 
         let current_waited = start_time.elapsed().as_secs();
         info!(
-            "⏳ [网络就绪探测] 正在等待网络连通 (已等待 {}/{} 秒，第 {} 次重试)...",
+            "[网络就绪探测] 正在等待网络连通 (已等待 {}/{} 秒，第 {} 次重试)...",
             current_waited, max_wait_secs, attempt
         );
 
