@@ -95,10 +95,10 @@ pub async fn check_version() -> Result<VersionInfo> {
     Ok(info)
 }
 
-/// 执行原地一键热升级（下载最新发布包 -> 解压 -> 安全备份替换 -> 重启进程）
+/// 执行原地一键热升级（下载最新发布包 -> SHA256校验 -> 解压 -> 安全备份替换 -> 重启进程）
 pub async fn upgrade_self() -> Result<()> {
     info!(
-        "🔍 正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
+        "正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
         env!("CARGO_PKG_VERSION")
     );
 
@@ -115,7 +115,18 @@ pub async fn upgrade_self() -> Result<()> {
         .await
         .context("获取 Release 下载列表失败")?;
 
+    if !resp.status().is_success() {
+        bail!("GitHub API 响应异常: HTTP {}", resp.status());
+    }
+
     let release: GithubRelease = resp.json().await.context("解析 Release 资产失败")?;
+
+    let latest_ver_clean = release.tag_name.trim_start_matches(['v', 'V']).to_string();
+    if !is_newer_version(current_version, &latest_ver_clean) {
+        println!("当前已是最新版本 (v{})，无需更新", current_version);
+        info!("当前已是最新版本 (v{})，无需更新", current_version);
+        return Ok(());
+    }
 
     let target_os = env::consts::OS;
     let target_arch = env::consts::ARCH;
@@ -150,7 +161,14 @@ pub async fn upgrade_self() -> Result<()> {
         }
     };
 
-    println!("📥 正在下载更新文件 [{}]...", asset.name);
+    // 尝试寻找匹配的 SHA256 校验文件 (如 asset_name.sha256 / asset_name.sha256.txt / checksums.txt)
+    let sha256_asset = release.assets.iter().find(|a| {
+        let name = a.name.to_lowercase();
+        name == format!("{}.sha256", asset.name.to_lowercase())
+            || name == format!("{}.sha256.txt", asset.name.to_lowercase())
+    });
+
+    println!("正在下载更新文件 [{}]...", asset.name);
     let download_resp = client
         .get(&asset.browser_download_url)
         .send()
@@ -162,6 +180,36 @@ pub async fn upgrade_self() -> Result<()> {
     }
 
     let raw_bytes = download_resp.bytes().await.context("读取下载数据失败")?;
+
+    // 校验 SHA256 完整性
+    use sha2::{Digest, Sha256};
+    let actual_sha256 = hex::encode(Sha256::digest(&raw_bytes));
+
+    if let Some(sha_asset) = sha256_asset {
+        println!("正在下载并校验 SHA256 签名 [{}]...", sha_asset.name);
+        let sha_resp = client.get(&sha_asset.browser_download_url).send().await;
+        if let Ok(resp) = sha_resp
+            && resp.status().is_success()
+            && let Ok(sha_text) = resp.text().await
+        {
+            let expected_sha256 = sha_text
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            if !expected_sha256.is_empty() && actual_sha256 != expected_sha256 {
+                bail!(
+                    "安装包 SHA256 完整性校验失败！预期值: {}, 实际值: {}",
+                    expected_sha256,
+                    actual_sha256
+                );
+            }
+            info!("安装包 SHA256 校验通过: {}", actual_sha256);
+        }
+    } else {
+        info!("当前安装包 SHA256 指纹: {}", actual_sha256);
+    }
 
     let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
 
@@ -176,7 +224,7 @@ pub async fn upgrade_self() -> Result<()> {
         let _ = fs::remove_file(&backup_exe);
     }
 
-    println!("🔄 正在执行二进制文件热替换...");
+    println!("正在执行二进制文件热替换...");
     fs::rename(&current_exe, &backup_exe)
         .context("备份当前运行程序失败 (可能缺少管理员写入权限)")?;
 
@@ -204,8 +252,8 @@ pub async fn upgrade_self() -> Result<()> {
     }
 
     println!("==========================================");
-    println!("🎉 RDDNS 成功更新至最新版本 {}！", release.tag_name);
-    println!("📌 请重启程序或服务以使更新完全生效。");
+    println!("RDDNS 成功更新至最新版本 {}！", release.tag_name);
+    println!("请重启程序或服务以使更新完全生效。");
     println!("==========================================");
 
     Ok(())
