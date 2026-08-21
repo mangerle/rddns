@@ -1,3 +1,4 @@
+use psl::Psl;
 use std::collections::HashMap;
 use url::form_urlencoded;
 
@@ -137,26 +138,30 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         return None;
     }
 
-    // 针对常见二级后缀 (如 .com.cn, .net.cn, .org.cn, .co.uk, .gov.cn, .eu.org)
-    let is_special_second_level =
-        parts.len() >= 3 && is_compound_suffix(parts[parts.len() - 2], parts[parts.len() - 1]);
-
-    let (sub_domain, root_domain) = if is_special_second_level {
-        if parts.len() == 3 {
-            ("@".to_string(), domain_ascii)
+    // 6. 使用标准 Public Suffix List (PSL) 精准提取根域名与子域名
+    let (sub_domain, root_domain) = if let Some(domain) = psl::List.domain(domain_ascii.as_bytes())
+    {
+        let root_str = std::str::from_utf8(domain.as_bytes()).unwrap_or(&domain_ascii);
+        if root_str == domain_ascii {
+            ("@".to_string(), root_str.to_string())
+        } else if let Some(prefix) = domain_ascii.strip_suffix(root_str) {
+            let sub = prefix.trim_end_matches('.');
+            (
+                if sub.is_empty() {
+                    "@".to_string()
+                } else {
+                    sub.to_string()
+                },
+                root_str.to_string(),
+            )
         } else {
-            let sub = parts[..parts.len() - 3].join(".");
-            let root = parts[parts.len() - 3..].join(".");
-            (sub, root)
+            ("@".to_string(), root_str.to_string())
         }
     } else {
-        if parts.len() == 2 {
-            ("@".to_string(), domain_ascii)
-        } else {
-            let sub = parts[..parts.len() - 2].join(".");
-            let root = parts[parts.len() - 2..].join(".");
-            (sub, root)
-        }
+        // 兜底：按倒数第二级与第一级作为根域名
+        let sub = parts[..parts.len() - 2].join(".");
+        let root = parts[parts.len() - 2..].join(".");
+        (if sub.is_empty() { "@".to_string() } else { sub }, root)
     };
 
     Some(ParsedDomain {
@@ -165,148 +170,6 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         sub_domain,
         custom_params,
     })
-}
-
-fn is_compound_suffix(second_last: &str, last: &str) -> bool {
-    let second_lower = second_last.to_ascii_lowercase();
-    let last_lower = last.to_ascii_lowercase();
-    matches!(
-        (second_lower.as_str(), last_lower.as_str()),
-        // 中国大陆 (.cn) 类别及省份前缀
-        ("com", "cn")
-            | ("net", "cn")
-            | ("org", "cn")
-            | ("gov", "cn")
-            | ("edu", "cn")
-            | ("ac", "cn")
-            | ("mil", "cn")
-            | ("ah", "cn")
-            | ("bj", "cn")
-            | ("cq", "cn")
-            | ("fj", "cn")
-            | ("gd", "cn")
-            | ("gs", "cn")
-            | ("gx", "cn")
-            | ("gz", "cn")
-            | ("ha", "cn")
-            | ("hb", "cn")
-            | ("he", "cn")
-            | ("hi", "cn")
-            | ("hl", "cn")
-            | ("hn", "cn")
-            | ("jl", "cn")
-            | ("js", "cn")
-            | ("jx", "cn")
-            | ("ln", "cn")
-            | ("nm", "cn")
-            | ("nx", "cn")
-            | ("qh", "cn")
-            | ("sc", "cn")
-            | ("sd", "cn")
-            | ("sh", "cn")
-            | ("sn", "cn")
-            | ("sx", "cn")
-            | ("tj", "cn")
-            | ("xj", "cn")
-            | ("xz", "cn")
-            | ("yn", "cn")
-            | ("zj", "cn")
-            // 中国香港 (.hk) / 澳门 (.mo) / 台湾 (.tw)
-            | ("com", "hk")
-            | ("net", "hk")
-            | ("org", "hk")
-            | ("edu", "hk")
-            | ("gov", "hk")
-            | ("idv", "hk")
-            | ("com", "mo")
-            | ("net", "mo")
-            | ("org", "mo")
-            | ("edu", "mo")
-            | ("gov", "mo")
-            | ("com", "tw")
-            | ("net", "tw")
-            | ("org", "tw")
-            | ("edu", "tw")
-            | ("gov", "tw")
-            | ("idv", "tw")
-            | ("club", "tw")
-            | ("game", "tw")
-            | ("ebiz", "tw")
-            // 英国 (.uk)
-            | ("co", "uk")
-            | ("org", "uk")
-            | ("me", "uk")
-            | ("net", "uk")
-            | ("ltd", "uk")
-            | ("plc", "uk")
-            | ("ac", "uk")
-            | ("gov", "uk")
-            // 日本 (.jp)
-            | ("co", "jp")
-            | ("ne", "jp")
-            | ("or", "jp")
-            | ("ac", "jp")
-            | ("go", "jp")
-            | ("ed", "jp")
-            | ("gr", "jp")
-            | ("lg", "jp")
-            // 澳大利亚 (.au)
-            | ("com", "au")
-            | ("net", "au")
-            | ("org", "au")
-            | ("edu", "au")
-            | ("gov", "au")
-            | ("id", "au")
-            | ("asn", "au")
-            // 新西兰 (.nz)
-            | ("co", "nz")
-            | ("net", "nz")
-            | ("org", "nz")
-            | ("ac", "nz")
-            | ("govt", "nz")
-            | ("school", "nz")
-            | ("geek", "nz")
-            | ("gen", "nz")
-            // 新加坡 (.sg) / 马来西亚 (.my)
-            | ("com", "sg")
-            | ("net", "sg")
-            | ("org", "sg")
-            | ("edu", "sg")
-            | ("gov", "sg")
-            | ("per", "sg")
-            | ("com", "my")
-            | ("net", "my")
-            | ("org", "my")
-            | ("edu", "my")
-            | ("gov", "my")
-            // 韩国 (.kr)
-            | ("co", "kr")
-            | ("ne", "kr")
-            | ("or", "kr")
-            | ("re", "kr")
-            | ("pe", "kr")
-            | ("go", "kr")
-            // 巴西 (.br)
-            | ("com", "br")
-            | ("net", "br")
-            | ("org", "br")
-            | ("app", "br")
-            | ("art", "br")
-            | ("dev", "br")
-            | ("eco", "br")
-            | ("emp", "br")
-            | ("log", "br")
-            // 俄罗斯 (.ru) / 欧洲与其它
-            | ("com", "ru")
-            | ("net", "ru")
-            | ("org", "ru")
-            | ("pp", "ru")
-            | ("co", "za")
-            | ("net", "za")
-            | ("org", "za")
-            | ("web", "za")
-            | ("eu", "org")
-    )
 }
 
 /// 批量解析域名列表
@@ -445,5 +308,41 @@ mod tests {
         assert!(d_root.matches_record_name("example.com"));
         assert!(d_root.matches_record_name("example.com."));
         assert!(d_root.matches_record_name("@"));
+    }
+
+    #[test]
+    fn test_parse_domain_global_compound_suffixes() {
+        // 测试此前缺失的全球各国家/地区复合后缀
+        let d1 = parse_domain("www.example.com.tr").unwrap();
+        assert_eq!(d1.sub_domain, "www");
+        assert_eq!(d1.root_domain, "example.com.tr");
+
+        let d2 = parse_domain("api.service.co.il").unwrap();
+        assert_eq!(d2.sub_domain, "api");
+        assert_eq!(d2.root_domain, "service.co.il");
+
+        let d3 = parse_domain("example.com.mx").unwrap();
+        assert_eq!(d3.sub_domain, "@");
+        assert_eq!(d3.root_domain, "example.com.mx");
+
+        let d4 = parse_domain("blog.my-app.co.in").unwrap();
+        assert_eq!(d4.sub_domain, "blog");
+        assert_eq!(d4.root_domain, "my-app.co.in");
+
+        let d5 = parse_domain("portal.gov.sa").unwrap();
+        assert_eq!(d5.sub_domain, "@");
+        assert_eq!(d5.root_domain, "portal.gov.sa");
+
+        let d5_sub = parse_domain("www.portal.gov.sa").unwrap();
+        assert_eq!(d5_sub.sub_domain, "www");
+        assert_eq!(d5_sub.root_domain, "portal.gov.sa");
+
+        let d6 = parse_domain("cloud.server.co.ke").unwrap();
+        assert_eq!(d6.sub_domain, "cloud");
+        assert_eq!(d6.root_domain, "server.co.ke");
+
+        let d7 = parse_domain("test.eu.org").unwrap();
+        assert_eq!(d7.sub_domain, "@");
+        assert_eq!(d7.root_domain, "test.eu.org");
     }
 }
