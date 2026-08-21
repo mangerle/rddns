@@ -6,8 +6,65 @@ use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use log::{info, warn};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
+
+/// 登录尝试频控记录 (key -> (连续失败次数, 最后一次失败时间))
+static LOGIN_FAIL_LIMITER: LazyLock<Mutex<HashMap<String, (u32, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn check_and_record_login_failure(key: &str, is_success: bool) -> Result<(), AppError> {
+    let mut map = LOGIN_FAIL_LIMITER.lock();
+    let now = Instant::now();
+
+    // 清理超过 10 分钟无活动的记录
+    map.retain(|_, (_, last)| now.duration_since(*last) < Duration::from_secs(600));
+
+    if is_success {
+        map.remove(key);
+        return Ok(());
+    }
+
+    let entry = map.entry(key.to_string()).or_insert((0, now));
+    entry.0 += 1;
+    entry.1 = now;
+
+    if entry.0 >= 5 {
+        let elapsed = now.duration_since(entry.1);
+        if elapsed < Duration::from_secs(300) {
+            let remain = 300 - elapsed.as_secs();
+            return Err(AppError::unauthorized(format!(
+                "登录失败次数过多，账号已临时锁定，请 {} 秒后再试",
+                remain
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_login_locked(key: &str) -> Result<(), AppError> {
+    let mut map = LOGIN_FAIL_LIMITER.lock();
+    let now = Instant::now();
+    map.retain(|_, (_, last)| now.duration_since(*last) < Duration::from_secs(600));
+
+    if let Some((fails, last)) = map.get(key)
+        && *fails >= 5
+    {
+        let elapsed = now.duration_since(*last);
+        if elapsed < Duration::from_secs(300) {
+            let remain = 300 - elapsed.as_secs();
+            return Err(AppError::unauthorized(format!(
+                "登录失败次数过多，账号已临时锁定，请 {} 秒后再试",
+                remain
+            )));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct AuthStatusResponse {
@@ -89,7 +146,9 @@ pub async fn init_auth_handler(
         return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
-    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+    // 异步生成 bcrypt 密码哈希，避免阻塞 async runtime
+    let hash = crate::util::crypto::hash_password_async(password.to_string())
+        .await
         .map_err(|e| AppError::internal(format!("密码加密失败: {}", e)))?;
 
     let user_str = username.to_string();
@@ -131,13 +190,22 @@ pub async fn login_auth_handler(
         return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
+    // 检查登录频控锁定状态
+    check_login_locked(username)?;
+
     let config = state.config_manager.get_config();
     if let Some(ref auth) = config.auth {
         if username == auth.username
-            && bcrypt::verify(password, &auth.password_hash).unwrap_or(false)
+            && crate::util::crypto::verify_password_async(
+                password.to_string(),
+                auth.password_hash.clone(),
+            )
+            .await
         {
+            let _ = check_and_record_login_failure(username, true);
             return Ok(Json(ApiResponse::ok("登录成功")));
         }
+        let _ = check_and_record_login_failure(username, false);
         return Err(AppError::unauthorized("用户名或密码错误"));
     }
     // 未设置密码时视为成功

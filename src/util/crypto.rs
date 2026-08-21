@@ -44,6 +44,22 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// 异步执行 bcrypt 密码哈希生成 (移入后台阻塞线程池，防止阻塞 async runtime)
+pub async fn hash_password_async(password: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("执行后台哈希任务失败: {}", e))?
+}
+
+/// 异步校验 bcrypt 密码哈希 (移入后台阻塞线程池)
+pub async fn verify_password_async(password: String, hash: String) -> bool {
+    tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false))
+        .await
+        .unwrap_or(false)
+}
+
 /// 阿里云 POP 规范 URL 编码（RFC 3986 基础上的特殊转义规则）
 /// 将所有非保留字符（A-Z, a-z, 0-9, '-', '_', '.', '~'）编码为大写百分号形式，
 /// 并且将 '+' 编码为 '%20'，'*' 编码为 '%2A'，'%7E' 转回 '~'

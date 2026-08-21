@@ -37,12 +37,13 @@ pub async fn save_config_handler(
         }
     }
 
-    // 2. 如果用户提交了新密码，生成 bcrypt 哈希
+    // 2. 如果用户提交了新密码，异步生成 bcrypt 哈希
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
     {
         Some(
-            bcrypt::hash(pwd.trim(), bcrypt::DEFAULT_COST)
+            crate::util::crypto::hash_password_async(pwd.trim().to_string())
+                .await
                 .map_err(|e| AppError::internal(format!("密码哈希失败: {}", e)))?,
         )
     } else {

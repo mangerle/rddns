@@ -54,8 +54,13 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         && let Some((user, pass)) = decoded_str.split_once(':')
         && user == auth_conf.username
     {
-        // 校验 bcrypt 密码哈希
-        if bcrypt::verify(pass, &auth_conf.password_hash).unwrap_or(false) {
+        // 异步校验 bcrypt 密码哈希，避免阻塞 async runtime
+        if crate::util::crypto::verify_password_async(
+            pass.to_string(),
+            auth_conf.password_hash.clone(),
+        )
+        .await
+        {
             return next.run(req).await;
         }
     }
