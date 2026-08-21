@@ -4,7 +4,8 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 
 /// 全局自定义 DNS 递归解析服务器地址 (如 "223.5.5.5" 或 "1.1.1.1:53")
 static CUSTOM_DNS_SERVER: RwLock<Option<String>> = RwLock::new(None);
@@ -159,12 +160,12 @@ fn read_dns_name_at(buf: &[u8], mut offset: usize) -> Result<String> {
     Ok(labels.join("."))
 }
 
-/// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒) 与可能存在的 CNAME 别名目标
+/// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒)、可能存在的 CNAME 别名目标以及是否被截断 (TC 标志)
 fn parse_dns_response_packet(
     buf: &[u8],
     query_id: u16,
     qtype: QueryRecordType,
-) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
+) -> Result<(Vec<IpAddr>, u32, Option<String>, bool)> {
     if buf.len() < 12 {
         bail!("DNS 响应包长度过短");
     }
@@ -177,7 +178,7 @@ fn parse_dns_response_packet(
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
     let tc = (flags & 0x0200) != 0;
     if tc {
-        warn!("DNS 响应报文被服务器截断 (TC=1)，可能仅包含部分 IP 记录");
+        warn!("DNS 响应报文被服务器截断 (TC=1)，将尝试回退至 TCP 查询完整记录");
     }
     let rcode = flags & 0x000F;
     if rcode != 0 {
@@ -255,10 +256,58 @@ fn parse_dns_response_packet(
         offset += rdlength;
     }
 
-    Ok((ips, min_ttl.clamp(5, 3600), cname_target))
+    Ok((ips, min_ttl.clamp(5, 3600), cname_target, tc))
 }
 
-/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存与 CNAME 递归追溯)
+/// 执行 TCP 53 端口 DNS 查询 (RFC 1035: 带 2 字节报文长度前缀，用于大包响应或截断兜底)
+pub async fn query_dns_server_tcp(
+    target_server: SocketAddr,
+    clean_domain: &str,
+    qtype: QueryRecordType,
+    query_id: u16,
+    timeout_duration: Duration,
+) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
+    let packet = build_dns_query_packet(clean_domain, qtype, query_id)?;
+    let mut tcp_stream =
+        match tokio::time::timeout(timeout_duration, TcpStream::connect(target_server)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => bail!("连接 DNS 服务器 {} (TCP:53) 失败: {}", target_server, e),
+            Err(_) => bail!("连接 DNS 服务器 {} (TCP:53) 超时", target_server),
+        };
+
+    // RFC 1035: TCP 报文发送前须包含 2 字节的大端长度前缀
+    let len_prefix = (packet.len() as u16).to_be_bytes();
+    let mut send_buf = Vec::with_capacity(2 + packet.len());
+    send_buf.extend_from_slice(&len_prefix);
+    send_buf.extend_from_slice(&packet);
+
+    let write_and_read = async {
+        tcp_stream.write_all(&send_buf).await?;
+        tcp_stream.flush().await?;
+
+        let mut len_bytes = [0u8; 2];
+        tcp_stream.read_exact(&mut len_bytes).await?;
+        let resp_len = u16::from_be_bytes(len_bytes) as usize;
+        if !(12..=65535).contains(&resp_len) {
+            bail!("DNS TCP 响应报文长度非法: {}", resp_len);
+        }
+
+        let mut resp_buf = vec![0u8; resp_len];
+        tcp_stream.read_exact(&mut resp_buf).await?;
+        Ok::<Vec<u8>, anyhow::Error>(resp_buf)
+    };
+
+    let resp_bytes = match tokio::time::timeout(timeout_duration, write_and_read).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => bail!("TCP DNS 报文收发失败: {}", e),
+        Err(_) => bail!("TCP DNS 请求超时"),
+    };
+
+    let (ips, ttl_secs, cname, _) = parse_dns_response_packet(&resp_bytes, query_id, qtype)?;
+    Ok((ips, ttl_secs, cname))
+}
+
+/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存、CNAME 追溯与 TCP 截断兜底)
 pub async fn query_dns_server(
     server_addr: &str,
     domain: &str,
@@ -349,7 +398,28 @@ async fn query_dns_server_recursive(
         }
 
         match parse_dns_response_packet(&buf[..len], query_id, qtype) {
-            Ok((ips, ttl_secs, cname_target)) => {
+            Ok((mut ips, mut ttl_secs, mut cname_target, is_truncated)) => {
+                // 若 UDP 响应被截断 (TC=1)，自动回退至 TCP 53 端口获取完整数据
+                if is_truncated {
+                    info!(
+                        "DNS 查询 [{}] 响应被截断 (TC=1)，正在自动回退至 TCP 53 端口获取完整数据...",
+                        clean_domain
+                    );
+                    if let Ok((tcp_ips, tcp_ttl, tcp_cname)) = query_dns_server_tcp(
+                        target_server,
+                        &clean_domain,
+                        qtype,
+                        query_id,
+                        timeout_duration,
+                    )
+                    .await
+                    {
+                        ips = tcp_ips;
+                        ttl_secs = tcp_ttl;
+                        cname_target = tcp_cname;
+                    }
+                }
+
                 // 如果直接解析到了目标 IP 地址
                 if !ips.is_empty() {
                     let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
