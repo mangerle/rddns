@@ -336,7 +336,7 @@ pub fn list_system_interfaces() -> Vec<InterfaceInfo> {
                     }
                     Addr::V6(v6) => {
                         let ip = v6.ip;
-                        if is_global_unicast_ipv6(&ip) || !ip.is_loopback() {
+                        if is_global_unicast_ipv6(&ip) {
                             ipv6s.push(ip.to_string());
                         }
                     }
