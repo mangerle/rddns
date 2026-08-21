@@ -263,15 +263,51 @@ pub async fn upgrade_self() -> Result<()> {
 pub fn restart_process() -> Result<()> {
     let current_exe = env::current_exe().context("获取当前程序路径失败")?;
     let args: Vec<String> = env::args().skip(1).collect();
-    let mut cmd = std::process::Command::new(&current_exe);
-    cmd.args(&args);
-    crate::util::daemon::configure_daemon_command(&mut cmd);
 
-    cmd.spawn().context("派生重启进程失败")?;
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 平台：通过 cmd.exe 延时约 1 秒后拉起新进程，确保旧进程先退出并完全释放 TCP 监听端口 (EADDRINUSE 保护)
+        let exe_str = current_exe.to_string_lossy().to_string();
+        let mut formatted_args = String::new();
+        for arg in &args {
+            formatted_args.push(' ');
+            if arg.contains(' ') || arg.contains('\t') {
+                formatted_args.push('"');
+                formatted_args.push_str(arg);
+                formatted_args.push('"');
+            } else {
+                formatted_args.push_str(arg);
+            }
+        }
 
-    // 延迟 1.5 秒后安全退出当前旧进程，确保日志与响应顺利发出
+        // 使用 ping 127.0.0.1 -n 2 产生约 1 秒的非阻塞等待，随后 start 启动新版本
+        let cmd_script = format!(
+            "ping 127.0.0.1 -n 2 >nul & start \"\" \"{}\"{}",
+            exe_str, formatted_args
+        );
+
+        let mut launcher = std::process::Command::new("cmd");
+        launcher.args(["/C", &cmd_script]);
+        crate::util::daemon::configure_daemon_command(&mut launcher);
+        launcher.spawn().context("派生重启辅助进程失败")?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Unix / Linux 平台：通过 sh 延时 1 秒后 exec 拉起新进程，确保旧进程端口完全释放
+        let mut launcher = std::process::Command::new("sh");
+        let mut sh_cmd = format!("sleep 1 && exec \"{}\"", current_exe.to_string_lossy());
+        for arg in &args {
+            sh_cmd.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
+        }
+        launcher.args(["-c", &sh_cmd]);
+        crate::util::daemon::configure_daemon_command(&mut launcher);
+        launcher.spawn().context("派生重启辅助进程失败")?;
+    }
+
+    // 短暂延时 300 毫秒确保当前 Web 接口响应顺利发出，随后退出旧进程释放端口
     tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
         std::process::exit(0);
     });
 
