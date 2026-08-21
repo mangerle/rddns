@@ -50,19 +50,7 @@ pub async fn save_config_handler(
         None
     };
 
-    // 3. 热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认)
-    if let Some(ref dns_srv) = new_config.dns_server {
-        let clean = dns_srv.trim();
-        if !clean.is_empty() {
-            set_custom_dns_server(clean.to_string());
-        } else {
-            clear_custom_dns_server();
-        }
-    } else {
-        clear_custom_dns_server();
-    }
-
-    // 4. 原子更新并持久化配置
+    // 3. 原子更新并持久化配置
     state
         .config_manager
         .modify_config::<_, ConfigError>(|old_config| {
@@ -88,6 +76,19 @@ pub async fn save_config_handler(
             Ok(to_save)
         })
         .map_err(|e| AppError::internal(format!("保存配置失败: {}", e)))?;
+
+    // 4. 持久化成功后，热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认) 并刷新客户端连接池
+    if let Some(ref dns_srv) = new_config.dns_server {
+        let clean = dns_srv.trim();
+        if !clean.is_empty() {
+            set_custom_dns_server(clean.to_string());
+        } else {
+            clear_custom_dns_server();
+        }
+    } else {
+        clear_custom_dns_server();
+    }
+    crate::util::http::clear_http_client_cache();
 
     Ok(Json(ApiResponse::ok(())))
 }
