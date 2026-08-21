@@ -171,10 +171,24 @@ impl SyncRecordResult {
     }
 }
 
+/// 对包含敏感信息（如 API Key、密码、签名等）的 URL 或错误文本进行脱敏
+pub fn sanitize_sensitive_url_params(input: &str) -> String {
+    static SENSITIVE_PARAM_REGEX: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| {
+            regex::Regex::new(
+                r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s\)]+)",
+            )
+            .expect("编译敏感参数正则失败")
+        });
+    SENSITIVE_PARAM_REGEX
+        .replace_all(input, "$1=******")
+        .to_string()
+}
+
 #[derive(Debug, Error)]
 pub enum DnsProviderError {
     #[error("HTTP 通信错误: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
     #[error("JSON 序列化/反序列化错误: {0}")]
     Json(#[from] serde_json::Error),
     #[error("DNS 服务商未找到根域名对应的 Zone: {0}")]
@@ -185,6 +199,12 @@ pub enum DnsProviderError {
     MissingCredentials(String),
     #[error("其他服务商错误: {0}")]
     Other(String),
+}
+
+impl From<reqwest::Error> for DnsProviderError {
+    fn from(err: reqwest::Error) -> Self {
+        Self::Http(sanitize_sensitive_url_params(&err.to_string()))
+    }
 }
 
 /// DNS 提供商抽象接口
@@ -206,6 +226,19 @@ pub trait DnsProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sanitize_sensitive_url_params() {
+        let raw_err = "error sending request for url (https://www.namesilo.com/api/dnsListRecords?version=1&type=xml&key=secret123456&domain=example.com): operation timed out";
+        let sanitized = sanitize_sensitive_url_params(raw_err);
+        assert!(!sanitized.contains("secret123456"));
+        assert!(sanitized.contains("key=******"));
+
+        let raw_nc = "https://dynamicdns.park-your-domain.com/update?host=@&domain=test.com&password=my_password_xyz&ip=1.1.1.1";
+        let sanitized_nc = sanitize_sensitive_url_params(raw_nc);
+        assert!(!sanitized_nc.contains("my_password_xyz"));
+        assert!(sanitized_nc.contains("password=******"));
+    }
 
     #[test]
     fn test_sync_record_result_constructors() {

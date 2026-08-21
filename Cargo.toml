@@ -29,7 +29,7 @@ async-trait = "0.1"
 thiserror = "2.0"
 anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
-regex = { version = "1.11", default-features = false, features = ["std", "perf", "unicode-perl"] }
+regex = { version = "1.11", default-features = false, features = ["std", "perf", "unicode-perl", "unicode-case"] }
 hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
