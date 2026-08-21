@@ -11,13 +11,17 @@ const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// 全局雨云 Domain ID 缓存池 ((api_key, root_domain) -> domain_id)，实现多账号隔离与跨周期缓存复用
+static GLOBAL_RAINYUN_DOMAIN_CACHE: LazyLock<RwLock<HashMap<(String, String), String>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// 雨云 (RainYun) DNS 提供商
 pub struct RainYunProvider {
     api_key: String,
     domain_id: Option<String>,
     client: Client,
-    domain_cache: RwLock<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +64,6 @@ impl RainYunProvider {
             api_key,
             domain_id: domain_id.filter(|d| !d.trim().is_empty()),
             client: crate::util::http::create_default_dns_client(http_interface),
-            domain_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -73,13 +76,14 @@ impl RainYunProvider {
         headers
     }
 
-    /// 获取或自动根据根域名查询 Domain ID (优先从内存缓存读取)
+    /// 获取或自动根据根域名查询 Domain ID (优先从全局内存缓存读取)
     async fn get_domain_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
         if let Some(ref did) = self.domain_id {
             return Ok(did.clone());
         }
 
-        if let Some(cached_id) = self.domain_cache.read().get(root_domain).cloned() {
+        let cache_key = (self.api_key.clone(), root_domain.to_string());
+        if let Some(cached_id) = GLOBAL_RAINYUN_DOMAIN_CACHE.read().get(&cache_key).cloned() {
             return Ok(cached_id);
         }
 
@@ -114,9 +118,9 @@ impl RainYunProvider {
 
             if let Some(m) = matched {
                 let did_str = m.id.to_string();
-                self.domain_cache
+                GLOBAL_RAINYUN_DOMAIN_CACHE
                     .write()
-                    .insert(root_domain.to_string(), did_str.clone());
+                    .insert(cache_key, did_str.clone());
                 return Ok(did_str);
             }
         }
