@@ -26,9 +26,9 @@ pub fn run_as_daemon() -> Result<()> {
     let child = cmd.spawn().context("派生后台守护进程失败")?;
 
     println!("==========================================");
-    println!("🚀 RDDNS 已成功在后台静默运行！");
-    println!("📌 后台进程 PID: {}", child.id());
-    println!("🌐 请访问 Web 管理界面查看运行状态与实时日志");
+    println!("RDDNS 已成功在后台静默运行！");
+    println!("后台进程 PID: {}", child.id());
+    println!("请访问 Web 管理界面查看运行状态与实时日志");
     println!("==========================================");
 
     Ok(())

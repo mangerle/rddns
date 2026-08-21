@@ -33,7 +33,7 @@ impl WeComNotifier {
 
         // 拼接 Markdown 内容
         let markdown_content = format!(
-            "### 🔔 rddns 域名动态解析通知 <font color=\"{}\">{}</font>\n\
+            "### rddns 域名动态解析通知 <font color=\"{}\">{}</font>\n\
             > **任务名称**：{}\n\
             > **IPv4 地址**：{}\n\
             > **IPv6 地址**：{}\n\
@@ -145,7 +145,7 @@ impl WeComNotifier {
             "msgtype": "textcard",
             "agentid": agent_id,
             "textcard": {
-                "title": format!("🔔 rddns 动态解析 [{}]", event.overall_status.as_str()),
+                "title": format!("rddns 动态解析 [{}]", event.overall_status.as_str()),
                 "description": description,
                 "url": "http://127.0.0.1:9876",
                 "btntxt": "查看详情"

@@ -54,7 +54,7 @@ impl Notifier for DingTalkNotifier {
 
         let title = format!("rddns 动态解析 [{}]", event.overall_status.as_str());
         let text = format!(
-            "### 🔔 rddns 动态解析通知\n\
+            "### rddns 动态解析通知\n\
             - **状态**：{}\n\
             - **任务**：{}\n\
             - **IPv4**：{}\n\

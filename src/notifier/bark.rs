@@ -32,7 +32,7 @@ impl Notifier for BarkNotifier {
         let key = self.config.device_key.trim();
         let url = format!("{}/push", server);
 
-        let title = format!("🔔 rddns 动态解析 [{}]", event.overall_status.as_str());
+        let title = format!("rddns 动态解析 [{}]", event.overall_status.as_str());
         let body = format!(
             "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
             event.task_name,

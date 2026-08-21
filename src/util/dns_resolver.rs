@@ -27,14 +27,14 @@ static GLOBAL_DNS_CACHE: std::sync::LazyLock<DnsCacheMap> =
 pub fn set_custom_dns_server(server: String) {
     let clean = server.trim().to_string();
     if !clean.is_empty() {
-        info!("🌐 已配置自定义 DNS 递归解析服务器: {}", clean);
+        info!("已配置自定义 DNS 递归解析服务器: {}", clean);
         *CUSTOM_DNS_SERVER.write() = Some(clean);
     }
 }
 
 /// 清空全局自定义 DNS 解析服务器（恢复系统默认解析）
 pub fn clear_custom_dns_server() {
-    info!("🌐 已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
+    info!("已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
     *CUSTOM_DNS_SERVER.write() = None;
 }
 

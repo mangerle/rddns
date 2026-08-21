@@ -42,7 +42,7 @@ impl Notifier for TelegramNotifier {
         );
 
         let text = format!(
-            "🔔 *rddns 域名解析通知* [{}]\n\
+            "*rddns 域名解析通知* [{}]\n\
             *任务*: {}\n\
             *IPv4*: `{}`\n\
             *IPv6*: `{}`\n\
