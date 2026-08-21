@@ -21,7 +21,9 @@ pub async fn get_logs_handler(State(state): State<AppState>) -> impl IntoRespons
 
 /// 获取当前系统可用的网卡列表
 pub async fn get_network_interfaces_handler() -> impl IntoResponse {
-    let ifaces = list_system_interfaces();
+    let ifaces = tokio::task::spawn_blocking(list_system_interfaces)
+        .await
+        .unwrap_or_default();
     Json(ApiResponse::ok(ifaces))
 }
 

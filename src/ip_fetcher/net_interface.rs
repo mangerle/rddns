@@ -140,22 +140,27 @@ impl NetInterfaceIpFetcher {
         }
     }
 
-    /// 查找并获取指定名称的目标网卡设备
-    fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
-        let interfaces = NetworkInterface::show()
-            .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
+    /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池)
+    async fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
+        let name = self.interface_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let interfaces = NetworkInterface::show()
+                .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
 
-        interfaces
-            .into_iter()
-            .find(|iface| iface.name.eq_ignore_ascii_case(&self.interface_name))
-            .ok_or_else(|| FetchError::InterfaceNotFound(self.interface_name.clone()))
+            interfaces
+                .into_iter()
+                .find(|iface| iface.name.eq_ignore_ascii_case(&name))
+                .ok_or_else(|| FetchError::InterfaceNotFound(name))
+        })
+        .await
+        .map_err(|e| FetchError::Other(format!("异步执行网卡查询任务失败: {}", e)))?
     }
 }
 
 #[async_trait]
 impl IpFetcher for NetInterfaceIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
-        let target_if = self.get_target_interface()?;
+        let target_if = self.get_target_interface().await?;
 
         let mut candidates = Vec::new();
         for addr in target_if.addr {
@@ -183,7 +188,7 @@ impl IpFetcher for NetInterfaceIpFetcher {
     }
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
-        let target_if = self.get_target_interface()?;
+        let target_if = self.get_target_interface().await?;
 
         let mut candidates = Vec::new();
 
@@ -288,7 +293,7 @@ pub fn select_ip_by_ordinal_or_regex<T: Clone + std::fmt::Display>(
                     candidates.len()
                 );
                 Some(candidates[0].clone())
-            }
+            };
         }
 
         // 普通正则表达式匹配
