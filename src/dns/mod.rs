@@ -21,6 +21,7 @@ mod porkbun;
 mod rainyun;
 mod spaceship;
 mod tencent_eo;
+pub mod tencentcloud;
 mod traffic_route;
 pub mod trait_def;
 mod vercel;

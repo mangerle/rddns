@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
-use crate::util::crypto::{Tc3ApiEndpoint, Tc3Client};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
