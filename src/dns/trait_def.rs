@@ -176,7 +176,7 @@ pub fn sanitize_sensitive_url_params(input: &str) -> String {
     static SENSITIVE_PARAM_REGEX: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| {
             regex::Regex::new(
-                r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s\)]+)",
+                r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s)]+)",
             )
             .expect("编译敏感参数正则失败")
         });
