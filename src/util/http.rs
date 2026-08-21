@@ -1,7 +1,10 @@
 use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 /// 全局跳过 TLS 证书验证开关
@@ -10,8 +13,9 @@ static SKIP_VERIFY: AtomicBool = AtomicBool::new(false);
 /// 设置全局是否跳过 TLS 证书验证
 pub fn set_skip_verify(skip: bool) {
     SKIP_VERIFY.store(skip, Ordering::SeqCst);
+    clear_http_client_cache();
     if skip {
-        warn!("⚠️ 已开启 --skipVerify 跳过 TLS 证书验证模式，请注意网络通信安全");
+        warn!("已开启 --skipVerify 跳过 TLS 证书验证模式，请注意网络通信安全");
     }
 }
 
@@ -21,7 +25,6 @@ pub fn is_skip_verify() -> bool {
 }
 
 use reqwest::dns::{Name, Resolve, Resolving};
-use std::sync::Arc;
 
 /// 全局应用 DNS 解析适配器，优先使用配置的自定义 DNS 递归解析服务器，失败时平滑回退
 #[derive(Debug, Clone, Default)]
@@ -167,14 +170,11 @@ pub fn create_task_http_client_builder(interface_name: Option<&str>) -> reqwest:
         let clean = iface.trim();
         if !clean.is_empty() {
             if let Some(local_ip) = find_interface_ip(clean) {
-                info!(
-                    "🔗 任务绑定出站物理网卡 [{}] (本地源 IP: {})",
-                    clean, local_ip
-                );
+                info!("任务绑定出站物理网卡 [{}] (本地源 IP: {})", clean, local_ip);
                 builder = builder.local_address(Some(local_ip));
             } else {
                 warn!(
-                    "⚠️ 未能在系统网卡中找到 [{}] 对应的出站 IP，将回退至系统默认路由",
+                    "未能在系统网卡中找到 [{}] 对应的出站 IP，将回退至系统默认路由",
                     clean
                 );
             }
@@ -198,7 +198,47 @@ pub fn create_task_http_client(
         .build()
 }
 
-/// 创建具有 15 秒标准超时的 DNS 任务通用 HTTP 客户端 (失败时回退至默认客户端)
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct ClientKey {
+    interface_name: Option<String>,
+    timeout_ms: u64,
+    skip_verify: bool,
+}
+
+static CLIENT_CACHE: LazyLock<RwLock<HashMap<ClientKey, reqwest::Client>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// 清理全局 HTTP 客户端连接池缓存
+pub fn clear_http_client_cache() {
+    CLIENT_CACHE.write().clear();
+}
+
+/// 获取或创建绑定了指定出站物理网卡并带指定超时的 Reqwest Client (复用全局连接池)
+pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> reqwest::Client {
+    let key = ClientKey {
+        interface_name: interface_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        timeout_ms: timeout.as_millis() as u64,
+        skip_verify: is_skip_verify(),
+    };
+
+    {
+        let read_guard = CLIENT_CACHE.read();
+        if let Some(client) = read_guard.get(&key) {
+            return client.clone();
+        }
+    }
+
+    let client = create_task_http_client(interface_name, timeout).unwrap_or_default();
+    let mut write_guard = CLIENT_CACHE.write();
+    write_guard
+        .entry(key)
+        .or_insert_with(|| client.clone())
+        .clone()
+}
+
+/// 创建具有 15 秒标准超时的 DNS 任务通用 HTTP 客户端 (跨周期复用全局连接池)
 pub fn create_default_dns_client(interface_name: Option<&str>) -> reqwest::Client {
-    create_task_http_client(interface_name, Duration::from_secs(15)).unwrap_or_default()
+    get_task_http_client(interface_name, Duration::from_secs(15))
 }
