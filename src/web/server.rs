@@ -18,7 +18,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::CorsLayer;
 
 pub struct WebServer {
     config_manager: Arc<ConfigManager>,
@@ -110,7 +109,6 @@ impl WebServer {
         let app = Router::new()
             .nest("/api/v1", api_routes)
             .fallback(static_handler)
-            .layer(CorsLayer::permissive())
             .with_state(state);
 
         let listener = TcpListener::bind(addr).await?;
