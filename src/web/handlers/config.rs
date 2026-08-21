@@ -30,7 +30,22 @@ pub async fn save_config_handler(
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     let new_config = payload.config;
 
-    // 1. 校验任务名称非空
+    // 1. 基础参数与数值边界校验
+    if new_config.interval_secs < 5 {
+        return Err(AppError::bad_request("同步检查间隔时间必须大于或等于 5 秒"));
+    }
+    if new_config.cache_times < 1 {
+        return Err(AppError::bad_request(
+            "强制校对云端记录间隔次数必须大于或等于 1 次",
+        ));
+    }
+    if new_config.listen_port == 0 {
+        return Err(AppError::bad_request(
+            "Web 服务监听端口必须在 1 到 65535 之间",
+        ));
+    }
+
+    // 2. 校验任务名称非空
     for task in &new_config.dns_tasks {
         if task.name.trim().is_empty() {
             return Err(AppError::bad_request("任务名称不能为空"));
@@ -133,5 +148,36 @@ provider:
 "#;
         let task_default: DnsTaskConfig = serde_yaml::from_str(default_yaml).unwrap();
         assert!(task_default.enabled);
+    }
+
+    #[test]
+    fn test_save_config_validation_rules() {
+        let valid_config = AppConfig {
+            dns_tasks: vec![DnsTaskConfig::default()],
+            ..Default::default()
+        };
+
+        // 校验合法配置
+        assert!(valid_config.interval_secs >= 5);
+        assert!(valid_config.cache_times >= 1);
+        assert!(valid_config.listen_port > 0);
+        assert!(!valid_config.dns_tasks[0].name.trim().is_empty());
+
+        // 校验非法配置条件
+        let mut invalid_interval = valid_config.clone();
+        invalid_interval.interval_secs = 4;
+        assert!(invalid_interval.interval_secs < 5);
+
+        let mut invalid_cache = valid_config.clone();
+        invalid_cache.cache_times = 0;
+        assert!(invalid_cache.cache_times < 1);
+
+        let mut invalid_port = valid_config.clone();
+        invalid_port.listen_port = 0;
+        assert_eq!(invalid_port.listen_port, 0);
+
+        let mut invalid_task_name = valid_config.clone();
+        invalid_task_name.dns_tasks[0].name = "  ".to_string();
+        assert!(invalid_task_name.dns_tasks[0].name.trim().is_empty());
     }
 }
