@@ -268,14 +268,23 @@ impl DnsProvider for CloudflareProvider {
                 target_ip_str,
             ))
         } else {
-            // 新增记录
+            // 新增记录 (读取自定义参数 ?proxied=true 决定是否开启 CDN 代理)
+            let is_proxied = domain
+                .custom_params
+                .get("proxied")
+                .or_else(|| domain.custom_params.get("proxy"))
+                .map(|v| {
+                    v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
+                })
+                .unwrap_or(false);
+
             let create_url = format!("{}/zones/{}/dns_records", CF_API_BASE, zone_id);
             let body = json!({
                 "type": record_type.to_string(),
                 "name": full_domain,
                 "content": target_ip_str,
                 "ttl": ttl_val,
-                "proxied": false
+                "proxied": is_proxied
             });
 
             let resp = self
