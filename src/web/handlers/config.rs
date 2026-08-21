@@ -65,10 +65,10 @@ pub async fn save_config_handler(
         None
     };
 
-    // 3. 原子更新并持久化配置
+    // 3. 异步原子更新并持久化配置 (刷盘在后台线程池执行)
     state
         .config_manager
-        .modify_config::<_, ConfigError>(|old_config| {
+        .modify_config_async::<_, ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
 
             // 管理员凭据处理：若提交了新密码则更新哈希，否则直接继承保留原密码哈希
@@ -90,6 +90,7 @@ pub async fn save_config_handler(
 
             Ok(to_save)
         })
+        .await
         .map_err(|e| AppError::internal(format!("保存配置失败: {}", e)))?;
 
     // 4. 持久化成功后，热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认) 并刷新客户端连接池

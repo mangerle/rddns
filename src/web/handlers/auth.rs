@@ -155,7 +155,7 @@ pub async fn init_auth_handler(
     let user_str = username.to_string();
     state
         .config_manager
-        .modify_config::<_, ConfigError>(|current_conf| {
+        .modify_config_async::<_, ConfigError>(|current_conf| {
             if current_conf.auth.is_some() {
                 return Err(ConfigError::TempFile(
                     "系统已初始化管理员账号，无法重复初始化".to_string(),
@@ -163,11 +163,12 @@ pub async fn init_auth_handler(
             }
             let mut updated = current_conf.clone();
             updated.auth = Some(UserAuthConfig {
-                username: user_str,
-                password_hash: hash,
+                username: user_str.clone(),
+                password_hash: hash.clone(),
             });
             Ok(updated)
         })
+        .await
         .map_err(|e| AppError::bad_request(format!("初始化管理员账号失败: {}", e)))?;
 
     info!("管理员账号 [{}] 已成功初始化", username);

@@ -95,6 +95,37 @@ impl ConfigManager {
         Ok(new_arc)
     }
 
+    /// 异步在持有写锁的情况下原子修改并持久化配置 (将阻塞式文件刷盘委托给 spawn_blocking)
+    pub async fn modify_config_async<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
+    where
+        F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
+        E: From<ConfigError> + Send + 'static,
+    {
+        let new_config = {
+            let mut guard = self.current.write();
+            let new_config = f(&guard)?;
+            let new_arc = Arc::new(new_config.clone());
+            *guard = new_arc.clone();
+            let _ = self.sender.send(new_arc);
+            new_config
+        };
+
+        let path = self.file_path.clone();
+        let config_clone = new_config.clone();
+
+        tokio::task::spawn_blocking(move || Self::atomic_save_to_path(&path, &config_clone))
+            .await
+            .map_err(|e| {
+                E::from(ConfigError::TempFile(format!(
+                    "执行配置持久化任务异常: {}",
+                    e
+                )))
+            })??;
+
+        info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
+        Ok(Arc::new(new_config))
+    }
+
     /// 原子保存配置到指定路径
     /// 步骤: 写临时文件 -> 刷盘 sync_all -> 原子重命名 rename
     fn atomic_save_to_path(target_path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
