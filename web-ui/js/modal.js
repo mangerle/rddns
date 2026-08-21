@@ -51,13 +51,37 @@ export function clearLogs() {
   showToast(t('modal.logsCleared'), 'info');
 }
 
-export function initSSE() {
+export async function initSSE() {
   if (activeEventSource) {
     try { activeEventSource.close(); } catch (_) {}
     activeEventSource = null;
   }
   const auth = sessionStorage.getItem('rddns_auth');
-  const sseUrl = auth ? `/api/v1/logs/sse?auth=${encodeURIComponent(auth)}` : '/api/v1/logs/sse';
+  let sseUrl = '/api/v1/logs/sse';
+
+  if (auth) {
+    try {
+      const resp = await fetch('/api/v1/auth/sse-ticket', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${auth}`
+        }
+      });
+      if (resp.status === 401) {
+        console.warn('SSE 鉴权失败 (401)，已停止自动重连');
+        return;
+      }
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.data && json.data.ticket) {
+          sseUrl = `/api/v1/logs/sse?ticket=${encodeURIComponent(json.data.ticket)}`;
+        }
+      }
+    } catch (e) {
+      console.warn('获取 SSE Ticket 失败，降级重试:', e);
+    }
+  }
+
   const es = new EventSource(sseUrl);
   activeEventSource = es;
 
@@ -74,6 +98,6 @@ export function initSSE() {
     if (activeEventSource === es) {
       activeEventSource = null;
     }
-    setTimeout(initSSE, 3000);
+    setTimeout(initSSE, 5000);
   };
 }

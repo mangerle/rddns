@@ -5,6 +5,7 @@ use crate::util::net::is_private_or_loopback;
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
+use axum::response::IntoResponse;
 use log::{info, warn};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -210,6 +211,17 @@ pub async fn login_auth_handler(
     }
     // 未设置密码时视为成功
     Ok(Json(ApiResponse::ok("系统未设置密码，直接放行")))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SseTicketData {
+    pub ticket: String,
+}
+
+/// 生成 SSE 实时日志一次性访问凭据 Ticket
+pub async fn create_sse_ticket_handler() -> impl IntoResponse {
+    let ticket = crate::web::auth::issue_sse_ticket();
+    Json(ApiResponse::ok(SseTicketData { ticket }))
 }
 
 #[cfg(test)]

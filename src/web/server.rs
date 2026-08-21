@@ -3,10 +3,10 @@ use crate::util::logging::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{
-    AppState, get_auth_status_handler, get_config_handler, get_logs_handler,
-    get_network_interfaces_handler, get_version_handler, init_auth_handler, login_auth_handler,
-    manual_sync_handler, save_config_handler, test_ip_handler, test_notify_handler,
-    trigger_upgrade_handler,
+    AppState, create_sse_ticket_handler, get_auth_status_handler, get_config_handler,
+    get_logs_handler, get_network_interfaces_handler, get_version_handler, init_auth_handler,
+    login_auth_handler, manual_sync_handler, save_config_handler, test_ip_handler,
+    test_notify_handler, trigger_upgrade_handler,
 };
 use crate::web::sse::sse_log_handler;
 use axum::Router;
@@ -94,6 +94,7 @@ impl WebServer {
             .route("/test/notify", post(test_notify_handler))
             .route("/logs", get(get_logs_handler))
             .route("/logs/sse", get(sse_log_handler))
+            .route("/auth/sse-ticket", post(create_sse_ticket_handler))
             .route("/version", get(get_version_handler))
             .route("/upgrade", post(trigger_upgrade_handler))
             .layer(from_fn_with_state(state.clone(), auth_middleware));

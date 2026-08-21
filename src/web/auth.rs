@@ -6,6 +6,38 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
+
+/// SSE 一次性 Ticket 存储映射表 (ticket -> 创建时间)
+static SSE_TICKETS: LazyLock<RwLock<HashMap<String, Instant>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// 生成并注册一个 30 秒有效的一次性 SSE Ticket
+pub fn issue_sse_ticket() -> String {
+    let mut bytes = [0u8; 16];
+    for b in &mut bytes {
+        *b = fastrand::u8(..);
+    }
+    let ticket = hex::encode(bytes);
+
+    let now = Instant::now();
+    let mut guard = SSE_TICKETS.write();
+    // 清理过期 ticket (> 30s)
+    guard.retain(|_, created_at| now.duration_since(*created_at) < Duration::from_secs(30));
+    guard.insert(ticket.clone(), now);
+    ticket
+}
+
+/// 验证并消耗一次性 Ticket (一次性使用，用后即焚)
+pub fn consume_sse_ticket(ticket: &str) -> bool {
+    let now = Instant::now();
+    let mut guard = SSE_TICKETS.write();
+    guard.retain(|_, created_at| now.duration_since(*created_at) < Duration::from_secs(30));
+    guard.remove(ticket).is_some()
+}
 
 /// Basic Auth 鉴权中间件
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
@@ -25,7 +57,18 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         }
     };
 
-    // 1. 尝试从 Authorization Header 提取
+    // 1. 针对 SSE 流式日志接口 (/logs/sse)，优先检查 URL Query 中的一次性 Ticket
+    if req.uri().path().ends_with("/logs/sse")
+        && let Some(query) = req.uri().query()
+    {
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if k == "ticket" && consume_sse_ticket(&v) {
+                return next.run(req).await;
+            }
+        }
+    }
+
+    // 2. 尝试从 Authorization Header 提取
     let mut auth_raw = None;
     if let Some(auth_header) = req.headers().get(AUTHORIZATION)
         && let Ok(auth_str) = auth_header.to_str()
@@ -34,7 +77,7 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         auth_raw = Some(auth_str.trim_start_matches("Basic ").to_string());
     }
 
-    // 2. 若 Header 不存在，仅在 SSE 流式日志接口（/logs/sse）允许从 URL Query 中提取凭据（浏览器 EventSource 原生不支持设置请求头）
+    // 3. 若 Header 不存在，在 /logs/sse 下兼容旧版 URL auth 凭据
     if auth_raw.is_none()
         && req.uri().path().ends_with("/logs/sse")
         && let Some(query) = req.uri().query()
@@ -165,7 +208,24 @@ mod tests {
             .header(AUTHORIZATION, format!("Basic {}", auth_token))
             .body(axum::body::Body::empty())
             .unwrap();
-        let res3 = app.oneshot(req3).await.unwrap();
+        let res3 = app.clone().oneshot(req3).await.unwrap();
         assert_eq!(res3.status(), StatusCode::OK);
+
+        // 4. 测试一次性 SSE Ticket 鉴权
+        let ticket = issue_sse_ticket();
+        let req_ticket = Request::builder()
+            .uri(format!("/logs/sse?ticket={}", ticket))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res_ticket = app.clone().oneshot(req_ticket).await.unwrap();
+        assert_eq!(res_ticket.status(), StatusCode::OK);
+
+        // 5. 再次使用相同 Ticket 应已被销毁 (401)
+        let req_reuse = Request::builder()
+            .uri(format!("/logs/sse?ticket={}", ticket))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res_reuse = app.oneshot(req_reuse).await.unwrap();
+        assert_eq!(res_reuse.status(), StatusCode::UNAUTHORIZED);
     }
 }
