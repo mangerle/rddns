@@ -52,7 +52,7 @@ impl NotificationEvent {
         let mut lines = Vec::new();
         for r in &self.results {
             lines.push(format!(
-                "- [{}] {} ({}) -> 状态: {:?}, {}",
+                "- [{}] {} ({}) -> 状态: {}, {}",
                 r.record_type, r.domain, r.target_ip, r.status, r.message
             ));
         }
