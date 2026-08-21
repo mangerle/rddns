@@ -77,11 +77,6 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION")
     );
 
-    // 如果配置了自定义 DNS 解析服务器
-    if let Some(ref dns_srv) = args.dns {
-        util::dns_resolver::set_custom_dns_server(dns_srv.clone());
-    }
-
     // 如果开启了跳过证书验证，配置全局 HTTP 策略
     if args.skip_verify {
         util::http::set_skip_verify(true);
