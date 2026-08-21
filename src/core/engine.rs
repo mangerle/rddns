@@ -165,6 +165,17 @@ impl DdnsEngine {
             }
         }
 
+        let parsed_v4_domains = if task.ipv4.enabled {
+            parse_domain_list(&task.ipv4.domains)
+        } else {
+            Vec::new()
+        };
+        let parsed_v6_domains = if task.ipv6.enabled {
+            parse_domain_list(&task.ipv6.domains)
+        } else {
+            Vec::new()
+        };
+
         // 判断 IP 是否发生变动
         let ipv4_changed = ipv4_opt.is_some() && ipv4_opt != current_state.last_ipv4;
         let ipv6_changed = ipv6_opt.is_some() && ipv6_opt != current_state.last_ipv6;
@@ -173,7 +184,23 @@ impl DdnsEngine {
         current_state.check_counter += 1;
         let reach_cache_limit = current_state.check_counter >= app_config.cache_times;
 
-        let should_sync_cloud = force_sync || ip_changed || reach_cache_limit;
+        // 判断是否有此前同步失败需要重试的域名
+        let has_unsynced_v4 = task.ipv4.enabled
+            && ipv4_opt.is_some()
+            && parsed_v4_domains.iter().any(|d| {
+                let key = format!("{}:{:?}", d.full_domain(), DnsRecordType::A);
+                current_state.synced_domains.get(&key) != ipv4_opt.map(|ip| ip.to_string()).as_ref()
+            });
+        let has_unsynced_v6 = task.ipv6.enabled
+            && ipv6_opt.is_some()
+            && parsed_v6_domains.iter().any(|d| {
+                let key = format!("{}:{:?}", d.full_domain(), DnsRecordType::AAAA);
+                current_state.synced_domains.get(&key) != ipv6_opt.map(|ip| ip.to_string()).as_ref()
+            });
+        let has_unsynced_domains = has_unsynced_v4 || has_unsynced_v6;
+
+        let should_sync_cloud =
+            force_sync || ip_changed || reach_cache_limit || has_unsynced_domains;
 
         if !should_sync_cloud {
             info!(
@@ -210,19 +237,9 @@ impl DdnsEngine {
 
         let mut sync_join_set = tokio::task::JoinSet::new();
 
-        let parsed_v4_domains = if task.ipv4.enabled {
-            parse_domain_list(&task.ipv4.domains)
-        } else {
-            Vec::new()
-        };
-        let parsed_v6_domains = if task.ipv6.enabled {
-            parse_domain_list(&task.ipv6.domains)
-        } else {
-            Vec::new()
-        };
-
         // 4. 并发调度 IPv4 / IPv6 域名同步任务（通过信号量限制单任务最大并发数为 5）
         let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DNS_SYNCS));
+        let force_sync_all = force_sync || reach_cache_limit;
 
         Self::spawn_protocol_sync_tasks(
             &mut sync_join_set,
@@ -234,6 +251,8 @@ impl DdnsEngine {
             task.name.clone(),
             task.ttl,
             semaphore.clone(),
+            force_sync_all,
+            &current_state.synced_domains,
         );
 
         Self::spawn_protocol_sync_tasks(
@@ -246,6 +265,8 @@ impl DdnsEngine {
             task.name.clone(),
             task.ttl,
             semaphore.clone(),
+            force_sync_all,
+            &current_state.synced_domains,
         );
 
         let mut sync_results: Vec<SyncRecordResult> = Vec::new();
@@ -255,7 +276,19 @@ impl DdnsEngine {
             }
         }
 
-        // 5. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
+        // 5. 更新单域名独立同步状态
+        for r in &sync_results {
+            let key = format!("{}:{:?}", r.domain, r.record_type);
+            if r.status != SyncStatus::Failed {
+                current_state
+                    .synced_domains
+                    .insert(key, r.target_ip.clone());
+            } else {
+                current_state.synced_domains.remove(&key);
+            }
+        }
+
+        // 6. 更新状态快照 (仅当对应协议的所有域名均成功同步时才更新 last_ip，避免失败后被误判为未变动而长期不重试)
         let ipv4_all_ok = Self::is_protocol_all_ok(
             task.ipv4.enabled,
             ipv4_opt.is_some(),
@@ -394,6 +427,8 @@ impl DdnsEngine {
         task_name: String,
         ttl: Option<u32>,
         semaphore: Arc<Semaphore>,
+        force_sync_all: bool,
+        synced_domains: &HashMap<String, String>,
     ) {
         if !enabled {
             return;
@@ -405,7 +440,24 @@ impl DdnsEngine {
         };
 
         if let Some(ip) = ip_opt {
+            let ip_str = ip.to_string();
             for domain in domains {
+                let full_domain = domain.full_domain();
+                let domain_key = format!("{}:{:?}", full_domain, record_type);
+
+                // 若非强制校对周期，且该域名此前已成功同步至当前 IP，则跳过云端比对直接标记为无需变更
+                if !force_sync_all && synced_domains.get(&domain_key) == Some(&ip_str) {
+                    debug!(
+                        "[{}] 域名 {} ({}) 本地 IP 未变且已处于同步状态，跳过云端请求",
+                        task_name, full_domain, type_str
+                    );
+                    let ip_str_clone = ip_str.clone();
+                    sync_join_set.spawn(async move {
+                        SyncRecordResult::unchanged(full_domain, record_type, ip_str_clone)
+                    });
+                    continue;
+                }
+
                 let domain = domain.clone();
                 let provider = provider.clone();
                 let task_name = task_name.clone();

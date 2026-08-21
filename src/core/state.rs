@@ -23,6 +23,9 @@ pub struct TaskRuntimeState {
     pub last_sync_time: Option<String>,
     /// 最后一次发生的错误摘要
     pub last_error: Option<String>,
+    /// 各域名最近一次成功同步的 IP 记录 (键格式: "full_domain:RecordType", 如 "example.com:A" -> "1.2.3.4")
+    #[serde(default)]
+    pub synced_domains: HashMap<String, String>,
 }
 
 /// 全局任务状态管理器
@@ -70,10 +73,16 @@ mod tests {
         mgr.update_task_state("task1", |s| {
             s.consecutive_failures = 2;
             s.last_error = Some("连接超时".to_string());
+            s.synced_domains
+                .insert("sub.example.com:A".to_string(), "1.2.3.4".to_string());
         });
 
         let updated = mgr.get_task_state("task1");
         assert_eq!(updated.consecutive_failures, 2);
         assert_eq!(updated.last_error.as_deref(), Some("连接超时"));
+        assert_eq!(
+            updated.synced_domains.get("sub.example.com:A"),
+            Some(&"1.2.3.4".to_string())
+        );
     }
 }
