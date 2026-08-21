@@ -1,27 +1,34 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
+use parking_lot::RwLock;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
-use parking_lot::RwLock;
-use std::collections::HashMap;
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct ZoneCacheKey {
+    auth_identity: String,
+    root_domain: String,
+}
 
-/// 全局 Cloudflare Zone ID 缓存池 (root_domain -> zone_id)，实现跨任务与跨周期缓存复用
-static GLOBAL_CF_ZONE_CACHE: std::sync::LazyLock<RwLock<HashMap<String, String>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+/// 全局 Cloudflare Zone ID 缓存池 ((auth_identity, root_domain) -> zone_id)，实现多账号隔离与跨周期缓存复用
+static GLOBAL_CF_ZONE_CACHE: LazyLock<RwLock<HashMap<ZoneCacheKey, String>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub struct CloudflareProvider {
     client: Client,
     api_token: Option<String>,
     api_key: Option<String>,
     email: Option<String>,
+    auth_identity: String,
 }
 
 impl CloudflareProvider {
@@ -46,6 +53,16 @@ impl CloudflareProvider {
             ));
         }
 
+        let auth_identity = if let Some(ref t) = api_token {
+            format!("token:{}", t.trim())
+        } else {
+            format!(
+                "key:{}:{}",
+                api_key.as_deref().unwrap_or(""),
+                email.as_deref().unwrap_or("")
+            )
+        };
+
         let client =
             crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
 
@@ -54,6 +71,7 @@ impl CloudflareProvider {
             api_token,
             api_key,
             email,
+            auth_identity,
         })
     }
 
@@ -79,9 +97,14 @@ impl CloudflareProvider {
         headers
     }
 
-    /// 查询根域名对应的 Zone ID (优先从内存缓存读取)
+    /// 查询根域名对应的 Zone ID (优先从带账号隔离的内存缓存读取)
     async fn get_zone_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
-        if let Some(cached_id) = GLOBAL_CF_ZONE_CACHE.read().get(root_domain).cloned() {
+        let cache_key = ZoneCacheKey {
+            auth_identity: self.auth_identity.clone(),
+            root_domain: root_domain.to_string(),
+        };
+
+        if let Some(cached_id) = GLOBAL_CF_ZONE_CACHE.read().get(&cache_key).cloned() {
             return Ok(cached_id);
         }
 
@@ -93,52 +116,15 @@ impl CloudflareProvider {
             .send()
             .await?;
 
-        let status = resp.status();
-        let body_text = resp.text().await?;
-
-        if !status.is_success() {
-            if let Ok(err_data) = serde_json::from_str::<CfApiResponse<Vec<CfZone>>>(&body_text) {
-                let msg = err_data
-                    .errors
-                    .into_iter()
-                    .map(|e| e.message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                if !msg.is_empty() {
-                    return Err(DnsProviderError::ApiError {
-                        code: format!("CloudflareZoneError ({})", status),
-                        message: msg,
-                    });
-                }
-            }
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: body_text,
-            });
-        }
-
-        let data: CfApiResponse<Vec<CfZone>> = serde_json::from_str(&body_text)?;
-        if !data.success {
-            let msg = data
-                .errors
-                .into_iter()
-                .map(|e| e.message)
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(DnsProviderError::ApiError {
-                code: "CloudflareZoneError".to_string(),
-                message: msg,
-            });
-        }
-
-        let zone = data
-            .result
-            .and_then(|zones| zones.into_iter().next())
+        let zones: Vec<CfZone> = parse_cf_response(resp, "CloudflareZoneError").await?;
+        let zone = zones
+            .into_iter()
+            .next()
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
         GLOBAL_CF_ZONE_CACHE
             .write()
-            .insert(root_domain.to_string(), zone.id.clone());
+            .insert(cache_key, zone.id.clone());
 
         Ok(zone.id)
     }
@@ -161,46 +147,48 @@ impl CloudflareProvider {
             .send()
             .await?;
 
-        let status = resp.status();
-        let body_text = resp.text().await?;
+        parse_cf_response(resp, "CloudflareRecordError").await
+    }
+}
 
-        if !status.is_success() {
-            if let Ok(err_data) = serde_json::from_str::<CfApiResponse<Vec<CfRecord>>>(&body_text) {
-                let msg = err_data
-                    .errors
-                    .into_iter()
-                    .map(|e| e.message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                if !msg.is_empty() {
-                    return Err(DnsProviderError::ApiError {
-                        code: format!("CloudflareRecordError ({})", status),
-                        message: msg,
-                    });
-                }
-            }
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: body_text,
-            });
+/// 通用 Cloudflare API 响应解析器
+async fn parse_cf_response<T: for<'de> Deserialize<'de>>(
+    resp: reqwest::Response,
+    default_err_code: &'static str,
+) -> Result<T, DnsProviderError> {
+    let status = resp.status();
+    let body_text = resp.text().await?;
+
+    if let Ok(data) = serde_json::from_str::<CfApiResponse<T>>(&body_text) {
+        if data.success
+            && let Some(res) = data.result
+        {
+            return Ok(res);
         }
-
-        let data: CfApiResponse<Vec<CfRecord>> = serde_json::from_str(&body_text)?;
-        if !data.success {
-            let msg = data
-                .errors
-                .into_iter()
-                .map(|e| e.message)
-                .collect::<Vec<_>>()
-                .join("; ");
+        let msg = data
+            .errors
+            .into_iter()
+            .map(|e| e.message)
+            .collect::<Vec<_>>()
+            .join("; ");
+        if !msg.is_empty() {
             return Err(DnsProviderError::ApiError {
-                code: "CloudflareRecordError".to_string(),
+                code: format!("{} ({})", default_err_code, status),
                 message: msg,
             });
         }
-
-        Ok(data.result.unwrap_or_default())
     }
+
+    if !status.is_success() {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: body_text,
+        });
+    }
+
+    let data: CfApiResponse<T> = serde_json::from_str(&body_text)?;
+    data.result
+        .ok_or_else(|| DnsProviderError::Other("Cloudflare 响应缺少 result 数据实体".to_string()))
 }
 
 #[async_trait]
@@ -228,6 +216,22 @@ impl DnsProvider for CloudflareProvider {
             .get_records(&zone_id, &full_domain, record_type)
             .await?;
 
+        // 3. 若存在多条同名同类型历史记录，清理除第一条以外的冗余冲突项
+        if records.len() > 1 {
+            for redundant in &records[1..] {
+                let del_url = format!(
+                    "{}/zones/{}/dns_records/{}",
+                    CF_API_BASE, zone_id, redundant.id
+                );
+                let _ = self
+                    .client
+                    .delete(&del_url)
+                    .headers(self.build_headers())
+                    .send()
+                    .await;
+            }
+        }
+
         if let Some(existing) = records.first() {
             if existing.content == target_ip_str {
                 return Ok(SyncRecordResult::unchanged_log(
@@ -238,7 +242,7 @@ impl DnsProvider for CloudflareProvider {
                 ));
             }
 
-            // 更新记录 (使用 PATCH 保持用户的 proxied 状态)
+            // 更新记录 (使用 PATCH 保持用户既有的 proxied 代理加速状态)
             let update_url = format!(
                 "{}/zones/{}/dns_records/{}",
                 CF_API_BASE, zone_id, existing.id
@@ -256,50 +260,13 @@ impl DnsProvider for CloudflareProvider {
                 .send()
                 .await?;
 
-            let status = resp.status();
-            let body_text = resp.text().await?;
-
-            if !status.is_success() {
-                if let Ok(err_data) = serde_json::from_str::<CfApiResponse<CfRecord>>(&body_text) {
-                    let msg = err_data
-                        .errors
-                        .into_iter()
-                        .map(|e| e.message)
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    if !msg.is_empty() {
-                        return Err(DnsProviderError::ApiError {
-                            code: format!("CloudflareUpdateFailed ({})", status),
-                            message: msg,
-                        });
-                    }
-                }
-                return Err(DnsProviderError::ApiError {
-                    code: status.to_string(),
-                    message: body_text,
-                });
-            }
-
-            let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
-            if result.success {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let msg = result
-                    .errors
-                    .into_iter()
-                    .map(|e| e.message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Err(DnsProviderError::ApiError {
-                    code: "CloudflareUpdateFailed".to_string(),
-                    message: msg,
-                })
-            }
+            let _: CfRecord = parse_cf_response(resp, "CloudflareUpdateFailed").await?;
+            Ok(SyncRecordResult::updated_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         } else {
             // 新增记录
             let create_url = format!("{}/zones/{}/dns_records", CF_API_BASE, zone_id);
@@ -319,50 +286,13 @@ impl DnsProvider for CloudflareProvider {
                 .send()
                 .await?;
 
-            let status = resp.status();
-            let body_text = resp.text().await?;
-
-            if !status.is_success() {
-                if let Ok(err_data) = serde_json::from_str::<CfApiResponse<CfRecord>>(&body_text) {
-                    let msg = err_data
-                        .errors
-                        .into_iter()
-                        .map(|e| e.message)
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    if !msg.is_empty() {
-                        return Err(DnsProviderError::ApiError {
-                            code: format!("CloudflareCreateFailed ({})", status),
-                            message: msg,
-                        });
-                    }
-                }
-                return Err(DnsProviderError::ApiError {
-                    code: status.to_string(),
-                    message: body_text,
-                });
-            }
-
-            let result: CfApiResponse<CfRecord> = serde_json::from_str(&body_text)?;
-            if result.success {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let msg = result
-                    .errors
-                    .into_iter()
-                    .map(|e| e.message)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                Err(DnsProviderError::ApiError {
-                    code: "CloudflareCreateFailed".to_string(),
-                    message: msg,
-                })
-            }
+            let _: CfRecord = parse_cf_response(resp, "CloudflareCreateFailed").await?;
+            Ok(SyncRecordResult::created_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         }
     }
 }
