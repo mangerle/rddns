@@ -172,18 +172,15 @@ impl NotificationDispatcher {
             }
         }
 
-        // 异步并行分发到所有已启用的通知渠道
-        let notifiers = self.notifiers.clone();
-        tokio::spawn(async move {
-            for notifier in notifiers {
-                let n = notifier.clone();
-                let ev = event.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = n.send(&ev).await {
-                        error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
-                    }
-                });
-            }
-        });
+        // 并行分发到所有已启用的通知渠道
+        for notifier in &self.notifiers {
+            let n = notifier.clone();
+            let ev = event.clone();
+            tokio::spawn(async move {
+                if let Err(e) = n.send(&ev).await {
+                    error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
+                }
+            });
+        }
     }
 }
