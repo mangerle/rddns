@@ -209,8 +209,11 @@ pub async fn login_auth_handler(
         let _ = check_and_record_login_failure(username, false);
         return Err(AppError::unauthorized("用户名或密码错误"));
     }
-    // 未设置密码时视为成功
-    Ok(Json(ApiResponse::ok("系统未设置密码，直接放行")))
+
+    // 未设置管理员账号时返回明确提示，引导首次初始化
+    Err(AppError::bad_request(
+        "系统尚未初始化管理员账号，请先完成账号初始化设置",
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
