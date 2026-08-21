@@ -396,7 +396,7 @@ onLocaleChange(() => {
   }
   const verTextEl = document.getElementById('versionText');
   if (verTextEl) {
-    const currentVer = verTextEl.dataset.version || '0.6.0';
+    const currentVer = verTextEl.dataset.version || '0.7.0';
     verTextEl.innerText = t('common.connected', { version: `v${currentVer}` });
   }
 });
