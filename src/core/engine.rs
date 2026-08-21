@@ -15,8 +15,11 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
+
+/// 单任务内向 DNS 服务商并发同步域名的最大协程数，防止瞬时打满平台 QPS 限流
+const MAX_CONCURRENT_DNS_SYNCS: usize = 5;
 
 /// DDNS 核心调度引擎
 pub struct DdnsEngine {
@@ -218,7 +221,9 @@ impl DdnsEngine {
             Vec::new()
         };
 
-        // 4. 并发调度 IPv4 / IPv6 域名同步任务
+        // 4. 并发调度 IPv4 / IPv6 域名同步任务（通过信号量限制单任务最大并发数为 5）
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DNS_SYNCS));
+
         Self::spawn_protocol_sync_tasks(
             &mut sync_join_set,
             task.ipv4.enabled,
@@ -228,6 +233,7 @@ impl DdnsEngine {
             dns_provider.clone(),
             task.name.clone(),
             task.ttl,
+            semaphore.clone(),
         );
 
         Self::spawn_protocol_sync_tasks(
@@ -239,6 +245,7 @@ impl DdnsEngine {
             dns_provider.clone(),
             task.name.clone(),
             task.ttl,
+            semaphore.clone(),
         );
 
         let mut sync_results: Vec<SyncRecordResult> = Vec::new();
@@ -386,6 +393,7 @@ impl DdnsEngine {
         provider: Arc<dyn DnsProvider>,
         task_name: String,
         ttl: Option<u32>,
+        semaphore: Arc<Semaphore>,
     ) {
         if !enabled {
             return;
@@ -401,7 +409,9 @@ impl DdnsEngine {
                 let domain = domain.clone();
                 let provider = provider.clone();
                 let task_name = task_name.clone();
+                let sem = semaphore.clone();
                 sync_join_set.spawn(async move {
+                    let _permit = sem.acquire().await.ok();
                     let start_time = std::time::Instant::now();
                     let full_domain = domain.full_domain();
                     match provider.sync_record(&domain, record_type, &ip, ttl).await {
