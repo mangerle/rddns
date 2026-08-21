@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use log::{info, warn};
+use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -120,12 +120,51 @@ fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<()> {
     bail!("DNS 域名数据包意外截断")
 }
 
-/// 解析 DNS 响应数据包提取 IP 列表与最小 TTL (秒)
+/// 安全读取 DNS 域名字符串（支持 RFC 1035 压缩指针与防死循环保护）
+fn read_dns_name_at(buf: &[u8], mut offset: usize) -> Result<String> {
+    let mut labels = Vec::new();
+    let mut steps = 0;
+
+    while offset < buf.len() {
+        steps += 1;
+        if steps > 128 {
+            bail!("DNS 域名解析嵌套层级超出限制");
+        }
+        let len = buf[offset] as usize;
+        if len == 0 {
+            break;
+        }
+        if (len & 0xC0) == 0xC0 {
+            if offset + 2 > buf.len() {
+                bail!("DNS 压缩指针截断");
+            }
+            let ptr = ((len & 0x3F) << 8) | (buf[offset + 1] as usize);
+            if ptr >= buf.len() {
+                bail!("DNS 压缩指针指向超出数据包边界");
+            }
+            offset = ptr;
+            continue;
+        }
+
+        offset += 1;
+        if offset + len > buf.len() {
+            bail!("DNS 域名 Label 长度超出数据包边界");
+        }
+        let label_str = std::str::from_utf8(&buf[offset..offset + len])
+            .map_err(|e| anyhow!("DNS Label UTF-8 解析失败: {}", e))?;
+        labels.push(label_str);
+        offset += len;
+    }
+
+    Ok(labels.join("."))
+}
+
+/// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒) 与可能存在的 CNAME 别名目标
 fn parse_dns_response_packet(
     buf: &[u8],
     query_id: u16,
     qtype: QueryRecordType,
-) -> Result<(Vec<IpAddr>, u32)> {
+) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
     if buf.len() < 12 {
         bail!("DNS 响应包长度过短");
     }
@@ -161,6 +200,7 @@ fn parse_dns_response_packet(
 
     let mut ips = Vec::new();
     let mut min_ttl = 300u32;
+    let mut cname_target: Option<String> = None;
 
     // 解析 Answer 部分
     for _ in 0..ancount {
@@ -203,21 +243,43 @@ fn parse_dns_response_packet(
                 let ipv6 = Ipv6Addr::from(octets);
                 ips.push(IpAddr::V6(ipv6));
             }
+        } else if atype == 5 {
+            // CNAME 别名记录类型
+            if let Ok(cname) = read_dns_name_at(buf, offset)
+                && !cname.trim().is_empty()
+            {
+                cname_target = Some(cname);
+            }
         }
 
         offset += rdlength;
     }
 
-    Ok((ips, min_ttl.clamp(5, 3600)))
+    Ok((ips, min_ttl.clamp(5, 3600), cname_target))
 }
 
-/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存)
+/// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存与 CNAME 递归追溯)
 pub async fn query_dns_server(
     server_addr: &str,
     domain: &str,
     qtype: QueryRecordType,
     timeout_duration: Duration,
 ) -> Result<Vec<IpAddr>> {
+    query_dns_server_recursive(server_addr, domain, qtype, timeout_duration, 0).await
+}
+
+/// 内部带深度限制的 DNS 递归查询实现 (最大递归 3 层以防别名死循环)
+async fn query_dns_server_recursive(
+    server_addr: &str,
+    domain: &str,
+    qtype: QueryRecordType,
+    timeout_duration: Duration,
+    depth: u8,
+) -> Result<Vec<IpAddr>> {
+    if depth > 3 {
+        bail!("DNS CNAME 别名递归追溯层级超过限制 (最大 3 层)");
+    }
+
     let clean_domain = domain.trim_end_matches('.').to_lowercase();
     let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
 
@@ -287,7 +349,8 @@ pub async fn query_dns_server(
         }
 
         match parse_dns_response_packet(&buf[..len], query_id, qtype) {
-            Ok((ips, ttl_secs)) => {
+            Ok((ips, ttl_secs, cname_target)) => {
+                // 如果直接解析到了目标 IP 地址
                 if !ips.is_empty() {
                     let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
                     let mut cache = GLOBAL_DNS_CACHE.write();
@@ -302,8 +365,47 @@ pub async fn query_dns_server(
                             expires_at,
                         },
                     );
+                    return Ok(ips);
                 }
-                return Ok(ips);
+
+                // 如果未直接返回 IP 但携带了 CNAME 别名记录，递归查询别名目标
+                if let Some(cname) = cname_target {
+                    debug!(
+                        "DNS 查询 [{}] 收到 CNAME 别名 [{}]，正在发起追溯查询...",
+                        clean_domain, cname
+                    );
+                    match Box::pin(query_dns_server_recursive(
+                        server_addr,
+                        &cname,
+                        qtype,
+                        timeout_duration,
+                        depth + 1,
+                    ))
+                    .await
+                    {
+                        Ok(resolved_ips) => {
+                            if !resolved_ips.is_empty() {
+                                let expires_at =
+                                    Instant::now() + Duration::from_secs(ttl_secs as u64);
+                                let mut cache = GLOBAL_DNS_CACHE.write();
+                                cache.insert(
+                                    cache_key,
+                                    DnsCacheEntry {
+                                        ips: resolved_ips.clone(),
+                                        expires_at,
+                                    },
+                                );
+                            }
+                            return Ok(resolved_ips);
+                        }
+                        Err(e) => {
+                            last_err = Some(anyhow!("递归追溯 CNAME [{}] 失败: {}", cname, e));
+                            continue;
+                        }
+                    }
+                }
+
+                return Ok(Vec::new());
             }
             Err(e) => {
                 last_err = Some(e);
@@ -348,5 +450,13 @@ mod tests {
         malformed_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x3F, 0x61, 0x62]); // label 声明 63 字节但后续只有 2 字节
         let res2 = parse_dns_response_packet(&malformed_packet, 0x1234, QueryRecordType::A);
         assert!(res2.is_err());
+    }
+
+    #[test]
+    fn test_read_dns_name_at() {
+        // 构造域名 "foo.bar.com" -> [3, 'f', 'o', 'o', 3, 'b', 'a', 'r', 3, 'c', 'o', 'm', 0]
+        let name_bytes = b"\x03foo\x03bar\x03com\x00";
+        let parsed = read_dns_name_at(name_bytes, 0).unwrap();
+        assert_eq!(parsed, "foo.bar.com");
     }
 }
