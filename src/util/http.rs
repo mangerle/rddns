@@ -163,7 +163,46 @@ pub fn find_interface_ip(iface_name: &str) -> Option<IpAddr> {
     None
 }
 
-/// 创建绑定了指定出站物理网卡 / 源 IP 的 ClientBuilder (多 WAN 软路由多出口支持)
+/// 根据指定的网络协议族 (IPv4 或 IPv6) 创建绑定了指定出站物理网卡源 IP 的 ClientBuilder
+pub fn create_task_http_client_builder_for_family(
+    interface_name: Option<&str>,
+    is_ipv6: bool,
+) -> reqwest::ClientBuilder {
+    let mut builder = create_http_client_builder();
+    if let Some(iface) = interface_name {
+        let clean = iface.trim();
+        if !clean.is_empty() {
+            let local_ip = if is_ipv6 {
+                find_interface_ipv6(clean).map(IpAddr::V6)
+            } else {
+                find_interface_ipv4(clean).map(IpAddr::V4)
+            };
+
+            if let Some(ip) = local_ip {
+                info!(
+                    "任务绑定出站物理网卡 [{}] ({}: {})",
+                    clean,
+                    if is_ipv6 {
+                        "IPv6 源地址"
+                    } else {
+                        "IPv4 源地址"
+                    },
+                    ip
+                );
+                builder = builder.local_address(Some(ip));
+            } else {
+                warn!(
+                    "未能在系统网卡 [{}] 中找到有效的 {} 出站地址，将回退至系统默认路由",
+                    clean,
+                    if is_ipv6 { "IPv6" } else { "IPv4" }
+                );
+            }
+        }
+    }
+    builder
+}
+
+/// 创建绑定了指定出站物理网卡 / 源 IP 的通用 ClientBuilder (多 WAN 软路由多出口支持)
 pub fn create_task_http_client_builder(interface_name: Option<&str>) -> reqwest::ClientBuilder {
     let mut builder = create_http_client_builder();
     if let Some(iface) = interface_name {

@@ -10,7 +10,8 @@ use std::time::Duration;
 pub struct UrlIpFetcher {
     endpoints: Vec<String>,
     regex: Option<String>,
-    client: Client,
+    ipv4_client: Client,
+    ipv6_client: Client,
 }
 
 impl UrlIpFetcher {
@@ -19,22 +20,50 @@ impl UrlIpFetcher {
         regex: Option<String>,
         http_interface: Option<&str>,
     ) -> Self {
-        let client = match crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(5))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()
+        let timeout = Duration::from_secs(5);
+        let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+        let ipv4_client = match crate::util::http::create_task_http_client_builder_for_family(
+            http_interface,
+            false,
+        )
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .build()
         {
             Ok(c) => c,
             Err(e) => {
                 if let Some(iface) = http_interface {
                     warn!(
-                        "为任务网卡 [{}] 构建专有 HTTP 客户端失败: {}，降级为默认客户端",
-                        iface,
-                        e
+                        "为任务网卡 [{}] 构建 IPv4 专有客户端失败: {}，降级为默认客户端",
+                        iface, e
                     );
                 }
                 Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(timeout)
+                    .build()
+                    .unwrap_or_default()
+            }
+        };
+
+        let ipv6_client = match crate::util::http::create_task_http_client_builder_for_family(
+            http_interface,
+            true,
+        )
+        .timeout(timeout)
+        .user_agent(user_agent)
+        .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(iface) = http_interface {
+                    warn!(
+                        "为任务网卡 [{}] 构建 IPv6 专有客户端失败: {}，降级为默认客户端",
+                        iface, e
+                    );
+                }
+                Client::builder()
+                    .timeout(timeout)
                     .build()
                     .unwrap_or_default()
             }
@@ -43,9 +72,11 @@ impl UrlIpFetcher {
         Self {
             endpoints,
             regex,
-            client,
+            ipv4_client,
+            ipv6_client,
         }
     }
+
     async fn read_limited_text(resp: reqwest::Response) -> Result<String, FetchError> {
         let status = resp.status();
         if !status.is_success() {
@@ -70,6 +101,7 @@ impl UrlIpFetcher {
     /// 通用 URL 遍历与 IP 提取循环
     async fn fetch_ip_generic<T: std::fmt::Display>(
         &self,
+        client: &Client,
         ip_name: &str,
         extractor: impl Fn(&str) -> Result<T, FetchError>,
     ) -> Result<Option<T>, FetchError> {
@@ -79,7 +111,7 @@ impl UrlIpFetcher {
 
         let mut last_err = None;
         for endpoint in &self.endpoints {
-            match self.client.get(endpoint).send().await {
+            match client.get(endpoint).send().await {
                 Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => match extractor(&body) {
                         Ok(ip) => {
@@ -111,7 +143,7 @@ impl UrlIpFetcher {
 #[async_trait]
 impl IpFetcher for UrlIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
-        self.fetch_ip_generic("IPv4", |body| {
+        self.fetch_ip_generic(&self.ipv4_client, "IPv4", |body| {
             extract_ipv4(body, self.regex.as_deref())
                 .ok_or_else(|| FetchError::NoValidIpv4(body.to_string()))
         })
@@ -119,7 +151,7 @@ impl IpFetcher for UrlIpFetcher {
     }
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
-        self.fetch_ip_generic("IPv6", |body| {
+        self.fetch_ip_generic(&self.ipv6_client, "IPv6", |body| {
             let ip = extract_ipv6(body, self.regex.as_deref())
                 .ok_or_else(|| FetchError::NoValidIpv6(body.to_string()))?;
             if is_global_unicast_ipv6(&ip) {
