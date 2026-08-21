@@ -4,6 +4,7 @@
 
 import { showToast } from './toast.js';
 import { t } from './i18n/index.js';
+import { escapeHtml } from './tasks.js';
 
 let activeEventSource = null;
 
@@ -33,13 +34,13 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// 日志追加与渲染
+// 日志追加与渲染 (经 HTML 转义防范 XSS)
 export function appendLog(entry) {
   const container = document.getElementById('logContainer');
   if (!container) return;
   const div = document.createElement('div');
   div.className = 'log-line';
-  div.innerHTML = `<span class="log-time">[${entry.timestamp}]</span> <span class="log-lvl-${entry.level}">[${entry.level}]</span> <span class="log-target">[${entry.target}]</span> ${entry.message}`;
+  div.innerHTML = `<span class="log-time">[${escapeHtml(entry.timestamp)}]</span> <span class="log-lvl-${escapeHtml(entry.level)}">[${escapeHtml(entry.level)}]</span> <span class="log-target">[${escapeHtml(entry.target)}]</span> ${escapeHtml(entry.message)}`;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
