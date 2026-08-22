@@ -95,20 +95,14 @@ impl ConfigManager {
         Ok(new_arc)
     }
 
-    /// 异步在持有写锁的情况下原子修改并持久化配置 (将阻塞式文件刷盘委托给 spawn_blocking)
+    /// 异步在持有写锁的情况下原子修改并持久化配置 (先持久化落盘再更新内存与广播，确保状态强一致)
     pub async fn modify_config_async<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError> + Send + 'static,
     {
-        let new_config = {
-            let mut guard = self.current.write();
-            let new_config = f(&guard)?;
-            let new_arc = Arc::new(new_config.clone());
-            *guard = new_arc.clone();
-            let _ = self.sender.send(new_arc);
-            new_config
-        };
+        let current_config = self.get_config();
+        let new_config = f(&current_config)?;
 
         let path = self.file_path.clone();
         let config_clone = new_config.clone();
@@ -122,8 +116,15 @@ impl ConfigManager {
                 )))
             })??;
 
+        let new_arc = Arc::new(new_config);
+        {
+            let mut guard = self.current.write();
+            *guard = new_arc.clone();
+            let _ = self.sender.send(new_arc.clone());
+        }
+
         info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
-        Ok(Arc::new(new_config))
+        Ok(new_arc)
     }
 
     /// 原子保存配置到指定路径
@@ -169,5 +170,27 @@ mod tests {
 
         let reloaded = ConfigManager::load_or_create(config_file).unwrap();
         assert_eq!(reloaded.get_config().listen_port, 8888);
+    }
+
+    #[tokio::test]
+    async fn test_modify_config_async() {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("test_async_config.yaml");
+
+        let manager = ConfigManager::load_or_create(config_file.clone()).unwrap();
+        let updated_arc = manager
+            .modify_config_async::<_, ConfigError>(|conf| {
+                let mut c = conf.clone();
+                c.listen_port = 7777;
+                Ok(c)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(updated_arc.listen_port, 7777);
+        assert_eq!(manager.get_config().listen_port, 7777);
+
+        let reloaded = ConfigManager::load_or_create(config_file).unwrap();
+        assert_eq!(reloaded.get_config().listen_port, 7777);
     }
 }
