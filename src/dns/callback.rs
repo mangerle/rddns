@@ -43,16 +43,32 @@ impl CallbackProvider {
         record_type: DnsRecordType,
         ip: &IpAddr,
         ttl: Option<u32>,
+        url_encode: bool,
     ) -> String {
+        let encode_fn = |s: &str| -> String {
+            if url_encode {
+                url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+            } else {
+                s.to_string()
+            }
+        };
+
+        let ip_str = ip.to_string();
+        let full_domain = domain.full_domain();
+        let root_domain = domain.root_domain.clone();
+        let sub_domain = domain.sub_domain_or_at();
+        let record_type_str = record_type.to_string();
+        let ttl_str = ttl.unwrap_or(600).to_string();
+
         template
-            .replace("#{ip}", &ip.to_string())
-            .replace("#{ipv4Addr}", &ip.to_string())
-            .replace("#{ipv6Addr}", &ip.to_string())
-            .replace("#{domain}", &domain.full_domain())
-            .replace("#{rootDomain}", &domain.root_domain)
-            .replace("#{subDomain}", domain.sub_domain_or_at())
-            .replace("#{recordType}", &record_type.to_string())
-            .replace("#{ttl}", &ttl.unwrap_or(600).to_string())
+            .replace("#{ip}", &encode_fn(&ip_str))
+            .replace("#{ipv4Addr}", &encode_fn(&ip_str))
+            .replace("#{ipv6Addr}", &encode_fn(&ip_str))
+            .replace("#{domain}", &encode_fn(&full_domain))
+            .replace("#{rootDomain}", &encode_fn(&root_domain))
+            .replace("#{subDomain}", &encode_fn(sub_domain))
+            .replace("#{recordType}", &encode_fn(&record_type_str))
+            .replace("#{ttl}", &encode_fn(&ttl_str))
     }
 }
 
@@ -72,7 +88,7 @@ impl DnsProvider for CallbackProvider {
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
 
-        let rendered_url = Self::replace_variables(&self.url, domain, record_type, ip, ttl);
+        let rendered_url = Self::replace_variables(&self.url, domain, record_type, ip, ttl, true);
         let http_method = Method::from_str(&self.method.to_uppercase()).unwrap_or(Method::GET);
 
         let mut req = self.client.request(http_method, &rendered_url);
@@ -80,7 +96,8 @@ impl DnsProvider for CallbackProvider {
         if let Some(ref hdrs) = self.headers {
             let mut header_map = HeaderMap::new();
             for (k, v) in hdrs {
-                let rendered_v = Self::replace_variables(v, domain, record_type, ip, ttl);
+                let rendered_v =
+                    Self::replace_variables(v, domain, record_type, ip, ttl, false);
                 if let (Ok(hk), Ok(hv)) =
                     (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v))
                 {
@@ -91,7 +108,8 @@ impl DnsProvider for CallbackProvider {
         }
 
         if let Some(ref body_tmpl) = self.body {
-            let rendered_body = Self::replace_variables(body_tmpl, domain, record_type, ip, ttl);
+            let rendered_body =
+                Self::replace_variables(body_tmpl, domain, record_type, ip, ttl, false);
             req = req.body(rendered_body);
         }
 
@@ -120,5 +138,37 @@ impl DnsProvider for CallbackProvider {
                 message: text,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_callback_replace_variables_url_encode() {
+        let domain = ParsedDomain {
+            raw: "*.测试.example.com".to_string(),
+            root_domain: "example.com".to_string(),
+            sub_domain: "*.测试".to_string(),
+            custom_params: HashMap::new(),
+        };
+        let ip = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
+
+        let url_tmpl = "https://api.example.com/update?sub=#{subDomain}&domain=#{domain}&ip=#{ip}";
+        let rendered_url =
+            CallbackProvider::replace_variables(url_tmpl, &domain, DnsRecordType::A, &ip, None, true);
+
+        // 中文字符应该在 URL 模式下被 URL 编码
+        assert!(!rendered_url.contains("*.测试"));
+        assert!(rendered_url.contains("*.%E6%B5%8B%E8%AF%95"));
+        assert!(rendered_url.contains("1.2.3.4"));
+
+        // Body 模式下应保留原始字符
+        let body_tmpl = r##"{"sub": "#{subDomain}", "domain": "#{domain}", "ip": "#{ip}"}"##;
+        let rendered_body =
+            CallbackProvider::replace_variables(body_tmpl, &domain, DnsRecordType::A, &ip, None, false);
+        assert!(rendered_body.contains("*.测试"));
     }
 }
