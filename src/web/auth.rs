@@ -77,19 +77,6 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         auth_raw = Some(auth_str.trim_start_matches("Basic ").to_string());
     }
 
-    // 3. 若 Header 不存在，在 /logs/sse 下兼容旧版 URL auth 凭据
-    if auth_raw.is_none()
-        && req.uri().path().ends_with("/logs/sse")
-        && let Some(query) = req.uri().query()
-    {
-        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-            if k == "auth" {
-                auth_raw = Some(v.into_owned());
-                break;
-            }
-        }
-    }
-
     // 3. 校验提取到的 Base64 编码凭据
     if let Some(encoded) = auth_raw
         && let Ok(decoded_bytes) = BASE64_STANDARD.decode(encoded.trim())
@@ -156,7 +143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auth_middleware_query_auth_scope() {
+    async fn test_auth_middleware_ticket_and_header() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.yaml");
@@ -186,7 +173,7 @@ mod tests {
 
         let auth_token = BASE64_STANDARD.encode("admin:admin123");
 
-        // 1. 在普通接口 /config 上带 ?auth= 应被拒绝 (401)
+        // 1. 在任何接口上直接带 ?auth= 均应被拒绝 (401)，杜绝在 URL 中传递永久凭据
         let req1 = Request::builder()
             .uri(format!("/config?auth={}", auth_token))
             .body(axum::body::Body::empty())
@@ -194,15 +181,14 @@ mod tests {
         let res1 = app.clone().oneshot(req1).await.unwrap();
         assert_eq!(res1.status(), StatusCode::UNAUTHORIZED);
 
-        // 2. 在 /logs/sse 上带 ?auth= 应被允许 (200)
         let req2 = Request::builder()
             .uri(format!("/logs/sse?auth={}", auth_token))
             .body(axum::body::Body::empty())
             .unwrap();
         let res2 = app.clone().oneshot(req2).await.unwrap();
-        assert_eq!(res2.status(), StatusCode::OK);
+        assert_eq!(res2.status(), StatusCode::UNAUTHORIZED);
 
-        // 3. 在普通接口带 Header 应该被允许 (200)
+        // 2. 在普通接口带 Header 应该被允许 (200)
         let req3 = Request::builder()
             .uri("/config")
             .header(AUTHORIZATION, format!("Basic {}", auth_token))
@@ -211,7 +197,7 @@ mod tests {
         let res3 = app.clone().oneshot(req3).await.unwrap();
         assert_eq!(res3.status(), StatusCode::OK);
 
-        // 4. 测试一次性 SSE Ticket 鉴权
+        // 3. 测试一次性 SSE Ticket 鉴权 (200)
         let ticket = issue_sse_ticket();
         let req_ticket = Request::builder()
             .uri(format!("/logs/sse?ticket={}", ticket))
@@ -220,7 +206,7 @@ mod tests {
         let res_ticket = app.clone().oneshot(req_ticket).await.unwrap();
         assert_eq!(res_ticket.status(), StatusCode::OK);
 
-        // 5. 再次使用相同 Ticket 应已被销毁 (401)
+        // 4. 再次使用相同 Ticket 应已被销毁 (401)
         let req_reuse = Request::builder()
             .uri(format!("/logs/sse?ticket={}", ticket))
             .body(axum::body::Body::empty())
