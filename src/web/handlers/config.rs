@@ -194,7 +194,8 @@ provider:
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
         let config_file = dir.path().join("config_save_test.yaml");
-        let manager = Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
+        let manager =
+            Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
 
         // 设置初始管理员凭据
         manager

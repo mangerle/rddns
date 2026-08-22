@@ -96,8 +96,7 @@ impl DnsProvider for CallbackProvider {
         if let Some(ref hdrs) = self.headers {
             let mut header_map = HeaderMap::new();
             for (k, v) in hdrs {
-                let rendered_v =
-                    Self::replace_variables(v, domain, record_type, ip, ttl, false);
+                let rendered_v = Self::replace_variables(v, domain, record_type, ip, ttl, false);
                 if let (Ok(hk), Ok(hv)) =
                     (HeaderName::from_str(k), HeaderValue::from_str(&rendered_v))
                 {
@@ -157,8 +156,14 @@ mod tests {
         let ip = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
 
         let url_tmpl = "https://api.example.com/update?sub=#{subDomain}&domain=#{domain}&ip=#{ip}";
-        let rendered_url =
-            CallbackProvider::replace_variables(url_tmpl, &domain, DnsRecordType::A, &ip, None, true);
+        let rendered_url = CallbackProvider::replace_variables(
+            url_tmpl,
+            &domain,
+            DnsRecordType::A,
+            &ip,
+            None,
+            true,
+        );
 
         // 中文字符应该在 URL 模式下被 URL 编码
         assert!(!rendered_url.contains("*.测试"));
@@ -167,8 +172,14 @@ mod tests {
 
         // Body 模式下应保留原始字符
         let body_tmpl = r##"{"sub": "#{subDomain}", "domain": "#{domain}", "ip": "#{ip}"}"##;
-        let rendered_body =
-            CallbackProvider::replace_variables(body_tmpl, &domain, DnsRecordType::A, &ip, None, false);
+        let rendered_body = CallbackProvider::replace_variables(
+            body_tmpl,
+            &domain,
+            DnsRecordType::A,
+            &ip,
+            None,
+            false,
+        );
         assert!(rendered_body.contains("*.测试"));
     }
 }
