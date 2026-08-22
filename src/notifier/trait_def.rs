@@ -59,10 +59,20 @@ impl NotificationEvent {
         lines.join("\n")
     }
 
-    /// 获取涉及的所有域名列表（逗号分隔）
+    /// 获取涉及的所有域名列表（逗号分隔，保持首次出现顺序且全局无重复）
     pub fn domains_comma_separated(&self) -> String {
-        let mut domains: Vec<String> = self.results.iter().map(|r| r.domain.clone()).collect();
-        domains.dedup();
+        let mut seen = std::collections::HashSet::new();
+        let domains: Vec<String> = self
+            .results
+            .iter()
+            .filter_map(|r| {
+                if seen.insert(&r.domain) {
+                    Some(r.domain.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         domains.join(", ")
     }
 }
@@ -93,4 +103,51 @@ pub fn check_errcode_response(body: &str, platform_name: &str) -> Result<(), Not
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dns::trait_def::{DnsRecordType, SyncStatus};
+
+    #[test]
+    fn test_domains_comma_separated_dedup() {
+        let event = NotificationEvent {
+            overall_status: NotificationOverallStatus::Success,
+            task_name: "test".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: true,
+            results: vec![
+                SyncRecordResult {
+                    domain: "a.example.com".to_string(),
+                    record_type: DnsRecordType::A,
+                    target_ip: "1.1.1.1".to_string(),
+                    status: SyncStatus::Updated,
+                    message: "ok".to_string(),
+                },
+                SyncRecordResult {
+                    domain: "b.example.com".to_string(),
+                    record_type: DnsRecordType::A,
+                    target_ip: "1.1.1.1".to_string(),
+                    status: SyncStatus::Updated,
+                    message: "ok".to_string(),
+                },
+                SyncRecordResult {
+                    domain: "a.example.com".to_string(),
+                    record_type: DnsRecordType::AAAA,
+                    target_ip: "::1".to_string(),
+                    status: SyncStatus::Updated,
+                    message: "ok".to_string(),
+                },
+            ],
+            timestamp: Local::now(),
+        };
+
+        // 非连续出现的 a.example.com 应该被正确去重，且保持 a, b 顺序
+        assert_eq!(
+            event.domains_comma_separated(),
+            "a.example.com, b.example.com"
+        );
+    }
 }
