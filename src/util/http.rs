@@ -321,6 +321,20 @@ pub fn create_default_dns_client(interface_name: Option<&str>) -> reqwest::Clien
     get_task_http_client(interface_name, Duration::from_secs(15))
 }
 
+/// 对字符串执行 URL 百分比编码 (application/x-www-form-urlencoded)
+pub fn url_encode(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
+/// 根据条件选择是否对字符串执行 URL 百分比编码
+pub fn url_encode_if(s: &str, should_encode: bool) -> String {
+    if should_encode {
+        url_encode(s)
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +355,12 @@ mod tests {
         assert!(v4.is_none());
         let v6 = find_interface_ipv6("nonexistent_interface_999");
         assert!(v6.is_none());
+    }
+
+    #[test]
+    fn test_url_encode_if() {
+        let raw = "测试 abc 123";
+        assert_eq!(url_encode_if(raw, false), raw);
+        assert_eq!(url_encode_if(raw, true), "%E6%B5%8B%E8%AF%95+abc+123");
     }
 }

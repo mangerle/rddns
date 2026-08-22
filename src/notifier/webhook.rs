@@ -1,5 +1,6 @@
 use crate::config::model::WebhookConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
+use crate::util::http::{create_http_client_builder, url_encode_if};
 use async_trait::async_trait;
 use log::{info, warn};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -14,7 +15,7 @@ pub struct CustomWebhookNotifier {
 
 impl CustomWebhookNotifier {
     pub fn new(config: WebhookConfig) -> Self {
-        let client = crate::util::http::create_http_client_builder()
+        let client = create_http_client_builder()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_default();
@@ -29,23 +30,18 @@ impl CustomWebhookNotifier {
         let time_unix = event.timestamp.timestamp().to_string();
         let details_str = event.format_details_text();
 
-        let encode_fn = |s: &str| -> String {
-            if url_encode {
-                url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
-            } else {
-                s.to_string()
-            }
-        };
-
         template
-            .replace("#{status}", &encode_fn(event.overall_status.as_str()))
-            .replace("#{taskName}", &encode_fn(&event.task_name))
-            .replace("#{ipv4Addr}", &encode_fn(&ipv4_str))
-            .replace("#{ipv6Addr}", &encode_fn(&ipv6_str))
-            .replace("#{domains}", &encode_fn(&domains_str))
-            .replace("#{timestamp}", &encode_fn(&time_str))
-            .replace("#{timeUnix}", &encode_fn(&time_unix))
-            .replace("#{details}", &encode_fn(&details_str))
+            .replace(
+                "#{status}",
+                &url_encode_if(event.overall_status.as_str(), url_encode),
+            )
+            .replace("#{taskName}", &url_encode_if(&event.task_name, url_encode))
+            .replace("#{ipv4Addr}", &url_encode_if(&ipv4_str, url_encode))
+            .replace("#{ipv6Addr}", &url_encode_if(&ipv6_str, url_encode))
+            .replace("#{domains}", &url_encode_if(&domains_str, url_encode))
+            .replace("#{timestamp}", &url_encode_if(&time_str, url_encode))
+            .replace("#{timeUnix}", &url_encode_if(&time_unix, url_encode))
+            .replace("#{details}", &url_encode_if(&details_str, url_encode))
     }
 }
 

@@ -2,6 +2,7 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
     DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
 };
+use crate::util::http::{create_default_dns_client, url_encode_if};
 use async_trait::async_trait;
 use log::info;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -26,7 +27,7 @@ impl CallbackProvider {
         body: Option<String>,
         http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
-        let client = crate::util::http::create_default_dns_client(http_interface);
+        let client = create_default_dns_client(http_interface);
 
         Ok(Self {
             client,
@@ -45,14 +46,6 @@ impl CallbackProvider {
         ttl: Option<u32>,
         url_encode: bool,
     ) -> String {
-        let encode_fn = |s: &str| -> String {
-            if url_encode {
-                url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
-            } else {
-                s.to_string()
-            }
-        };
-
         let ip_str = ip.to_string();
         let full_domain = domain.full_domain();
         let root_domain = domain.root_domain.clone();
@@ -61,14 +54,17 @@ impl CallbackProvider {
         let ttl_str = ttl.unwrap_or(600).to_string();
 
         template
-            .replace("#{ip}", &encode_fn(&ip_str))
-            .replace("#{ipv4Addr}", &encode_fn(&ip_str))
-            .replace("#{ipv6Addr}", &encode_fn(&ip_str))
-            .replace("#{domain}", &encode_fn(&full_domain))
-            .replace("#{rootDomain}", &encode_fn(&root_domain))
-            .replace("#{subDomain}", &encode_fn(sub_domain))
-            .replace("#{recordType}", &encode_fn(&record_type_str))
-            .replace("#{ttl}", &encode_fn(&ttl_str))
+            .replace("#{ip}", &url_encode_if(&ip_str, url_encode))
+            .replace("#{ipv4Addr}", &url_encode_if(&ip_str, url_encode))
+            .replace("#{ipv6Addr}", &url_encode_if(&ip_str, url_encode))
+            .replace("#{domain}", &url_encode_if(&full_domain, url_encode))
+            .replace("#{rootDomain}", &url_encode_if(&root_domain, url_encode))
+            .replace("#{subDomain}", &url_encode_if(sub_domain, url_encode))
+            .replace(
+                "#{recordType}",
+                &url_encode_if(&record_type_str, url_encode),
+            )
+            .replace("#{ttl}", &url_encode_if(&ttl_str, url_encode))
     }
 }
 
