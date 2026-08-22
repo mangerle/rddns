@@ -71,21 +71,27 @@ pub async fn save_config_handler(
         .modify_config_async::<_, ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
 
-            // 管理员凭据处理：若提交了新密码则更新哈希，否则直接继承保留原密码哈希
+            // 管理员凭据处理：若提交了新密码则更新哈希，否则自动继承保留原配置中的账号凭据
             if let Some(new_hash) = new_password_hash {
                 let username = to_save
                     .auth
                     .as_ref()
                     .map(|a| a.username.clone())
+                    .or_else(|| old_config.auth.as_ref().map(|a| a.username.clone()))
                     .unwrap_or_else(|| "admin".to_string());
                 to_save.auth = Some(UserAuthConfig {
                     username,
                     password_hash: new_hash,
                 });
-            } else if let Some(old_auth) = &old_config.auth
-                && let Some(new_auth) = &mut to_save.auth
-            {
-                new_auth.password_hash = old_auth.password_hash.clone();
+            } else if let Some(old_auth) = &old_config.auth {
+                if let Some(new_auth) = &mut to_save.auth {
+                    if new_auth.username.trim().is_empty() {
+                        new_auth.username = old_auth.username.clone();
+                    }
+                    new_auth.password_hash = old_auth.password_hash.clone();
+                } else {
+                    to_save.auth = Some(old_auth.clone());
+                }
             }
 
             Ok(to_save)
@@ -113,6 +119,7 @@ pub async fn save_config_handler(
 mod tests {
     use super::*;
     use crate::config::model::DnsTaskConfig;
+    use std::sync::Arc;
 
     #[test]
     fn test_password_hash_not_serialized_when_empty() {
@@ -180,5 +187,53 @@ provider:
         let mut invalid_task_name = valid_config.clone();
         invalid_task_name.dns_tasks[0].name = "  ".to_string();
         assert!(invalid_task_name.dns_tasks[0].name.trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_save_config_preserves_auth() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_file = dir.path().join("config_save_test.yaml");
+        let manager = Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
+
+        // 设置初始管理员凭据
+        manager
+            .update_config(AppConfig {
+                auth: Some(UserAuthConfig {
+                    username: "admin".to_string(),
+                    password_hash: "$2b$12$test_existing_hash".to_string(),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let state = AppState {
+            config_manager: manager.clone(),
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+        };
+
+        // 模拟前端保存配置请求（未附带 auth 字段）
+        let payload = SaveConfigRequest {
+            config: AppConfig {
+                interval_secs: 10,
+                cache_times: 5,
+                listen_port: 9876,
+                auth: None, // 前端未提交 auth 字段
+                dns_tasks: vec![],
+                ..Default::default()
+            },
+            new_password: None,
+        };
+
+        let res = save_config_handler(axum::extract::State(state), axum::Json(payload)).await;
+        assert!(res.is_ok());
+
+        // 验证旧管理员凭据未丢失
+        let current = manager.get_config();
+        assert!(current.auth.is_some());
+        let auth = current.auth.as_ref().unwrap();
+        assert_eq!(auth.username, "admin");
+        assert_eq!(auth.password_hash, "$2b$12$test_existing_hash");
     }
 }
