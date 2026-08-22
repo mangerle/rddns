@@ -192,8 +192,14 @@ impl IpFetcher for NetInterfaceIpFetcher {
 
         let mut candidates = Vec::new();
 
-        // 1. Linux 环境：优先尝试从 /proc/net/if_inet6 精准读取并构建有序候选集
-        if let Some(entries) = read_linux_if_inet6(Some(&target_if.name)) {
+        // 1. Linux 环境：优先尝试从 /proc/net/if_inet6 精准读取并构建有序候选集 (委托给阻塞线程池)
+        let if_name = target_if.name.clone();
+        let linux_entries =
+            tokio::task::spawn_blocking(move || read_linux_if_inet6(Some(&if_name)))
+                .await
+                .unwrap_or(None);
+
+        if let Some(entries) = linux_entries {
             let mut stable = Vec::new();
             let mut temp = Vec::new();
 
