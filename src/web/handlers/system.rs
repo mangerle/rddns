@@ -6,6 +6,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use log::{error, info};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 手动触发立即全量同步
 pub async fn manual_sync_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -46,10 +47,25 @@ pub async fn get_version_handler() -> impl IntoResponse {
     }
 }
 
-/// 触发在线自动更新并平滑热重启
+/// 全局更新状态锁 (防止并发触发重复下载与文件覆盖)
+static IS_UPGRADING: AtomicBool = AtomicBool::new(false);
+
+/// 触发在线自动更新并平滑热重启 (带并发防重锁)
 pub async fn trigger_upgrade_handler() -> impl IntoResponse {
+    if IS_UPGRADING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Json(ApiResponse::err(
+            "当前已有更新任务正在进行中，请勿重复触发！".to_string(),
+        ));
+    }
+
     tokio::spawn(async {
-        match upgrade_self().await {
+        let upgrade_res = upgrade_self().await;
+        IS_UPGRADING.store(false, Ordering::SeqCst);
+
+        match upgrade_res {
             Ok(()) => {
                 info!("自动更新完成，正在平滑重启服务以加载新版本...");
                 if let Err(e) = restart_process() {
@@ -65,4 +81,18 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     Json(ApiResponse::ok(
         "已在后台启动自动更新，文件下载替换完成后将自动平滑重启服务",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trigger_upgrade_concurrency_lock() {
+        IS_UPGRADING.store(true, Ordering::SeqCst);
+        let resp = trigger_upgrade_handler().await.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        // 清理状态
+        IS_UPGRADING.store(false, Ordering::SeqCst);
+    }
 }
