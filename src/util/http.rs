@@ -152,13 +152,52 @@ pub fn find_interface_ipv6(iface_name: &str) -> Option<std::net::Ipv6Addr> {
     None
 }
 
-/// 根据指定网卡设备名称寻找最佳出站 IP 地址 (优先有效 IPv4，其次全球单播 IPv6，严格过滤 fe80:: 链路本地地址)
+/// 根据指定网卡设备名称寻找最佳出站 IP 地址 (智能优选: 公网 IPv4 > 全球单播 IPv6 > 局域网 IPv4)
 pub fn find_interface_ip(iface_name: &str) -> Option<IpAddr> {
-    if let Some(v4) = find_interface_ipv4(iface_name) {
-        return Some(IpAddr::V4(v4));
-    }
-    if let Some(v6) = find_interface_ipv6(iface_name) {
-        return Some(IpAddr::V6(v6));
+    if let Ok(interfaces) = NetworkInterface::show() {
+        for iface in interfaces {
+            if iface.name.eq_ignore_ascii_case(iface_name) {
+                let mut public_v4 = None;
+                let mut private_v4 = None;
+                let mut v6_candidates = Vec::new();
+
+                for addr in iface.addr {
+                    match addr {
+                        Addr::V4(v4) => {
+                            if !v4.ip.is_loopback() && !v4.ip.is_unspecified() {
+                                if crate::util::net::is_public_ipv4(&v4.ip) {
+                                    if public_v4.is_none() {
+                                        public_v4 = Some(v4.ip);
+                                    }
+                                } else if private_v4.is_none() {
+                                    private_v4 = Some(v4.ip);
+                                }
+                            }
+                        }
+                        Addr::V6(v6) => {
+                            if crate::util::net::is_global_unicast_ipv6(&v6.ip) {
+                                v6_candidates.push(v6.ip);
+                            }
+                        }
+                    }
+                }
+
+                // 1. 优先使用公网 IPv4
+                if let Some(pub_v4) = public_v4 {
+                    return Some(IpAddr::V4(pub_v4));
+                }
+
+                // 2. 其次使用优选的全球单播 IPv6 (智能避开临时隐私地址)
+                if let Some(best_v6) = crate::util::net::select_best_ipv6(&v6_candidates) {
+                    return Some(IpAddr::V6(best_v6));
+                }
+
+                // 3. 兜底使用局域网/私网 IPv4
+                if let Some(priv_v4) = private_v4 {
+                    return Some(IpAddr::V4(priv_v4));
+                }
+            }
+        }
     }
     None
 }
@@ -280,4 +319,27 @@ pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> 
 /// 创建具有 15 秒标准超时的 DNS 任务通用 HTTP 客户端 (跨周期复用全局连接池)
 pub fn create_default_dns_client(interface_name: Option<&str>) -> reqwest::Client {
     get_task_http_client(interface_name, Duration::from_secs(15))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_skip_verify_flag() {
+        set_skip_verify(true);
+        assert!(is_skip_verify());
+        set_skip_verify(false);
+        assert!(!is_skip_verify());
+    }
+
+    #[test]
+    fn test_nonexistent_interface_returns_none() {
+        let ip = find_interface_ip("nonexistent_interface_999");
+        assert!(ip.is_none());
+        let v4 = find_interface_ipv4("nonexistent_interface_999");
+        assert!(v4.is_none());
+        let v6 = find_interface_ipv6("nonexistent_interface_999");
+        assert!(v6.is_none());
+    }
 }
