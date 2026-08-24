@@ -231,7 +231,9 @@ impl StunIpFetcher {
                 if let Some(bracket_end) = norm_server.find("]:") {
                     (
                         &norm_server[1..bracket_end],
-                        norm_server[bracket_end + 2..].parse::<u16>().unwrap_or(3478),
+                        norm_server[bracket_end + 2..]
+                            .parse::<u16>()
+                            .unwrap_or(3478),
                     )
                 } else {
                     (norm_server.trim_matches(|c| c == '[' || c == ']'), 3478)
@@ -253,8 +255,13 @@ impl StunIpFetcher {
                 // 依次尝试向公共 DNS (阿里 223.5.5.5 / 腾讯 119.29.29.29 / Cloudflare 1.1.1.1) 强制查询 AAAA 记录
                 let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
                 for dns in dns_servers {
-                    if let Ok(ips) =
-                        query_dns_server(dns, host_clean, QueryRecordType::AAAA, Duration::from_secs(2)).await
+                    if let Ok(ips) = query_dns_server(
+                        dns,
+                        host_clean,
+                        QueryRecordType::AAAA,
+                        Duration::from_secs(2),
+                    )
+                    .await
                     {
                         for ip in ips {
                             if let IpAddr::V6(v6) = ip {
