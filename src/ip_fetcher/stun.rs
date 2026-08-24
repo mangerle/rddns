@@ -217,7 +217,10 @@ impl StunIpFetcher {
             Ok(iter) => iter
                 .filter(|a| if is_ipv6 { a.is_ipv6() } else { a.is_ipv4() })
                 .collect(),
-            Err(_) => Vec::new(),
+            Err(e) => {
+                debug!("系统原生 DNS 解析 [{}] 失败: {}", norm_server, e);
+                Vec::new()
+            }
         };
 
         // 如果系统 DNS 针对 IPv6 未返回记录 (例如 Windows 在本地无公网 IPv6 时过滤了 AAAA)，
