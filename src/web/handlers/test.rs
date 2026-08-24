@@ -96,7 +96,7 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
         (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<TestIpResult>::err(
-                "无法创建 IP 提取器，请检查是否填写了网卡名称或有效的 URL".to_string(),
+                "无法创建 IP 提取器，请检查网卡、URL 或 STUN 配置是否正确".to_string(),
             )),
         )
     }
@@ -238,5 +238,22 @@ mod tests {
         };
         let res = test_ip_handler(Json(req)).await.into_response();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_test_ip_supports_stun() {
+        let req = TestIpRequest {
+            ip_type: Some("ipv4".to_string()),
+            http_interface: None,
+            config: IpFetchConfig {
+                enabled: true,
+                source_type: IpSourceType::Stun,
+                stun_server: Some("stun.miwifi.com".to_string()),
+                ..Default::default()
+            },
+        };
+        // 确保不会返回 BAD_REQUEST
+        let res = test_ip_handler(Json(req)).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }

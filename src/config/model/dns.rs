@@ -66,6 +66,7 @@ impl Default for DnsTaskConfig {
                     "https://myip.ipip.net/ip".to_string(),
                     "https://ddns.oray.com/checkip".to_string(),
                 ],
+                stun_server: None,
                 net_interface: None,
                 cmd: None,
                 regex: None,
@@ -78,6 +79,7 @@ impl Default for DnsTaskConfig {
                     "https://api64.ipify.org".to_string(),
                     "https://speed.neu6.edu.cn/getIP.php".to_string(),
                 ],
+                stun_server: None,
                 net_interface: None,
                 cmd: None,
                 regex: None,
@@ -99,6 +101,8 @@ pub enum IpSourceType {
     NetInterface,
     /// 通过执行外部命令或脚本获取
     Command,
+    /// 通过 STUN 协议 (RFC 5389) 极速 UDP 探测公网 IP
+    Stun,
 }
 
 /// IP 提取具体配置
@@ -115,6 +119,10 @@ pub struct IpFetchConfig {
     /// URL 接口地址列表（支持配置备用 URL 回退）
     #[serde(default)]
     pub url_endpoints: Vec<String>,
+
+    /// 自定义 STUN 服务器地址（当 source_type 为 stun 时生效，留空使用内置高可用集群）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stun_server: Option<String>,
 
     /// 网卡名称（当 source_type 为 net_interface 时生效）
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +151,7 @@ impl Default for IpFetchConfig {
             enabled: false,
             source_type: default_source_type(),
             url_endpoints: vec![],
+            stun_server: None,
             net_interface: None,
             cmd: None,
             regex: None,

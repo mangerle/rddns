@@ -1,10 +1,12 @@
 pub mod command;
 pub mod net_interface;
+pub mod stun;
 pub mod trait_def;
 pub mod url;
 
 pub use command::*;
 pub use net_interface::*;
+pub use stun::*;
 pub use trait_def::*;
 pub use url::*;
 
@@ -25,6 +27,10 @@ pub fn create_ip_fetcher(
         IpSourceType::Url => Some(Arc::new(UrlIpFetcher::new(
             config.url_endpoints.clone(),
             config.regex.clone(),
+            http_interface,
+        ))),
+        IpSourceType::Stun => Some(Arc::new(StunIpFetcher::new(
+            config.stun_server.clone(),
             http_interface,
         ))),
         IpSourceType::NetInterface => {

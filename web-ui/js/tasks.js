@@ -528,6 +528,10 @@ export function renderIpFields(vType) {
     fieldContainer.innerHTML = `
       <label>${t('dns.cmdLabel')}</label>
       <input type="text" id="${vType}Cmd" placeholder="${t('dns.cmdPlaceholder')}" />`;
+  } else if (sourceType === 'stun') {
+    fieldContainer.innerHTML = `
+      <label>${t('dns.stunServerLabel')}</label>
+      <input type="text" id="${vType}StunServer" placeholder="${t('dns.stunServerPlaceholder')}" />`;
   }
 }
 
@@ -696,6 +700,9 @@ export function populateCurrentTaskForm(task) {
     if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
       document.getElementById('ipv4Urls').value = task.ipv4.url_endpoints.join(', ');
     }
+    if (task.ipv4.stun_server && document.getElementById('ipv4StunServer')) {
+      document.getElementById('ipv4StunServer').value = task.ipv4.stun_server;
+    }
     if (task.ipv4.cmd && document.getElementById('ipv4Cmd')) {
       document.getElementById('ipv4Cmd').value = task.ipv4.cmd;
     }
@@ -716,6 +723,9 @@ export function populateCurrentTaskForm(task) {
     renderIpFields('ipv6');
     if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
       document.getElementById('ipv6Urls').value = task.ipv6.url_endpoints.join(', ');
+    }
+    if (task.ipv6.stun_server && document.getElementById('ipv6StunServer')) {
+      document.getElementById('ipv6StunServer').value = task.ipv6.stun_server;
     }
     if (task.ipv6.cmd && document.getElementById('ipv6Cmd')) {
       document.getElementById('ipv6Cmd').value = task.ipv6.cmd;
@@ -834,6 +844,7 @@ export function collectCurrentTaskFromForm(index) {
       enabled: document.getElementById('ipv4Enable')?.checked ?? true,
       source_type: document.getElementById('ipv4SourceType')?.value || 'url',
       url_endpoints: ipv4Urls,
+      stun_server: document.getElementById('ipv4StunServer')?.value?.trim() || null,
       net_interface: getNetIfValue('ipv4'),
       cmd: document.getElementById('ipv4Cmd')?.value || null,
       regex: document.getElementById('ipv4Regex')?.value || null,
@@ -843,6 +854,7 @@ export function collectCurrentTaskFromForm(index) {
       enabled: document.getElementById('ipv6Enable')?.checked ?? true,
       source_type: document.getElementById('ipv6SourceType')?.value || 'net_interface',
       url_endpoints: ipv6Urls,
+      stun_server: document.getElementById('ipv6StunServer')?.value?.trim() || null,
       net_interface: getNetIfValue('ipv6'),
       cmd: document.getElementById('ipv6Cmd')?.value || null,
       regex: document.getElementById('ipv6Regex')?.value || null,

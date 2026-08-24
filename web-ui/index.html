@@ -385,6 +385,7 @@
                   <label data-i18n="dns.sourceTypeLabelV4">IPv4 获取途径</label>
                   <select id="ipv4SourceType" onchange="renderIpFields('ipv4')">
                     <option value="url" data-i18n="dns.sourceUrl">远程 URL 接口获取 (智能多接口回退)</option>
+                    <option value="stun" data-i18n="dns.sourceStun">STUN 协议探测 (RFC 5389 / 纯 UDP 极速探测)</option>
                     <option value="net_interface" data-i18n="dns.sourceNetIf">本地网卡设备直读 (支持自动枚举物理/虚拟网卡)</option>
                     <option value="command" data-i18n="dns.sourceCmd">外部命令 / Shell 脚本提取</option>
                   </select>
@@ -428,6 +429,7 @@
                   <label data-i18n="dns.sourceTypeLabelV6">IPv6 获取途径</label>
                   <select id="ipv6SourceType" onchange="renderIpFields('ipv6')">
                     <option value="url" data-i18n="dns.sourceUrlV6">远程 URL 接口获取 (推荐)</option>
+                    <option value="stun" data-i18n="dns.sourceStunV6">STUN 协议探测 (RFC 5389 / 纯 UDP 极速探测)</option>
                     <option value="net_interface" data-i18n="dns.sourceNetIfV6">本地网卡设备直读 (内置全球单播 IPv6 严格过滤)</option>
                     <option value="command" data-i18n="dns.sourceCmd">外部命令 / Shell 脚本提取</option>
                   </select>
