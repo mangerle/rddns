@@ -3,7 +3,7 @@ use crate::util::dns_resolver::{QueryRecordType, query_dns_server};
 use crate::util::http::{find_interface_ipv4, find_interface_ipv6};
 use crate::util::net::is_global_unicast_ipv6;
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -376,7 +376,12 @@ impl StunIpFetcher {
             );
             match self.probe_single_server(server, is_ipv6).await {
                 Ok(ip) => {
-                    debug!("从 STUN 服务器 [{}] 成功探测到 IP: {}", server, ip);
+                    info!(
+                        "通过 STUN 服务器 [{}] 成功探测到公网 {}: {}",
+                        server,
+                        if is_ipv6 { "IPv6" } else { "IPv4" },
+                        ip
+                    );
                     return Ok(ip);
                 }
                 Err(e) => {
