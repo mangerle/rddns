@@ -1049,6 +1049,7 @@ export async function testIp(type) {
     enabled: true,
     source_type: document.getElementById(`${type}SourceType`)?.value || 'url',
     url_endpoints: urls,
+    stun_server: getStunValue(type),
     net_interface: getNetIfValue(type),
     cmd: document.getElementById(`${type}Cmd`)?.value || null,
     regex: document.getElementById(`${type}Regex`)?.value || null,
