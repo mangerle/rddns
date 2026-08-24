@@ -226,7 +226,16 @@ impl StunIpFetcher {
         // 如果系统 DNS 针对 IPv6 未返回记录 (例如 Windows 在本地无公网 IPv6 时过滤了 AAAA)，
         // 尝试通过内置纯 Rust 递归 DNS 查询器强制解析 AAAA 记录
         if target_addrs.is_empty() && is_ipv6 {
-            let (host, port) = if let Some(idx) = norm_server.rfind(':') {
+            let (host, port) = if norm_server.starts_with('[') {
+                if let Some(bracket_end) = norm_server.find("]:") {
+                    (
+                        &norm_server[1..bracket_end],
+                        norm_server[bracket_end + 2..].parse::<u16>().unwrap_or(3478),
+                    )
+                } else {
+                    (norm_server.trim_matches(|c| c == '[' || c == ']'), 3478)
+                }
+            } else if let Some(idx) = norm_server.rfind(':') {
                 (
                     &norm_server[..idx],
                     norm_server[idx + 1..].parse::<u16>().unwrap_or(3478),
@@ -234,7 +243,7 @@ impl StunIpFetcher {
             } else {
                 (norm_server.as_str(), 3478)
             };
-            let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+            let host_clean = host.trim();
             if let Ok(ip) = host_clean.parse::<IpAddr>() {
                 if ip.is_ipv6() {
                     target_addrs.push(SocketAddr::new(ip, port));
