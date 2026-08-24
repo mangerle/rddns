@@ -1,4 +1,5 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
+use crate::util::dns_resolver::{QueryRecordType, query_dns_server};
 use crate::util::http::{find_interface_ipv4, find_interface_ipv6};
 use crate::util::net::is_global_unicast_ipv6;
 use async_trait::async_trait;
@@ -252,13 +253,8 @@ impl StunIpFetcher {
                 // 依次尝试向公共 DNS (阿里 223.5.5.5 / 腾讯 119.29.29.29 / Cloudflare 1.1.1.1) 强制查询 AAAA 记录
                 let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
                 for dns in dns_servers {
-                    if let Ok(ips) = crate::util::dns_resolver::query_dns_server(
-                        dns,
-                        host_clean,
-                        crate::util::dns_resolver::QueryRecordType::AAAA,
-                        Duration::from_secs(2),
-                    )
-                    .await
+                    if let Ok(ips) =
+                        query_dns_server(dns, host_clean, QueryRecordType::AAAA, Duration::from_secs(2)).await
                     {
                         for ip in ips {
                             if let IpAddr::V6(v6) = ip {
