@@ -81,9 +81,9 @@ impl StunIpFetcher {
         }
     }
 
-    /// 构建 STUN 20 字节 Binding Request 报文与 12 字节随机 Transaction ID
-    pub fn build_binding_request() -> (Vec<u8>, [u8; 12]) {
-        let mut req = vec![0u8; 20];
+    /// 构建 STUN 20 字节 Binding Request 报文与 12 字节随机 Transaction ID (纯栈分配零堆开销)
+    pub fn build_binding_request() -> ([u8; 20], [u8; 12]) {
+        let mut req = [0u8; 20];
         // 1. Message Type (2 字节): 0x0001 (Binding Request)
         req[0..2].copy_from_slice(&STUN_BINDING_REQUEST.to_be_bytes());
         // 2. Message Length (2 字节): 0x0000 (无附加属性)
