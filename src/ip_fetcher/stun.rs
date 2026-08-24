@@ -212,22 +212,64 @@ impl StunIpFetcher {
     async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
         let norm_server = Self::normalize_server_addr(server);
 
-        // 1. 域名解析为目标 SocketAddr
-        let addrs: Vec<SocketAddr> = tokio::net::lookup_host(&norm_server)
-            .await
-            .map_err(FetchError::Io)?
-            .filter(|a| if is_ipv6 { a.is_ipv6() } else { a.is_ipv4() })
-            .collect();
+        // 1. 域名解析为目标 SocketAddr (支持系统原生解析与内置纯 Rust 递归 DNS 兜底)
+        let mut target_addrs: Vec<SocketAddr> = match tokio::net::lookup_host(&norm_server).await {
+            Ok(iter) => iter
+                .filter(|a| if is_ipv6 { a.is_ipv6() } else { a.is_ipv4() })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
 
-        if addrs.is_empty() {
+        // 如果系统 DNS 针对 IPv6 未返回记录 (例如 Windows 在本地无公网 IPv6 时过滤了 AAAA)，
+        // 尝试通过内置纯 Rust 递归 DNS 查询器强制解析 AAAA 记录
+        if target_addrs.is_empty() && is_ipv6 {
+            let (host, port) = if let Some(idx) = norm_server.rfind(':') {
+                (
+                    &norm_server[..idx],
+                    norm_server[idx + 1..].parse::<u16>().unwrap_or(3478),
+                )
+            } else {
+                (norm_server.as_str(), 3478)
+            };
+            let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(ip) = host_clean.parse::<IpAddr>() {
+                if ip.is_ipv6() {
+                    target_addrs.push(SocketAddr::new(ip, port));
+                }
+            } else {
+                // 依次尝试向公共 DNS (阿里 223.5.5.5 / 腾讯 119.29.29.29 / Cloudflare 1.1.1.1) 强制查询 AAAA 记录
+                let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
+                for dns in dns_servers {
+                    if let Ok(ips) = crate::util::dns_resolver::query_dns_server(
+                        dns,
+                        host_clean,
+                        crate::util::dns_resolver::QueryRecordType::AAAA,
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    {
+                        for ip in ips {
+                            if let IpAddr::V6(v6) = ip {
+                                target_addrs.push(SocketAddr::new(IpAddr::V6(v6), port));
+                            }
+                        }
+                        if !target_addrs.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if target_addrs.is_empty() {
             return Err(FetchError::Other(format!(
-                "未能解析到 STUN 服务器 [{}] 对应的 {} 地址",
+                "未能解析到 STUN 服务器 [{}] 对应的 {} 地址 (请检查网络 DNS 或该服务器是否支持双栈)",
                 norm_server,
                 if is_ipv6 { "IPv6" } else { "IPv4" }
             )));
         }
 
-        let target_addr = addrs[0];
+        let target_addr = target_addrs[0];
 
         // 2. 绑定本地出站 UDP Socket (支持绑定到指定网卡源 IP)
         let bind_addr: SocketAddr = if is_ipv6 {
@@ -246,14 +288,29 @@ impl StunIpFetcher {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
         };
 
-        let socket = UdpSocket::bind(bind_addr).await.map_err(FetchError::Io)?;
+        let socket = UdpSocket::bind(bind_addr).await.map_err(|e| {
+            if is_ipv6 {
+                FetchError::Other(format!(
+                    "绑定本地 IPv6 UDP 失败: 本地网络可能未分配公网 IPv6 地址或无 IPv6 协议栈 (错误: {})",
+                    e
+                ))
+            } else {
+                FetchError::Io(e)
+            }
+        })?;
 
         // 3. 构建并发送 STUN 请求
         let (req_bytes, tx_id) = Self::build_binding_request();
-        socket
-            .send_to(&req_bytes, target_addr)
-            .await
-            .map_err(FetchError::Io)?;
+        socket.send_to(&req_bytes, target_addr).await.map_err(|e| {
+            if is_ipv6 {
+                FetchError::Other(format!(
+                    "向 STUN 目标 [{}] 发送 IPv6 数据包失败: 本地网络无 IPv6 出站路由或不可达 (错误: {})",
+                    target_addr, e
+                ))
+            } else {
+                FetchError::Io(e)
+            }
+        })?;
 
         // 4. 等待回包并设置超时控制
         let mut recv_buf = [0u8; 1024];
