@@ -28,9 +28,12 @@ const DEFAULT_IPV4_STUN_SERVERS: &[&str] = &[
 ];
 
 const DEFAULT_IPV6_STUN_SERVERS: &[&str] = &[
-    "stun.cloudflare.com:3478",
-    "stun.synology.com:3478",
-    "stun.miwifi.com:3478",
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
+    "stun.nextcloud.com:3478",
+    "stun.freeswitch.org:3478",
+    "stun.sipgate.net:3478",
+    "stun.fitauto.ru:3478",
 ];
 
 /// 基于 STUN 协议 (RFC 5389) 的轻量级 UDP 公网 IP 探测器
