@@ -12,6 +12,8 @@ export let globalConfig = null;
 export let availableInterfaces = [];
 export let savedIpv4NetIf = '';
 export let savedIpv6NetIf = '';
+export let savedIpv4Stun = '';
+export let savedIpv6Stun = '';
 export let currentTaskIndex = 0;
 
 export function setGlobalConfig(cfg) {
@@ -131,6 +133,38 @@ export function getNetIfValue(vType) {
   if (!selectEl) return null;
   if (selectEl.value === '__custom__') {
     return document.getElementById(`${vType}NetIfCustom`)?.value.trim() || null;
+  }
+  return selectEl.value.trim() || null;
+}
+
+// 处理 STUN 下拉框选择变化
+export function handleStunSelect(vType) {
+  const selVal = document.getElementById(`${vType}StunSelect`)?.value;
+  const customInput = document.getElementById(`${vType}StunCustom`);
+  if (selVal === '__custom__') {
+    if (customInput) {
+      customInput.style.display = 'block';
+      customInput.focus();
+    }
+  } else {
+    if (customInput) {
+      customInput.style.display = 'none';
+      customInput.value = selVal || '';
+    }
+  }
+  if (vType === 'ipv4') {
+    savedIpv4Stun = getStunValue('ipv4') || '';
+  } else {
+    savedIpv6Stun = getStunValue('ipv6') || '';
+  }
+}
+
+// 获取选定的 STUN 服务器值
+export function getStunValue(vType) {
+  const selectEl = document.getElementById(`${vType}StunSelect`);
+  if (!selectEl) return null;
+  if (selectEl.value === '__custom__') {
+    return document.getElementById(`${vType}StunCustom`)?.value.trim() || null;
   }
   return selectEl.value.trim() || null;
 }
@@ -529,9 +563,41 @@ export function renderIpFields(vType) {
       <label>${t('dns.cmdLabel')}</label>
       <input type="text" id="${vType}Cmd" placeholder="${t('dns.cmdPlaceholder')}" />`;
   } else if (sourceType === 'stun') {
+    const currentSaved = (vType === 'ipv4' ? savedIpv4Stun : savedIpv6Stun) || '';
+    const presets = vType === 'ipv4' ? [
+      { label: t('dns.stunDefaultPool'), value: '' },
+      { label: '小米 (stun.miwifi.com:3478)', value: 'stun.miwifi.com:3478' },
+      { label: '腾讯云 (stun.qq.com:3478)', value: 'stun.qq.com:3478' },
+      { label: '哔哩哔哩 (stun.chat.bilibili.com:3478)', value: 'stun.chat.bilibili.com:3478' },
+      { label: '百度 (stun.baidu.com:3478)', value: 'stun.baidu.com:3478' },
+      { label: 'Cloudflare (stun.cloudflare.com:3478)', value: 'stun.cloudflare.com:3478' },
+      { label: 'Google (stun.l.google.com:19302)', value: 'stun.l.google.com:19302' },
+      { label: '群晖 (stun.synology.com:3478)', value: 'stun.synology.com:3478' },
+    ] : [
+      { label: t('dns.stunDefaultPoolV6'), value: '' },
+      { label: 'Nextcloud (stun.nextcloud.com:3478)', value: 'stun.nextcloud.com:3478' },
+      { label: 'Google (stun.l.google.com:19302)', value: 'stun.l.google.com:19302' },
+      { label: 'FreeSWITCH (stun.freeswitch.org:3478)', value: 'stun.freeswitch.org:3478' },
+      { label: 'Sipgate (stun.sipgate.net:3478)', value: 'stun.sipgate.net:3478' },
+    ];
+
+    let optionsHtml = '';
+    let matched = false;
+    presets.forEach(p => {
+      const isSelected = (p.value === currentSaved || (p.value === '' && !currentSaved));
+      if (isSelected) matched = true;
+      optionsHtml += `<option value="${escapeHtml(p.value)}" ${isSelected ? 'selected' : ''}>${escapeHtml(p.label)}</option>`;
+    });
+
+    const isCustomSelected = (!matched && currentSaved);
+    optionsHtml += `<option value="__custom__" ${isCustomSelected ? 'selected' : ''}>${t('dns.stunCustomOption')}</option>`;
+
     fieldContainer.innerHTML = `
-      <label>${t('dns.stunServerLabel')}</label>
-      <input type="text" id="${vType}StunServer" placeholder="${t('dns.stunServerPlaceholder')}" />`;
+      <label>${t('dns.stunServerSelectLabel')}</label>
+      <select id="${vType}StunSelect" onchange="handleStunSelect('${vType}')">
+        ${optionsHtml}
+      </select>
+      <input type="text" id="${vType}StunCustom" placeholder="${t('dns.stunCustomPlaceholder')}" style="margin-top:8px; display:${isCustomSelected ? 'block' : 'none'};" value="${isCustomSelected ? escapeHtml(currentSaved) : ''}" />`;
   }
 }
 
@@ -696,12 +762,10 @@ export function populateCurrentTaskForm(task) {
     const v4SrcEl = document.getElementById('ipv4SourceType');
     if (v4SrcEl) v4SrcEl.value = v4Src;
     savedIpv4NetIf = task.ipv4.net_interface || '';
+    savedIpv4Stun = task.ipv4.stun_server || '';
     renderIpFields('ipv4');
     if (task.ipv4.url_endpoints && document.getElementById('ipv4Urls')) {
       document.getElementById('ipv4Urls').value = task.ipv4.url_endpoints.join(', ');
-    }
-    if (task.ipv4.stun_server && document.getElementById('ipv4StunServer')) {
-      document.getElementById('ipv4StunServer').value = task.ipv4.stun_server;
     }
     if (task.ipv4.cmd && document.getElementById('ipv4Cmd')) {
       document.getElementById('ipv4Cmd').value = task.ipv4.cmd;
@@ -720,12 +784,10 @@ export function populateCurrentTaskForm(task) {
     const v6SrcEl = document.getElementById('ipv6SourceType');
     if (v6SrcEl) v6SrcEl.value = v6Src;
     savedIpv6NetIf = task.ipv6.net_interface || '';
+    savedIpv6Stun = task.ipv6.stun_server || '';
     renderIpFields('ipv6');
     if (task.ipv6.url_endpoints && document.getElementById('ipv6Urls')) {
       document.getElementById('ipv6Urls').value = task.ipv6.url_endpoints.join(', ');
-    }
-    if (task.ipv6.stun_server && document.getElementById('ipv6StunServer')) {
-      document.getElementById('ipv6StunServer').value = task.ipv6.stun_server;
     }
     if (task.ipv6.cmd && document.getElementById('ipv6Cmd')) {
       document.getElementById('ipv6Cmd').value = task.ipv6.cmd;
@@ -844,7 +906,7 @@ export function collectCurrentTaskFromForm(index) {
       enabled: document.getElementById('ipv4Enable')?.checked ?? true,
       source_type: document.getElementById('ipv4SourceType')?.value || 'url',
       url_endpoints: ipv4Urls,
-      stun_server: document.getElementById('ipv4StunServer')?.value?.trim() || null,
+      stun_server: getStunValue('ipv4'),
       net_interface: getNetIfValue('ipv4'),
       cmd: document.getElementById('ipv4Cmd')?.value || null,
       regex: document.getElementById('ipv4Regex')?.value || null,
@@ -854,7 +916,7 @@ export function collectCurrentTaskFromForm(index) {
       enabled: document.getElementById('ipv6Enable')?.checked ?? true,
       source_type: document.getElementById('ipv6SourceType')?.value || 'net_interface',
       url_endpoints: ipv6Urls,
-      stun_server: document.getElementById('ipv6StunServer')?.value?.trim() || null,
+      stun_server: getStunValue('ipv6'),
       net_interface: getNetIfValue('ipv6'),
       cmd: document.getElementById('ipv6Cmd')?.value || null,
       regex: document.getElementById('ipv6Regex')?.value || null,

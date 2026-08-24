@@ -17,22 +17,25 @@ const ATTR_MAPPED_ADDRESS: u16 = 0x0001;
 const ATTR_XOR_MAPPED_ADDRESS: u16 = 0x0020;
 const ATTR_XOR_MAPPED_ADDRESS_ALT: u16 = 0x8020;
 
-/// 默认公共高可用 STUN 节点池 (国内与全球 Anycast 节点混合)
+/// 默认公共高可用 STUN 节点池 (严格按照：国内高可用节点优先 -> 全球 Anycast 节点 -> 海外知名节点)
 const DEFAULT_IPV4_STUN_SERVERS: &[&str] = &[
-    "stun.miwifi.com:3478",
-    "stun.qq.com:3478",
-    "stun.cloudflare.com:3478",
-    "stun.chat.bilibili.com:3478",
-    "stun.synology.com:3478",
-    "stun.baidu.com:3478",
+    // 1. 国内大厂低延迟节点 (优先)
+    "stun.miwifi.com:3478",        // 小米
+    "stun.qq.com:3478",            // 腾讯
+    "stun.chat.bilibili.com:3478", // 哔哩哔哩
+    "stun.baidu.com:3478",         // 百度
+    // 2. 全球 Anycast / 海外高可用节点 (兜底)
+    "stun.cloudflare.com:3478", // Cloudflare
+    "stun.synology.com:3478",   // 群晖
 ];
 
 const DEFAULT_IPV6_STUN_SERVERS: &[&str] = &[
-    "stun.l.google.com:19302",
-    "stun1.l.google.com:19302",
+    // 原生支持 AAAA 记录的双栈/全球高可用节点
     "stun.nextcloud.com:3478",
     "stun.freeswitch.org:3478",
     "stun.sipgate.net:3478",
+    "stun.l.google.com:19302",
+    "stun1.l.google.com:19302",
     "stun.fitauto.ru:3478",
 ];
 
@@ -268,7 +271,26 @@ impl StunIpFetcher {
     /// 执行多节点故障转移轮询探测
     async fn fetch_ip_with_fallback(&self, is_ipv6: bool) -> Result<IpAddr, FetchError> {
         let server_list: Vec<String> = if let Some(ref custom) = self.custom_server {
-            vec![custom.clone()]
+            let list: Vec<String> = custom
+                .split([',', ';', ' '])
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if list.is_empty() {
+                if is_ipv6 {
+                    DEFAULT_IPV6_STUN_SERVERS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                } else {
+                    DEFAULT_IPV4_STUN_SERVERS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                }
+            } else {
+                list
+            }
         } else if is_ipv6 {
             DEFAULT_IPV6_STUN_SERVERS
                 .iter()
