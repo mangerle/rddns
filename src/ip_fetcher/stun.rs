@@ -333,6 +333,16 @@ impl StunIpFetcher {
         Self::parse_binding_response(&recv_buf[..len], &tx_id)
     }
 
+    /// 获取默认的公共 STUN 服务器列表
+    fn default_servers(is_ipv6: bool) -> Vec<String> {
+        let pool = if is_ipv6 {
+            DEFAULT_IPV6_STUN_SERVERS
+        } else {
+            DEFAULT_IPV4_STUN_SERVERS
+        };
+        pool.iter().map(|s| s.to_string()).collect()
+    }
+
     /// 执行多节点故障转移轮询探测
     async fn fetch_ip_with_fallback(&self, is_ipv6: bool) -> Result<IpAddr, FetchError> {
         let server_list: Vec<String> = if let Some(ref custom) = self.custom_server {
@@ -342,30 +352,12 @@ impl StunIpFetcher {
                 .filter(|s| !s.is_empty())
                 .collect();
             if list.is_empty() {
-                if is_ipv6 {
-                    DEFAULT_IPV6_STUN_SERVERS
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect()
-                } else {
-                    DEFAULT_IPV4_STUN_SERVERS
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect()
-                }
+                Self::default_servers(is_ipv6)
             } else {
                 list
             }
-        } else if is_ipv6 {
-            DEFAULT_IPV6_STUN_SERVERS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
         } else {
-            DEFAULT_IPV4_STUN_SERVERS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
+            Self::default_servers(is_ipv6)
         };
 
         let mut last_err = None;
