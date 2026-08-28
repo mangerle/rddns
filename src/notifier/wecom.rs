@@ -2,15 +2,27 @@ use crate::config::model::WeComConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
 use async_trait::async_trait;
 use log::info;
+use parking_lot::RwLock;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 pub struct WeComNotifier {
     config: WeComConfig,
     client: Client,
 }
+
+#[derive(Debug, Clone)]
+struct WeComTokenCacheEntry {
+    access_token: String,
+    expires_at: Instant,
+}
+
+static WECOM_TOKEN_CACHE: LazyLock<RwLock<HashMap<String, WeComTokenCacheEntry>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 impl WeComNotifier {
     pub fn new(config: WeComConfig) -> Self {
@@ -19,6 +31,59 @@ impl WeComNotifier {
             .build()
             .unwrap_or_default();
         Self { config, client }
+    }
+
+    /// 获取并缓存企业微信自建应用 access_token (有效生命周期内复用，避免频繁请求触发限流)
+    async fn get_access_token(
+        &self,
+        corp_id: &str,
+        corp_secret: &str,
+    ) -> Result<String, NotifyError> {
+        let cache_key = format!("{}:{}", corp_id, corp_secret);
+
+        // 1. 检查有效缓存
+        if let Some(entry) = WECOM_TOKEN_CACHE.read().get(&cache_key)
+            && entry.expires_at > Instant::now()
+        {
+            return Ok(entry.access_token.clone());
+        }
+
+        // 2. 缓存未命中或已过期，向企业微信官方服务器获取
+        let token_url = format!(
+            "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
+            corp_id, corp_secret
+        );
+        let token_resp = self.client.get(&token_url).send().await?;
+        let token_data: WeComTokenResponse = token_resp.json().await?;
+
+        if token_data.errcode != 0 {
+            return Err(NotifyError::Provider(format!(
+                "获取企业微信 access_token 失败 [{}]: {}",
+                token_data.errcode, token_data.errmsg
+            )));
+        }
+
+        let access_token = token_data
+            .access_token
+            .ok_or_else(|| NotifyError::Provider("返回结果中未包含 access_token".to_string()))?;
+
+        // 默认 7200 秒有效，提前 300 秒缓冲刷新
+        let expires_in_secs = token_data
+            .expires_in
+            .unwrap_or(7200)
+            .saturating_sub(300)
+            .max(60);
+        let expires_at = Instant::now() + Duration::from_secs(expires_in_secs);
+
+        WECOM_TOKEN_CACHE.write().insert(
+            cache_key,
+            WeComTokenCacheEntry {
+                access_token: access_token.clone(),
+                expires_at,
+            },
+        );
+
+        Ok(access_token)
     }
 
     async fn send_bot(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
@@ -99,24 +164,8 @@ impl WeComNotifier {
             .ok_or_else(|| NotifyError::Provider("企业微信自建应用缺少 agent_id".to_string()))?;
         let to_user = self.config.to_user.as_deref().unwrap_or("@all");
 
-        // 1. 获取 access_token
-        let token_url = format!(
-            "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
-            corp_id, corp_secret
-        );
-        let token_resp = self.client.get(&token_url).send().await?;
-        let token_data: WeComTokenResponse = token_resp.json().await?;
-
-        if token_data.errcode != 0 {
-            return Err(NotifyError::Provider(format!(
-                "获取企业微信 access_token 失败 [{}]: {}",
-                token_data.errcode, token_data.errmsg
-            )));
-        }
-
-        let access_token = token_data
-            .access_token
-            .ok_or_else(|| NotifyError::Provider("返回结果中未包含 access_token".to_string()))?;
+        // 1. 获取 access_token (优先从内存缓存获取)
+        let access_token = self.get_access_token(corp_id, corp_secret).await?;
 
         // 2. 发送应用消息 (文本卡片)
         let send_url = format!(
@@ -189,4 +238,31 @@ struct WeComTokenResponse {
     errcode: i64,
     errmsg: String,
     access_token: Option<String>,
+    expires_in: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wecom_token_cache_insertion_and_expiry() {
+        let key = "test_corp:test_secret".to_string();
+        let token = "token_abc_123".to_string();
+        let expires_at = Instant::now() + Duration::from_secs(3600);
+
+        WECOM_TOKEN_CACHE.write().insert(
+            key.clone(),
+            WeComTokenCacheEntry {
+                access_token: token.clone(),
+                expires_at,
+            },
+        );
+
+        let cached = WECOM_TOKEN_CACHE.read().get(&key).cloned();
+        assert!(cached.is_some());
+        let entry = cached.unwrap();
+        assert_eq!(entry.access_token, token);
+        assert!(entry.expires_at > Instant::now());
+    }
 }
