@@ -9,9 +9,9 @@ use crate::web::handlers::{
     test_notify_handler, trigger_upgrade_handler,
 };
 use crate::web::sse::sse_log_handler;
-use axum::{Json, Router};
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
+use axum::{Json, Router};
 use log::{info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;

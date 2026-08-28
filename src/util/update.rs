@@ -143,7 +143,9 @@ pub async fn upgrade_self() -> Result<()> {
         };
         let arch_match = match target_arch {
             "x86_64" => name.contains("x86_64") || name.contains("amd64") || name.contains("x64"),
-            "x86" | "i686" => name.contains("i686") || name.contains("x86") || name.contains("32-bit"),
+            "x86" | "i686" => {
+                name.contains("i686") || name.contains("x86") || name.contains("32-bit")
+            }
             "aarch64" => name.contains("aarch64") || name.contains("arm64"),
             "arm" | "armv7" => {
                 let is_arm = name.contains("armv7")

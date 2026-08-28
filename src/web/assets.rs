@@ -63,6 +63,9 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                 return Response::builder()
                     .status(StatusCode::NOT_MODIFIED)
                     .header(ETAG, etag_str)
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header("X-Frame-Options", "SAMEORIGIN")
+                    .header("Referrer-Policy", "strict-origin-when-cross-origin")
                     .body(Body::empty())
                     .unwrap_or_else(|_| StatusCode::NOT_MODIFIED.into_response());
             }
@@ -71,6 +74,16 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
 
             let mut headers = HeaderMap::new();
             headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime_type));
+            headers.insert(
+                "X-Content-Type-Options",
+                HeaderValue::from_static("nosniff"),
+            );
+            headers.insert("X-Frame-Options", HeaderValue::from_static("SAMEORIGIN"));
+            headers.insert(
+                "Referrer-Policy",
+                HeaderValue::from_static("strict-origin-when-cross-origin"),
+            );
+
             if path.ends_with(".html") || path == "index.html" {
                 headers.insert(
                     CACHE_CONTROL,
@@ -95,11 +108,47 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                     .status(StatusCode::OK)
                     .header(CONTENT_TYPE, "text/html; charset=utf-8")
                     .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header("X-Frame-Options", "SAMEORIGIN")
+                    .header("Referrer-Policy", "strict-origin-when-cross-origin")
                     .body(Body::from(index.data))
                     .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response())
             } else {
                 StatusCode::NOT_FOUND.into_response()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Uri;
+
+    #[tokio::test]
+    async fn test_static_handler_security_headers() {
+        let uri: Uri = "/".parse().unwrap();
+        let headers = HeaderMap::new();
+        let resp = static_handler(uri, headers).await.into_response();
+
+        let resp_headers = resp.headers();
+        assert_eq!(
+            resp_headers
+                .get("X-Content-Type-Options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+        assert_eq!(
+            resp_headers
+                .get("X-Frame-Options")
+                .and_then(|v| v.to_str().ok()),
+            Some("SAMEORIGIN")
+        );
+        assert_eq!(
+            resp_headers
+                .get("Referrer-Policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("strict-origin-when-cross-origin")
+        );
     }
 }
