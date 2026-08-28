@@ -3,13 +3,13 @@ use crate::util::logging::LogBuffer;
 use crate::web::assets::static_handler;
 use crate::web::auth::auth_middleware;
 use crate::web::handlers::{
-    AppState, create_sse_ticket_handler, get_auth_status_handler, get_config_handler,
+    ApiResponse, AppState, create_sse_ticket_handler, get_auth_status_handler, get_config_handler,
     get_logs_handler, get_network_interfaces_handler, get_version_handler, init_auth_handler,
     login_auth_handler, manual_sync_handler, save_config_handler, test_ip_handler,
     test_notify_handler, trigger_upgrade_handler,
 };
 use crate::web::sse::sse_log_handler;
-use axum::Router;
+use axum::{Json, Router};
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use log::{info, warn};
@@ -105,7 +105,16 @@ impl WebServer {
             .route("/auth/init", post(init_auth_handler))
             .route("/auth/login", post(login_auth_handler));
 
-        let api_routes = Router::new().merge(protected_routes).merge(public_routes);
+        // API 路由未匹配时返回标准 404 JSON，防止被 SPA fallback 吞掉返回 HTML
+        let api_routes = Router::new()
+            .merge(protected_routes)
+            .merge(public_routes)
+            .fallback(|| async {
+                (
+                    axum::http::StatusCode::NOT_FOUND,
+                    Json(ApiResponse::<()>::err("请求的 API 接口不存在".to_string())),
+                )
+            });
 
         let app = Router::new()
             .nest("/api/v1", api_routes)
