@@ -140,7 +140,7 @@ chmod +x rddns
 
 - **Linux**：自动创建并管理 `/etc/systemd/system/rddns.service`，通过 `systemd` 守护；
 - **Windows**：自动注册 Windows 高权限计划任务与服务守护，开机或登录后无黑框静默常驻；
-- **macOS**：自动生成 `~/Library/LaunchAgents/com.rddns.service.plist`，由 `launchd` 托管。
+- **macOS**：自动生成 `/Library/LaunchDaemons/com.mangerle.rddns.plist`，由 `launchd` 托管。
 
 ---
 
@@ -176,7 +176,7 @@ docker run -d \
   --name rddns \
   --restart always \
   --net host \
-  -v /etc/rddns:/.rddns_config.yaml \
+  -v /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml \
   mangerle/rddns:latest
 ```
 
@@ -189,7 +189,7 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - ./data:/app/data
+      - /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml
     environment:
       - TZ=Asia/Shanghai
 ```
@@ -331,21 +331,25 @@ notifications:
     secret: "your-feishu-secret"
   dingtalk:
     enabled: true
-    webhook_url: "https://oapi.dingtalk.com/robot/send?access_token=..."
+    access_token: "your-dingtalk-access-token"
     secret: "SEC..."
   wecom:
     enabled: false
     webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
   bark:
     enabled: false
-    server_url: "https://api.day.app/your-key"
-  mail:
+    server_url: "https://api.day.app"
+    device_key: "your-bark-device-key"
+  email:
     enabled: false
     smtp_server: "smtp.example.com"
     smtp_port: 465
+    use_ssl: true
     username: "notify@example.com"
     password: "your-smtp-password"
-    to: "admin@example.com"
+    from_address: "notify@example.com"
+    to_addresses:
+      - "admin@example.com"
 ```
 
 ---

@@ -140,7 +140,7 @@ chmod +x rddns
 
 - **Linux**: Automatically creates and manages `/etc/systemd/system/rddns.service` via `systemd`;
 - **Windows**: Registers a background scheduled task/service with high privileges;
-- **macOS**: Generates `~/Library/LaunchAgents/com.rddns.service.plist` managed by `launchd`.
+- **macOS**: Generates `/Library/LaunchDaemons/com.mangerle.rddns.plist` managed by `launchd`.
 
 ---
 
@@ -176,7 +176,7 @@ docker run -d \
   --name rddns \
   --restart always \
   --net host \
-  -v /etc/rddns:/.rddns_config.yaml \
+  -v /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml \
   mangerle/rddns:latest
 ```
 
@@ -189,7 +189,7 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - ./data:/app/data
+      - /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml
     environment:
       - TZ=Asia/Shanghai
 ```
@@ -331,21 +331,25 @@ notifications:
     secret: "your-feishu-secret"
   dingtalk:
     enabled: true
-    webhook_url: "https://oapi.dingtalk.com/robot/send?access_token=..."
+    access_token: "your-dingtalk-access-token"
     secret: "SEC..."
   wecom:
     enabled: false
     webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
   bark:
     enabled: false
-    server_url: "https://api.day.app/your-key"
-  mail:
+    server_url: "https://api.day.app"
+    device_key: "your-bark-device-key"
+  email:
     enabled: false
     smtp_server: "smtp.example.com"
     smtp_port: 465
+    use_ssl: true
     username: "notify@example.com"
     password: "your-smtp-password"
-    to: "admin@example.com"
+    from_address: "notify@example.com"
+    to_addresses:
+      - "admin@example.com"
 ```
 
 ---
