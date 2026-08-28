@@ -41,10 +41,10 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG)
+/// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG, 熵源不可用时 fail-fast 终止，防止降级为全零弱密钥)
 pub fn fill_random_bytes(dest: &mut [u8]) {
     if let Err(e) = getrandom::fill(dest) {
-        log::warn!("获取系统安全随机数异常: {}", e);
+        panic!("系统密码学安全熵源不可用: {}", e);
     }
 }
 
