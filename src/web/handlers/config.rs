@@ -45,7 +45,7 @@ pub async fn save_config_handler(
         ));
     }
 
-    // 2. 校验任务名称非空与唯一性
+    // 2. 校验任务名称非空与唯一性，以及 URL 端点合法协议 (仅允许 http:// 或 https://)
     let mut task_names = std::collections::HashSet::new();
     for task in &new_config.dns_tasks {
         let name = task.name.trim();
@@ -57,6 +57,23 @@ pub async fn save_config_handler(
                 "任务名称 [{}] 存在重复，各任务名称必须唯一",
                 name
             )));
+        }
+
+        for ip_cfg in [&task.ipv4, &task.ipv6] {
+            if ip_cfg.source_type == crate::config::model::IpSourceType::Url {
+                for url in &ip_cfg.url_endpoints {
+                    let trimmed = url.trim();
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with("http://")
+                        && !trimmed.starts_with("https://")
+                    {
+                        return Err(AppError::bad_request(format!(
+                            "任务 [{}] 中的 URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                            name, trimmed
+                        )));
+                    }
+                }
+            }
         }
     }
 
@@ -217,6 +234,17 @@ provider:
             .iter()
             .any(|t| !names_set.insert(t.name.trim()));
         assert!(has_dup);
+
+        // 校验非法的 URL 端点协议
+        let mut invalid_url_tasks = valid_config.clone();
+        invalid_url_tasks.dns_tasks[0].ipv4.source_type = crate::config::model::IpSourceType::Url;
+        invalid_url_tasks.dns_tasks[0].ipv4.url_endpoints = vec!["file:///etc/passwd".to_string()];
+        let has_invalid_scheme = invalid_url_tasks.dns_tasks[0]
+            .ipv4
+            .url_endpoints
+            .iter()
+            .any(|u| !u.starts_with("http://") && !u.starts_with("https://"));
+        assert!(has_invalid_scheme);
     }
 
     #[tokio::test]
