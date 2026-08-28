@@ -60,7 +60,6 @@ Building upon its battle-tested workflow, `rddns` is rewritten entirely in **pur
   - **SMTP Email**: Pure Rust async TLS mail delivery (supports STARTTLS and HTML templates);
   - **Custom Webhook**: Customizable HTTP headers, request body templates, and dynamic placeholder substitutions.
 - **Security Hardening & Operations**:
-  - **Credential Masking**: Web configuration APIs automatically mask tokens and secrets to prevent sniffing;
   - **Access Control**: Web admin credentials hashed using BCrypt;
   - **WAN Access Isolation**: One-click toggle to disable WAN access to the Web console (LAN-only management);
   - **Startup Network Probing**: Concurrent network connectivity probing before running DDNS sync loops;
