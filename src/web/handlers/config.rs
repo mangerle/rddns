@@ -60,7 +60,7 @@ pub async fn save_config_handler(
         }
     }
 
-    // 2. 如果用户提交了新密码，异步生成 bcrypt 哈希
+    // 3. 如果用户提交了新密码，异步生成 bcrypt 哈希
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
     {
@@ -73,7 +73,7 @@ pub async fn save_config_handler(
         None
     };
 
-    // 3. 异步原子更新并持久化配置 (刷盘在后台线程池执行)
+    // 4. 异步原子更新并持久化配置 (刷盘在后台线程池执行)
     state
         .config_manager
         .modify_config_async::<_, ConfigError>(|old_config| {
@@ -110,7 +110,7 @@ pub async fn save_config_handler(
         .await
         .map_err(|e| AppError::internal(format!("保存配置失败: {}", e)))?;
 
-    // 4. 持久化成功后，热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认) 并刷新客户端连接池
+    // 5. 持久化成功后，热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认) 并刷新客户端连接池
     if let Some(ref dns_srv) = new_config.dns_server {
         let clean = dns_srv.trim();
         if !clean.is_empty() {
