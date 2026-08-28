@@ -329,10 +329,18 @@ impl StunIpFetcher {
         let mut recv_buf = [0u8; 1024];
         let recv_future = socket.recv_from(&mut recv_buf);
 
-        let (len, _from_addr) = tokio::time::timeout(self.timeout, recv_future)
+        let (len, from_addr) = tokio::time::timeout(self.timeout, recv_future)
             .await
             .map_err(|_| FetchError::Timeout)?
             .map_err(FetchError::Io)?;
+
+        // 校验回包来源地址，防止伪造的虚假响应注入
+        if from_addr != target_addr {
+            return Err(FetchError::Other(format!(
+                "STUN 响应来源地址不匹配: 期望 {}, 实际 {}",
+                target_addr, from_addr
+            )));
+        }
 
         // 5. 解析回包字节
         Self::parse_binding_response(&recv_buf[..len], &tx_id)
