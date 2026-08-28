@@ -1,6 +1,6 @@
 [package]
 name = "rddns"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "A high-performance, lightweight, and full-featured Dynamic DNS (DDNS) and notification service written in Rust"
 license = "MIT"
