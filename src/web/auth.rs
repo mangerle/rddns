@@ -18,9 +18,7 @@ static SSE_TICKETS: LazyLock<RwLock<HashMap<String, Instant>>> =
 /// 生成并注册一个 30 秒有效的一次性 SSE Ticket
 pub fn issue_sse_ticket() -> String {
     let mut bytes = [0u8; 16];
-    for b in &mut bytes {
-        *b = fastrand::u8(..);
-    }
+    crate::util::crypto::fill_random_bytes(&mut bytes);
     let ticket = hex::encode(bytes);
 
     let now = Instant::now();

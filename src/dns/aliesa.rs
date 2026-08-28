@@ -105,7 +105,7 @@ impl AliEsaProvider {
         custom_params: Vec<(&str, String)>,
     ) -> Result<T, DnsProviderError> {
         let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let nonce = format!("{}-{}", Utc::now().timestamp_millis(), fastrand::u32(..));
+        let nonce = format!("{}-{}", Utc::now().timestamp_millis(), crate::util::crypto::random_u32());
 
         let mut params = BTreeMap::new();
         params.insert("Format".to_string(), "JSON".to_string());

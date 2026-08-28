@@ -92,11 +92,9 @@ impl StunIpFetcher {
         // 3. Magic Cookie (4 字节): 0x2112A442
         req[4..8].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
 
-        // 4. Transaction ID (12 字节随机数)
+        // 4. Transaction ID (12 字节密码学安全随机数)
         let mut tx_id = [0u8; 12];
-        for b in &mut tx_id {
-            *b = fastrand::u8(..);
-        }
+        crate::util::crypto::fill_random_bytes(&mut tx_id);
         req[8..20].copy_from_slice(&tx_id);
 
         (req, tx_id)

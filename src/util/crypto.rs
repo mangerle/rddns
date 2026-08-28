@@ -41,6 +41,27 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG)
+pub fn fill_random_bytes(dest: &mut [u8]) {
+    if let Err(e) = getrandom::fill(dest) {
+        log::warn!("获取系统安全随机数异常: {}", e);
+    }
+}
+
+/// 生成密码学安全的 16 位无符号随机整数 (CSPRNG)
+pub fn random_u16() -> u16 {
+    let mut bytes = [0u8; 2];
+    fill_random_bytes(&mut bytes);
+    u16::from_ne_bytes(bytes)
+}
+
+/// 生成密码学安全的 32 位无符号随机整数 (CSPRNG)
+pub fn random_u32() -> u32 {
+    let mut bytes = [0u8; 4];
+    fill_random_bytes(&mut bytes);
+    u32::from_ne_bytes(bytes)
+}
+
 /// 异步执行 bcrypt 密码哈希生成 (移入后台阻塞线程池，防止阻塞 async runtime)
 pub async fn hash_password_async(password: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -158,5 +179,20 @@ mod tests {
         let query = vec![("b", "2"), ("a", "1 2"), ("c", "3/4")];
         let res = build_canonical_query_string(&query);
         assert_eq!(res, "a=1+2&b=2&c=3%2F4");
+    }
+
+    #[test]
+    fn test_csprng_random_generation() {
+        let mut buf1 = [0u8; 16];
+        let mut buf2 = [0u8; 16];
+        fill_random_bytes(&mut buf1);
+        fill_random_bytes(&mut buf2);
+        assert_ne!(buf1, [0u8; 16]);
+        assert_ne!(buf1, buf2);
+
+        let r1 = random_u16();
+        let r2 = random_u16();
+        let r3 = random_u32();
+        assert!(r1 != r2 || r3 != 0);
     }
 }

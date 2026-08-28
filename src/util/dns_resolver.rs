@@ -356,7 +356,7 @@ async fn query_dns_server_recursive(
 
     let mut last_err = None;
     for attempt in 1..=2 {
-        let query_id = fastrand::u16(..);
+        let query_id = crate::util::crypto::random_u16();
         let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
 
         let socket = match UdpSocket::bind(bind_addr).await {
