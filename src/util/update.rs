@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -131,20 +131,31 @@ pub async fn upgrade_self() -> Result<()> {
     let target_os = env::consts::OS;
     let target_arch = env::consts::ARCH;
 
-    // 匹配最适合当前系统的 Release 资产
+    // 匹配最适合当前系统的 Release 资产 (精准匹配架构与操作系统)
     let matched_asset = release.assets.iter().find(|a| {
         let name = a.name.to_lowercase();
         let os_match = match target_os {
             "windows" => name.contains("windows") || name.ends_with(".exe"),
             "linux" => name.contains("linux"),
             "macos" => name.contains("darwin") || name.contains("macos") || name.contains("apple"),
+            "freebsd" => name.contains("freebsd"),
             _ => false,
         };
         let arch_match = match target_arch {
             "x86_64" => name.contains("x86_64") || name.contains("amd64") || name.contains("x64"),
+            "x86" | "i686" => name.contains("i686") || name.contains("x86") || name.contains("32-bit"),
             "aarch64" => name.contains("aarch64") || name.contains("arm64"),
-            "arm" => name.contains("armv7") || name.contains("arm"),
-            _ => true,
+            "arm" | "armv7" => {
+                let is_arm = name.contains("armv7")
+                    || name.contains("armv6")
+                    || name.contains("armv5")
+                    || name.contains("arm-");
+                let not_arm64 = !name.contains("arm64") && !name.contains("aarch64");
+                is_arm && not_arm64
+            }
+            "riscv64" => name.contains("riscv64"),
+            "loongarch64" => name.contains("loongarch64"),
+            _ => false,
         };
         os_match && arch_match
     });
@@ -161,7 +172,7 @@ pub async fn upgrade_self() -> Result<()> {
         }
     };
 
-    // 尝试寻找匹配的 SHA256 校验文件 (如 asset_name.sha256 / asset_name.sha256.txt / checksums.txt)
+    // 尝试寻找匹配的 SHA256 校验文件 (如 asset_name.sha256 / asset_name.sha256.txt)
     let sha256_asset = release.assets.iter().find(|a| {
         let name = a.name.to_lowercase();
         name == format!("{}.sha256", asset.name.to_lowercase())
@@ -187,28 +198,44 @@ pub async fn upgrade_self() -> Result<()> {
 
     if let Some(sha_asset) = sha256_asset {
         println!("正在下载并校验 SHA256 签名 [{}]...", sha_asset.name);
-        let sha_resp = client.get(&sha_asset.browser_download_url).send().await;
-        if let Ok(resp) = sha_resp
-            && resp.status().is_success()
-            && let Ok(sha_text) = resp.text().await
-        {
-            let expected_sha256 = sha_text
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_lowercase();
-            if !expected_sha256.is_empty() && actual_sha256 != expected_sha256 {
-                bail!(
-                    "安装包 SHA256 完整性校验失败！预期值: {}, 实际值: {}",
-                    expected_sha256,
-                    actual_sha256
-                );
-            }
-            info!("安装包 SHA256 校验通过: {}", actual_sha256);
+        let sha_resp = client
+            .get(&sha_asset.browser_download_url)
+            .send()
+            .await
+            .context("下载 SHA256 校验文件失败")?;
+
+        if !sha_resp.status().is_success() {
+            bail!("下载 SHA256 校验文件返回异常状态码: {}", sha_resp.status());
         }
+
+        let sha_text = sha_resp
+            .text()
+            .await
+            .context("读取 SHA256 校验文件内容失败")?;
+        let expected_sha256 = sha_text
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+
+        if expected_sha256.is_empty() {
+            bail!("SHA256 校验文件格式异常，未读取到有效的哈希指纹");
+        }
+
+        if actual_sha256 != expected_sha256 {
+            bail!(
+                "安装包 SHA256 完整性校验失败！预期值: {}, 实际值: {}",
+                expected_sha256,
+                actual_sha256
+            );
+        }
+        info!("安装包 SHA256 校验通过: {}", actual_sha256);
     } else {
-        info!("当前安装包 SHA256 指纹: {}", actual_sha256);
+        warn!(
+            "Release 资产中未提供匹配的 SHA256 校验文件，当前安装包指纹: {}",
+            actual_sha256
+        );
     }
 
     let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
