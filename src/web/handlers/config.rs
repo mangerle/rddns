@@ -71,6 +71,9 @@ pub async fn save_config_handler(
         .modify_config_async::<_, ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
 
+            // 锁定 Web 服务监听端口：禁止通过 Web API 修改端口，始终继承原有配置
+            to_save.listen_port = old_config.listen_port;
+
             // 管理员凭据处理：若提交了新密码则更新哈希，否则自动继承保留原配置中的账号凭据
             if let Some(new_hash) = new_password_hash {
                 let username = to_save
