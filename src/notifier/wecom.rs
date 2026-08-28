@@ -193,7 +193,7 @@ impl WeComNotifier {
             "textcard": {
                 "title": format!("rddns 动态解析 [{}]", event.overall_status.as_str()),
                 "description": description,
-                "url": "http://127.0.0.1:9876",
+                "url": "https://github.com/mangerle/rddns",
                 "btntxt": "查看详情"
             }
         });

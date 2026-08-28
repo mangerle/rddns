@@ -24,7 +24,11 @@ impl Notifier for BarkNotifier {
     }
 
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
-        let server = self.config.server_url.trim().trim_end_matches('/');
+        let server = if self.config.server_url.trim().is_empty() {
+            "https://api.day.app"
+        } else {
+            self.config.server_url.trim().trim_end_matches('/')
+        };
         let key = self.config.device_key.trim();
         let url = format!("{}/push", server);
 

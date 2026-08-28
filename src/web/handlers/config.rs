@@ -77,6 +77,58 @@ pub async fn save_config_handler(
         }
     }
 
+    // 校验通知配置中的自定义 URL 必须以 http:// 或 https:// 开头
+    let notif = &new_config.notifications;
+    if let Some(ref bark) = notif.bark {
+        let s = bark.server_url.trim();
+        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
+            return Err(AppError::bad_request(format!(
+                "Bark 通知服务器地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                s
+            )));
+        }
+    }
+    if let Some(ref webhook) = notif.webhook {
+        let s = webhook.url.trim();
+        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
+            return Err(AppError::bad_request(format!(
+                "自定义 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                s
+            )));
+        }
+    }
+    if let Some(ref tg) = notif.telegram
+        && let Some(ref proxy) = tg.api_proxy
+    {
+        let s = proxy.trim();
+        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
+            return Err(AppError::bad_request(format!(
+                "Telegram API 代理地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                s
+            )));
+        }
+    }
+    if let Some(ref wecom) = notif.wecom
+        && let Some(ref webhook_url) = wecom.webhook_url
+    {
+        let s = webhook_url.trim();
+        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
+            return Err(AppError::bad_request(format!(
+                "企业微信机器人 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                s
+            )));
+        }
+    }
+    if let Some(ref feishu) = notif.feishu {
+        let s = feishu.webhook_url.trim();
+        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
+            return Err(AppError::bad_request(format!(
+                "飞书机器人 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                s
+            )));
+        }
+    }
+
     // 3. 如果用户提交了新密码，异步生成 bcrypt 哈希
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
@@ -245,6 +297,12 @@ provider:
             .iter()
             .any(|u| !u.starts_with("http://") && !u.starts_with("https://"));
         assert!(has_invalid_scheme);
+
+        // 校验非法的通知服务 URL 协议
+        let invalid_bark_url = "ftp://bark.day.app";
+        assert!(
+            !invalid_bark_url.starts_with("http://") && !invalid_bark_url.starts_with("https://")
+        );
     }
 
     #[tokio::test]
