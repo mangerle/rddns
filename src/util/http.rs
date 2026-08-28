@@ -308,7 +308,25 @@ pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> 
         }
     }
 
-    let client = create_task_http_client(interface_name, timeout).unwrap_or_default();
+    let client = match create_task_http_client(interface_name, timeout) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                "创建网卡 [{:?}] 绑定的专属 HTTP 客户端失败: {}，正在回退至通用客户端构建器",
+                interface_name, e
+            );
+            match create_http_client(timeout) {
+                Ok(c) => c,
+                Err(err) => {
+                    warn!(
+                        "创建通用 HTTP 客户端亦失败: {}，将使用 reqwest 默认实例兜底",
+                        err
+                    );
+                    reqwest::Client::new()
+                }
+            }
+        }
+    };
     let mut write_guard = CLIENT_CACHE.write();
     write_guard
         .entry(key)
