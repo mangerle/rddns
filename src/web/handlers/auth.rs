@@ -146,6 +146,9 @@ pub async fn init_auth_handler(
     if username.is_empty() || password.is_empty() {
         return Err(AppError::bad_request("用户名和密码不能为空"));
     }
+    if password.len() < 4 {
+        return Err(AppError::bad_request("管理员密码长度不能少于 4 个字符"));
+    }
 
     // 异步生成 bcrypt 密码哈希，避免阻塞 async runtime
     let hash = crate::util::crypto::hash_password_async(password.to_string())
@@ -307,5 +310,30 @@ mod tests {
             .await
             .into_response();
         assert_eq!(res2.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_init_auth_rejects_short_password() {
+        let (tx, _rx) = mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.yaml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+        };
+
+        let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
+        let headers = HeaderMap::new();
+        let req = AuthInitRequest {
+            username: "admin".to_string(),
+            password: "123".to_string(), // 少于 4 位
+        };
+
+        let res = init_auth_handler(ConnectInfo(local_addr), headers, State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 }

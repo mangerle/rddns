@@ -133,8 +133,12 @@ pub async fn save_config_handler(
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
     {
+        let clean_pwd = pwd.trim();
+        if clean_pwd.len() < 4 {
+            return Err(AppError::bad_request("新密码长度不能少于 4 个字符"));
+        }
         Some(
-            crate::util::crypto::hash_password_async(pwd.trim().to_string())
+            crate::util::crypto::hash_password_async(clean_pwd.to_string())
                 .await
                 .map_err(|e| AppError::internal(format!("密码哈希失败: {}", e)))?,
         )
