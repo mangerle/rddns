@@ -397,8 +397,12 @@ onLocaleChange(() => {
   }
   const verTextEl = document.getElementById('versionText');
   if (verTextEl) {
-    const currentVer = verTextEl.dataset.version || '0.7.0';
-    verTextEl.innerText = t('common.connected', { version: `v${currentVer}` });
+    const currentVer = verTextEl.dataset.version;
+    if (currentVer) {
+      verTextEl.innerText = t('common.connected', { version: `v${currentVer}` });
+    } else {
+      verTextEl.innerText = t('common.connectedFallback');
+    }
   }
 });
 
@@ -411,11 +415,15 @@ async function initApp() {
   renderIpFields('ipv4');
   renderIpFields('ipv6');
 
+  // 静默异步获取系统真实版本号并绑定至顶部徽标
+  checkAppVersion(false);
+
   // 设置登录成功回调
   setOnLoginSuccess(() => {
     loadConfig();
     loadNetworkInterfaces();
     initSSE();
+    checkAppVersion(false);
   });
 
   // 1. 检查后端是否需要初始化管理员账号

@@ -14,6 +14,7 @@ export default {
     themeToggle: 'Toggle Theme',
     langToggle: 'Language / 语言切换',
     connected: '{version} Connected',
+    connectedFallback: 'Connected',
     checkingUpdate: 'Click to check updates',
     newVersionFound: 'New Version {version} (Click to upgrade)',
     newVersionUpgradePrompt: 'New version v{version} available!\n\nRelease notes:\n{notes}\n\nDo you want to upgrade automatically now?',
