@@ -504,8 +504,14 @@ mod tests {
 
     #[test]
     fn test_custom_dns_server_setter_getter() {
+        let old = get_custom_dns_server();
         set_custom_dns_server("223.5.5.5:53".to_string());
         assert_eq!(get_custom_dns_server(), Some("223.5.5.5:53".to_string()));
+        clear_custom_dns_server();
+        assert_eq!(get_custom_dns_server(), None);
+        if let Some(prev) = old {
+            set_custom_dns_server(prev);
+        }
     }
 
     #[test]
