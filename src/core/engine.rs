@@ -320,8 +320,12 @@ impl DdnsEngine {
 
         current_state.last_sync_time = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
-        if ipv4_all_ok && ipv6_all_ok {
+        // 若本轮已完成全量服务商记录校对，重置校对周期计数器，防止部分域名持续失败导致 check_counter 永久处于超限状态而每轮全量打崩云端 API
+        if reach_cache_limit || (ipv4_all_ok && ipv6_all_ok) {
             current_state.check_counter = 0;
+        }
+
+        if ipv4_all_ok && ipv6_all_ok {
             current_state.consecutive_failures = 0;
             current_state.last_error = None;
         } else {
