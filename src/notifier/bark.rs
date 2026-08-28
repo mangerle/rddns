@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
 use serde_json::json;
-use std::time::Duration;
 
 pub struct BarkNotifier {
     config: BarkConfig,
@@ -13,10 +12,7 @@ pub struct BarkNotifier {
 
 impl BarkNotifier {
     pub fn new(config: BarkConfig) -> Self {
-        let client = crate::util::http::create_http_client_builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let client = crate::util::http::create_notifier_client();
         Self { config, client }
     }
 }

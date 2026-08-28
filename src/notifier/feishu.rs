@@ -11,7 +11,6 @@ use chrono::Utc;
 use log::info;
 use reqwest::Client;
 use serde_json::{Value, json};
-use std::time::Duration;
 
 pub struct FeishuNotifier {
     config: FeishuConfig,
@@ -20,10 +19,7 @@ pub struct FeishuNotifier {
 
 impl FeishuNotifier {
     pub fn new(config: FeishuConfig) -> Self {
-        let client = crate::util::http::create_http_client_builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let client = crate::util::http::create_notifier_client();
         Self { config, client }
     }
 

@@ -339,6 +339,23 @@ pub fn create_default_dns_client(interface_name: Option<&str>) -> reqwest::Clien
     get_task_http_client(interface_name, Duration::from_secs(15))
 }
 
+/// 创建通知渠道专属的 HTTP 客户端 (标准 10 秒超时，带构建失败告警与优雅降级)
+pub fn create_notifier_client() -> reqwest::Client {
+    match create_http_client(Duration::from_secs(10)) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                "构建通知渠道专属 HTTP 客户端失败: {}，将使用带超时的基础实例兜底",
+                e
+            );
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_default()
+        }
+    }
+}
+
 /// 对字符串执行 URL 百分比编码 (application/x-www-form-urlencoded)
 pub fn url_encode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()

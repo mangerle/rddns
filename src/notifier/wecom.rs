@@ -26,10 +26,7 @@ static WECOM_TOKEN_CACHE: LazyLock<RwLock<HashMap<String, WeComTokenCacheEntry>>
 
 impl WeComNotifier {
     pub fn new(config: WeComConfig) -> Self {
-        let client = crate::util::http::create_http_client_builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let client = crate::util::http::create_notifier_client();
         Self { config, client }
     }
 

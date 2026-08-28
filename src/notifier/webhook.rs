@@ -1,12 +1,11 @@
 use crate::config::model::WebhookConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
-use crate::util::http::{create_http_client_builder, url_encode_if};
+use crate::util::http::url_encode_if;
 use async_trait::async_trait;
 use log::{info, warn};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use std::str::FromStr;
-use std::time::Duration;
 
 pub struct CustomWebhookNotifier {
     config: WebhookConfig,
@@ -15,10 +14,7 @@ pub struct CustomWebhookNotifier {
 
 impl CustomWebhookNotifier {
     pub fn new(config: WebhookConfig) -> Self {
-        let client = create_http_client_builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let client = crate::util::http::create_notifier_client();
         Self { config, client }
     }
 
