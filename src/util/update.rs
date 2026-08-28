@@ -293,28 +293,25 @@ pub fn restart_process() -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows 平台：通过 cmd.exe 延时约 1 秒后拉起新进程，确保旧进程先退出并完全释放 TCP 监听端口 (EADDRINUSE 保护)
-        let exe_str = current_exe.to_string_lossy().to_string();
-        let mut formatted_args = String::new();
-        for arg in &args {
-            formatted_args.push(' ');
-            if arg.contains(' ') || arg.contains('\t') {
-                formatted_args.push('"');
-                formatted_args.push_str(arg);
-                formatted_args.push('"');
-            } else {
-                formatted_args.push_str(arg);
-            }
-        }
-
-        // 使用 ping 127.0.0.1 -n 2 产生约 1 秒的非阻塞等待，随后 start 启动新版本
-        let cmd_script = format!(
-            "ping 127.0.0.1 -n 2 >nul & start \"\" \"{}\"{}",
-            exe_str, formatted_args
+        // Windows 平台：通过 PowerShell 延时 1 秒后以独立进程启动新版本，安全传递参数数组并规避 cmd 元字符截断与注入
+        let mut launcher = std::process::Command::new("powershell");
+        let ps_script = format!(
+            "Start-Sleep -Milliseconds 1000; Start-Process -FilePath '{}' -ArgumentList @({})",
+            current_exe.to_string_lossy().replace('\'', "''"),
+            args.iter()
+                .map(|a| format!("'{}'", a.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(",")
         );
 
-        let mut launcher = std::process::Command::new("cmd");
-        launcher.args(["/C", &cmd_script]);
+        launcher.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &ps_script,
+        ]);
         crate::util::daemon::configure_daemon_command(&mut launcher);
         launcher.spawn().context("派生重启辅助进程失败")?;
     }
