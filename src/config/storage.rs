@@ -75,7 +75,8 @@ impl ConfigManager {
             .map(|_| ())
     }
 
-    /// 仅在内存中更新配置并广播 (不持久化写入磁盘，用于 CLI 运行时临时参数覆盖)
+    /// 仅在内存中更新配置并广播 (不持久化写入磁盘)
+    /// 注意：仅限 CLI 启动期参数覆盖阶段使用，不得在 Web 服务运行期并发调用。
     pub fn update_runtime_config(&self, new_config: AppConfig) {
         let new_arc = Arc::new(new_config);
         *self.current.write() = new_arc.clone();
@@ -83,16 +84,21 @@ impl ConfigManager {
     }
 
     /// 在持有写锁的情况下原子修改并持久化配置
-    /// 注意：同步修改主要用于 CLI 启动初始化或非异步上下文；在 Web 运行时中请优先使用 `modify_config_async`。
-    /// 本方法会尝试获取与异步路径共享的 `async_write_lock`，若在非 Tokio runtime 线程上则完全阻塞排队。
+    /// 注意：同步修改主要用于 CLI 启动初始化阶段或无 Tokio 异步上下文的场景；在 Web 服务运行期一律请使用 `modify_config_async`。
+    /// 若在 Tokio runtime 线程内调用且未能立即获取锁，将直接返回错误以防止无锁并发穿插。
     pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError>,
     {
         let _sync_guard = match tokio::runtime::Handle::try_current() {
-            Ok(_) => self.async_write_lock.try_lock().ok(),
-            Err(_) => Some(self.async_write_lock.blocking_lock()),
+            Ok(_) => self.async_write_lock.try_lock().map_err(|_| {
+                ConfigError::TempFile(
+                    "配置文件正被异步更新锁定，请在异步上下文中调用 modify_config_async"
+                        .to_string(),
+                )
+            })?,
+            Err(_) => self.async_write_lock.blocking_lock(),
         };
 
         let mut guard = self.current.write();
