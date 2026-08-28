@@ -1,4 +1,5 @@
 use crate::config::model::AppConfig;
+use anyhow::Result;
 use log::info;
 use parking_lot::RwLock;
 use std::fs;
@@ -6,17 +7,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use thiserror::Error;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::watch;
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("配置文件 I/O 错误: {0}")]
     Io(#[from] std::io::Error),
-    #[error("YAML 序列化/反序列化失败: {0}")]
+    #[error("YAML 序列化/反序列化错误: {0}")]
     Yaml(#[from] serde_yaml::Error),
-    #[error("临时文件操作失败: {0}")]
+    #[error("原子替换临时文件错误: {0}")]
     TempFile(String),
 }
 
@@ -82,12 +82,19 @@ impl ConfigManager {
         let _ = self.sender.send(new_arc);
     }
 
-    /// 在持有写锁的情况下原子修改并持久化配置 (防止并发写入冲突与覆盖)
+    /// 在持有写锁的情况下原子修改并持久化配置
+    /// 注意：同步修改主要用于 CLI 启动初始化或非异步上下文；在 Web 运行时中请优先使用 `modify_config_async`。
+    /// 本方法会尝试获取与异步路径共享的 `async_write_lock`，若在非 Tokio runtime 线程上则完全阻塞排队。
     pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError>,
     {
+        let _sync_guard = match tokio::runtime::Handle::try_current() {
+            Ok(_) => self.async_write_lock.try_lock().ok(),
+            Err(_) => Some(self.async_write_lock.blocking_lock()),
+        };
+
         let mut guard = self.current.write();
         let new_config = f(&guard)?;
         Self::atomic_save_to_path(&self.file_path, &new_config)?;
