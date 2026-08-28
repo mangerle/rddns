@@ -86,8 +86,9 @@ pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     payload_json: serde_json::Value,
 ) -> Result<T, DnsProviderError> {
     let payload_str = payload_json.to_string();
-    let timestamp = chrono::Utc::now().timestamp();
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let now = chrono::Utc::now();
+    let timestamp = now.timestamp();
+    let date = now.format("%Y-%m-%d").to_string();
 
     // 1. 构造规范请求串 CanonicalRequest
     let canonical_headers = format!(
