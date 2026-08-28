@@ -45,10 +45,18 @@ pub async fn save_config_handler(
         ));
     }
 
-    // 2. 校验任务名称非空
+    // 2. 校验任务名称非空与唯一性
+    let mut task_names = std::collections::HashSet::new();
     for task in &new_config.dns_tasks {
-        if task.name.trim().is_empty() {
+        let name = task.name.trim();
+        if name.is_empty() {
             return Err(AppError::bad_request("任务名称不能为空"));
+        }
+        if !task_names.insert(name) {
+            return Err(AppError::bad_request(format!(
+                "任务名称 [{}] 存在重复，各任务名称必须唯一",
+                name
+            )));
         }
     }
 
@@ -190,6 +198,25 @@ provider:
         let mut invalid_task_name = valid_config.clone();
         invalid_task_name.dns_tasks[0].name = "  ".to_string();
         assert!(invalid_task_name.dns_tasks[0].name.trim().is_empty());
+
+        // 校验重复任务名称
+        let mut duplicate_tasks = valid_config.clone();
+        duplicate_tasks.dns_tasks = vec![
+            DnsTaskConfig {
+                name: "默认任务".to_string(),
+                ..Default::default()
+            },
+            DnsTaskConfig {
+                name: "默认任务".to_string(),
+                ..Default::default()
+            },
+        ];
+        let mut names_set = std::collections::HashSet::new();
+        let has_dup = duplicate_tasks
+            .dns_tasks
+            .iter()
+            .any(|t| !names_set.insert(t.name.trim()));
+        assert!(has_dup);
     }
 
     #[tokio::test]

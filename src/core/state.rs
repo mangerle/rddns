@@ -56,6 +56,12 @@ impl StateManager {
         let state = tasks.entry(task_name.to_string()).or_default();
         f(state);
     }
+
+    /// 清理已删除任务的历史运行时状态，防止内存长期驻留与泄漏
+    pub fn retain_active_tasks(&self, active_task_names: &[String]) {
+        let mut tasks = self.tasks.write();
+        tasks.retain(|name, _| active_task_names.contains(name));
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +90,13 @@ mod tests {
             updated.synced_domains.get("sub.example.com:A"),
             Some(&"1.2.3.4".to_string())
         );
+
+        // 测试清理已废弃任务状态
+        mgr.get_task_state("obsolete_task");
+        assert_eq!(mgr.tasks.read().len(), 2);
+        mgr.retain_active_tasks(&["task1".to_string()]);
+        assert_eq!(mgr.tasks.read().len(), 1);
+        assert!(mgr.tasks.read().contains_key("task1"));
+        assert!(!mgr.tasks.read().contains_key("obsolete_task"));
     }
 }

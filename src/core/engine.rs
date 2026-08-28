@@ -44,6 +44,12 @@ impl DdnsEngine {
     /// 执行单次全量任务检查与同步 (多任务并发执行)
     pub async fn run_once(&self, force_cloud_sync: bool) {
         let config = self.config_manager.get_config();
+
+        // 1. 同步清理已被用户删除的任务历史状态快照，防止内存泄漏
+        let active_task_names: Vec<String> =
+            config.dns_tasks.iter().map(|t| t.name.clone()).collect();
+        self.state_manager.retain_active_tasks(&active_task_names);
+
         let dispatcher = NotificationDispatcher::new_with_trackers(
             config.notifications.clone(),
             self.error_trackers.clone(),
