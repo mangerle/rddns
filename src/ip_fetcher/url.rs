@@ -15,59 +15,47 @@ pub struct UrlIpFetcher {
 }
 
 impl UrlIpFetcher {
+    fn build_client(
+        http_interface: Option<&str>,
+        is_ipv6: bool,
+        timeout: Duration,
+        user_agent: &'static str,
+    ) -> Client {
+        match crate::util::http::create_task_http_client_builder_for_family(http_interface, is_ipv6)
+            .timeout(timeout)
+            .user_agent(user_agent)
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(iface) = http_interface {
+                    warn!(
+                        "为任务网卡 [{}] 构建 {} 专有客户端失败: {}，降级为通用客户端",
+                        iface,
+                        if is_ipv6 { "IPv6" } else { "IPv4" },
+                        e
+                    );
+                }
+                crate::util::http::create_http_client(timeout).unwrap_or_else(|_| {
+                    Client::builder()
+                        .timeout(timeout)
+                        .build()
+                        .unwrap_or_default()
+                })
+            }
+        }
+    }
+
     pub fn new(
         endpoints: Vec<String>,
         regex: Option<String>,
         http_interface: Option<&str>,
     ) -> Self {
         let timeout = Duration::from_secs(5);
-        let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        let user_agent = "rddns/0.7.0 (Rust DDNS Client)";
 
-        let ipv4_client = match crate::util::http::create_task_http_client_builder_for_family(
-            http_interface,
-            false,
-        )
-        .timeout(timeout)
-        .user_agent(user_agent)
-        .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                if let Some(iface) = http_interface {
-                    warn!(
-                        "为任务网卡 [{}] 构建 IPv4 专有客户端失败: {}，降级为默认客户端",
-                        iface, e
-                    );
-                }
-                Client::builder()
-                    .timeout(timeout)
-                    .build()
-                    .unwrap_or_default()
-            }
-        };
-
-        let ipv6_client = match crate::util::http::create_task_http_client_builder_for_family(
-            http_interface,
-            true,
-        )
-        .timeout(timeout)
-        .user_agent(user_agent)
-        .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                if let Some(iface) = http_interface {
-                    warn!(
-                        "为任务网卡 [{}] 构建 IPv6 专有客户端失败: {}，降级为默认客户端",
-                        iface, e
-                    );
-                }
-                Client::builder()
-                    .timeout(timeout)
-                    .build()
-                    .unwrap_or_default()
-            }
-        };
+        let ipv4_client = Self::build_client(http_interface, false, timeout, user_agent);
+        let ipv6_client = Self::build_client(http_interface, true, timeout, user_agent);
 
         Self {
             endpoints,
