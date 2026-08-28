@@ -77,7 +77,7 @@ impl UrlIpFetcher {
         }
     }
 
-    async fn read_limited_text(resp: reqwest::Response) -> Result<String, FetchError> {
+    async fn read_limited_text(mut resp: reqwest::Response) -> Result<String, FetchError> {
         let status = resp.status();
         if !status.is_success() {
             return Err(FetchError::Other(format!(
@@ -85,16 +85,22 @@ impl UrlIpFetcher {
                 status
             )));
         }
-        let bytes = resp.bytes().await.map_err(FetchError::Http)?;
+
         const MAX_RESPONSE_BYTES: usize = 65536;
-        if bytes.len() > MAX_RESPONSE_BYTES {
-            return Err(FetchError::Other(format!(
-                "响应体体积超过限制 ({} 字节 > {} 字节)",
-                bytes.len(),
-                MAX_RESPONSE_BYTES
-            )));
+        let mut buffer = Vec::new();
+
+        // 流式读取分块并在达到上限时立即中断，防止恶意大文件耗尽系统内存
+        while let Some(chunk) = resp.chunk().await.map_err(FetchError::Http)? {
+            if buffer.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                return Err(FetchError::Other(format!(
+                    "响应体体积超过安全限制 (已接收 > {} 字节)",
+                    MAX_RESPONSE_BYTES
+                )));
+            }
+            buffer.extend_from_slice(&chunk);
         }
-        String::from_utf8(bytes.to_vec())
+
+        String::from_utf8(buffer)
             .map_err(|e| FetchError::Other(format!("响应内容非合法 UTF-8 文本: {}", e)))
     }
 
