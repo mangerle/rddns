@@ -359,11 +359,11 @@ export async function checkAppVersion(isManual = true) {
           }
         }
       } else if (isManual) {
-        alert(t('common.latestVersionAlert', { version: info.current_version }));
+        showToast(t('common.latestVersionAlert', { version: info.current_version }), 'success');
       }
     }
   } catch (e) {
-    if (isManual) alert(t('common.checkUpdateFailed', { error: e.message }));
+    if (isManual) showToast(t('common.checkUpdateFailed', { error: e.message }), 'error');
   }
 }
 
@@ -374,12 +374,12 @@ export async function triggerWebUpgrade() {
     const res = await apiFetch('/api/v1/upgrade', { method: 'POST' });
     const json = await res.json();
     if (json.success) {
-      alert(t('common.upgradeSuccess', { message: json.message }));
+      showToast(t('common.upgradeSuccess', { message: json.message }), 'success');
     } else {
-      alert(t('common.upgradeFailed', { message: json.message }));
+      showToast(t('common.upgradeFailed', { message: json.message }), 'error');
     }
   } catch (e) {
-    alert(t('common.upgradeFailed', { message: e.message }));
+    showToast(t('common.upgradeFailed', { message: e.message }), 'error');
   }
 }
 
