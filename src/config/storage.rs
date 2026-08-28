@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use thiserror::Error;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::watch;
 
 #[derive(Debug, Error)]
@@ -24,6 +25,7 @@ pub struct ConfigManager {
     file_path: PathBuf,
     current: Arc<RwLock<Arc<AppConfig>>>,
     sender: watch::Sender<Arc<AppConfig>>,
+    async_write_lock: TokioMutex<()>,
 }
 
 impl ConfigManager {
@@ -48,6 +50,7 @@ impl ConfigManager {
             file_path: path,
             current: Arc::new(RwLock::new(config_arc)),
             sender,
+            async_write_lock: TokioMutex::new(()),
         })
     }
 
@@ -95,12 +98,15 @@ impl ConfigManager {
         Ok(new_arc)
     }
 
-    /// 异步在持有写锁的情况下原子修改并持久化配置 (先持久化落盘再更新内存与广播，确保状态强一致)
+    /// 异步在持有写锁的情况下原子修改并持久化配置 (严格互斥串行化，防止并发更新丢失)
     pub async fn modify_config_async<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError> + Send + 'static,
     {
+        // 1. 获取异步写锁，确保从读取当前快照到磁盘写入与内存更新全过程串行互斥
+        let _async_guard = self.async_write_lock.lock().await;
+
         let current_config = self.get_config();
         let new_config = f(&current_config)?;
 
@@ -192,5 +198,37 @@ mod tests {
 
         let reloaded = ConfigManager::load_or_create(config_file).unwrap();
         assert_eq!(reloaded.get_config().listen_port, 7777);
+    }
+
+    #[tokio::test]
+    async fn test_modify_config_async_concurrency_no_lost_update() {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("test_concurrent_async_config.yaml");
+
+        let manager = Arc::new(ConfigManager::load_or_create(config_file.clone()).unwrap());
+
+        // 并发发起 10 个累加 interval_secs 的修改请求
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let mgr = manager.clone();
+            handles.push(tokio::spawn(async move {
+                mgr.modify_config_async::<_, ConfigError>(|conf| {
+                    let mut c = conf.clone();
+                    c.interval_secs += 10;
+                    Ok(c)
+                })
+                .await
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap().unwrap();
+        }
+
+        // 初始 interval_secs 是 300，10 次 +10 应该精确为 400
+        assert_eq!(manager.get_config().interval_secs, 400);
+
+        let reloaded = ConfigManager::load_or_create(config_file).unwrap();
+        assert_eq!(reloaded.get_config().interval_secs, 400);
     }
 }
