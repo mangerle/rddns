@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-badge.svg" height="46" alt="RDDNS" style="margin-bottom: 12px;" />
+<img src="assets/logo-badge.svg" width="380" alt="RDDNS" style="margin-bottom: 12px;" />
 
 **基于纯 Rust 打造的高性能、极轻量、全功能动态域名解析（DDNS）与告警服务**
 

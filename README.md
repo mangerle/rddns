@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-badge.svg" height="46" alt="RDDNS" style="margin-bottom: 12px;" />
+<img src="assets/logo-badge.svg" width="380" alt="RDDNS" style="margin-bottom: 12px;" />
 
 **A high-performance, ultra-lightweight, and full-featured Dynamic DNS (DDNS) and notification service written in pure Rust**
 
