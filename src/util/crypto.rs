@@ -3,11 +3,17 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use tokio::task::spawn_blocking;
+use url::form_urlencoded::byte_serialize;
 
 type HmacSha1 = Hmac<Sha1>;
 type HmacSha256 = Hmac<Sha256>;
 
 /// 计算 HMAC-SHA1 并返回 Base64 编码字符串（阿里云 POP 签名规范）
+///
+/// # 设计原理
+/// - **实现初衷**：兼容阿里云旧版 POP API 接口签名标准。
+/// - **核心优势**：快速哈希与 Base64 编码组合，无多余分配。
 pub fn hmac_sha1_base64(key: &[u8], data: &[u8]) -> String {
     let mut mac = match HmacSha1::new_from_slice(key) {
         Ok(m) => m,
@@ -19,6 +25,10 @@ pub fn hmac_sha1_base64(key: &[u8], data: &[u8]) -> String {
 }
 
 /// 计算 HMAC-SHA256 并返回原始字节数组（腾讯云 TC3 签名计算步骤）
+///
+/// # 设计原理
+/// - **实现初衷**：支持腾讯云 TC3-HMAC-SHA256 递归多级密钥派生（如 SecretDate, SecretService 等）。
+/// - **核心优势**：直接输出原始字节切片容器，避免中间 Hex 编解码损耗。
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut mac = match HmacSha256::new_from_slice(key) {
         Ok(m) => m,
@@ -29,19 +39,32 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 /// 计算 HMAC-SHA256 并返回十六进制小写字符串
+///
+/// # 设计原理
+/// - **实现初衷**：为 AWS SigV4、火山引擎、百度云等提供最终签名 Hex 串生成。
 pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
     let bytes = hmac_sha256(key, data);
     hex::encode(bytes)
 }
 
 /// 计算 SHA256 并返回十六进制小写字符串
+///
+/// # 设计原理
+/// - **实现初衷**：用于计算 HTTP 请求体 Payload 哈希与版本更新包校验。
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
 
-/// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG, 熵源不可用时 fail-fast 终止，防止降级为全零弱密钥)
+/// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG)
+///
+/// # 设计原理
+/// - **实现初衷**：为 STUN 事务 ID、DNS 查询 ID 与临时会话 Token 提供高强度随机源。
+/// - **核心优势**：直接调用操作系统底层硬件/内核 CSPRNG。
+///
+/// # Panics
+/// 当操作系统底层熵源完全不可用（极罕见内核级故障）时，为了安全防御杜绝降级为全零弱随机数而立即 panic。
 pub fn fill_random_bytes(dest: &mut [u8]) {
     if let Err(e) = getrandom::fill(dest) {
         panic!("系统密码学安全熵源不可用: {}", e);
@@ -63,17 +86,25 @@ pub fn random_u32() -> u32 {
 }
 
 /// 异步执行 bcrypt 密码哈希生成 (移入后台阻塞线程池，防止阻塞 async runtime)
+///
+/// # 设计原理
+/// - **实现初衷**：bcrypt 属于密集 CPU 计算，若在 Tokio 工作线程直接计算会引发严重事件循环延迟。
+/// - **核心优势**：通过 `spawn_blocking` 将密集计算移交专用线程池。
+///
+/// # Errors
+/// 当密码过长（>72字节）或后台阻塞任务执行异常时返回错误。
 pub async fn hash_password_async(password: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("执行后台哈希任务失败: {}", e))?
+    spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("执行后台哈希任务失败: {}", e))?
 }
 
 /// 异步校验 bcrypt 密码哈希 (移入后台阻塞线程池)
+///
+/// # 设计原理
+/// - **实现初衷**：避免在 Web 身份验证接口中阻塞异步运行时。
 pub async fn verify_password_async(password: String, hash: String) -> bool {
-    tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false))
+    spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false))
         .await
         .unwrap_or(false)
 }
@@ -81,6 +112,10 @@ pub async fn verify_password_async(password: String, hash: String) -> bool {
 /// 阿里云 POP 规范 URL 编码（RFC 3986 基础上的特殊转义规则）
 /// 将所有非保留字符（A-Z, a-z, 0-9, '-', '_', '.', '~'）编码为大写百分号形式，
 /// 并且将 '+' 编码为 '%20'，'*' 编码为 '%2A'，'%7E' 转回 '~'
+///
+/// # 设计原理
+/// - **实现初衷**：精确满足阿里云 API 网关对请求签名的特殊百分号大写编码要求。
+/// - **核心优势**：使用 `String::with_capacity` 预分配内存，避免多次扩容。
 pub fn pop_url_encode(s: &str) -> String {
     let mut result = String::with_capacity(s.len() * 3 / 2);
     for b in s.bytes() {
@@ -97,11 +132,14 @@ pub fn pop_url_encode(s: &str) -> String {
 }
 
 /// 构建符合 AWS SigV4 规范的规范化 URL 查询字符串 (按键名升序排序并逐字段 URL 编码)
+///
+/// # 设计原理
+/// - **实现初衷**：满足 AWS / 火山引擎等主流云厂商 SigV4 规范的 Query 参数严格升序排序与编码。
 pub fn build_canonical_query_string<K: AsRef<str>, V: AsRef<str>>(query: &[(K, V)]) -> String {
-    let mut sorted: Vec<(&str, &str)> = query
-        .iter()
-        .map(|(k, v)| (k.as_ref(), v.as_ref()))
-        .collect();
+    let mut sorted = Vec::with_capacity(query.len());
+    for (k, v) in query {
+        sorted.push((k.as_ref(), v.as_ref()));
+    }
     sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     sorted
@@ -109,8 +147,8 @@ pub fn build_canonical_query_string<K: AsRef<str>, V: AsRef<str>>(query: &[(K, V
         .map(|(k, v)| {
             format!(
                 "{}={}",
-                url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
-                url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
+                byte_serialize(k.as_bytes()).collect::<String>(),
+                byte_serialize(v.as_bytes()).collect::<String>()
             )
         })
         .collect::<Vec<_>>()

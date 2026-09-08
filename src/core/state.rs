@@ -5,6 +5,11 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 /// 单个 DNS 任务的运行时状态快照
+///
+/// # 设计原理
+/// - **实现初衷**: 实时跟踪任务在内存中的动态同步状态，包括上次获取到的 IP、失败重试计数、连续轮询计数以及域名级别最后成功同步的 IP 记录。
+/// - **核心优势**: 支持轻量化无锁读取与原子状态快照；支持与 Web 前端状态展示及错误自愈逻辑无缝联动。
+/// - **代价与局限**: 默认纯内存驻留，进程重启后状态会被重置（但新一轮轮询会通过服务商比对迅速恢复最新状态）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskRuntimeState {
     /// 上一次成功同步的 IPv4
@@ -28,26 +33,32 @@ pub struct TaskRuntimeState {
     pub synced_domains: HashMap<String, String>,
 }
 
-/// 全局任务状态管理器
+/// 全局任务运行时状态管理器
+///
+/// # 设计原理
+/// - **实现初衷**: 为整个 DDNS 异步调度引擎及 Web 控制台提供中心化、线程安全的任务生命周期与运行指标状态存储。
+/// - **核心优势**: 采用细粒度 `parking_lot::RwLock`，读多写少场景下性能极佳；支持根据活动任务列表自动淘汰已删除任务状态，杜绝内存泄漏。
+/// - **代价与局限**: 采用基于名称的字典映射，任务更名时需通过清理机制释放旧状态。
 #[derive(Clone, Default)]
 pub struct StateManager {
     tasks: Arc<RwLock<HashMap<String, TaskRuntimeState>>>,
 }
 
 impl StateManager {
+    /// 创建状态管理器实例
     pub fn new() -> Self {
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// 获取任务状态拷贝，若不存在则初始化
+    /// 获取指定任务的状态克隆快照，若不存在则初始化为默认值
     pub fn get_task_state(&self, task_name: &str) -> TaskRuntimeState {
         let mut tasks = self.tasks.write();
         tasks.entry(task_name.to_string()).or_default().clone()
     }
 
-    /// 更新任务状态
+    /// 通过闭包安全原子修改指定任务的状态
     pub fn update_task_state<F>(&self, task_name: &str, f: F)
     where
         F: FnOnce(&mut TaskRuntimeState),

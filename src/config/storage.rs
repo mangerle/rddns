@@ -3,17 +3,20 @@ use anyhow::Result;
 use log::info;
 use parking_lot::RwLock;
 use std::fs;
-use std::io::Write;
+use std::io::{Error as IoError, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::watch;
+use tokio::task::spawn_blocking;
 
+/// 配置文件存取与持久化错误
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("配置文件 I/O 错误: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("配置文件 I/O 操作失败: {0}")]
+    Io(#[from] IoError),
     #[error("YAML 序列化/反序列化错误: {0}")]
     Yaml(#[from] serde_yaml::Error),
     #[error("原子替换临时文件错误: {0}")]
@@ -21,6 +24,13 @@ pub enum ConfigError {
 }
 
 /// 配置管理器（支持原子写入持久化与 Tokio watch 热广播）
+///
+/// # 设计原理
+/// - **实现初衷**：集中管理整个应用程序的动态配置生命周期，支持 CLI 覆写、Web API 实时更新与后台 Worker 变更订阅。
+/// - **核心优势**：
+///   1. 读写分离与无锁读取：内存快照使用 `Arc<RwLock<Arc<AppConfig>>>`，读取端纯无锁或极轻量读锁，吞吐极高。
+///   2. 严格串行化防并发更新丢失：集成异步写互斥锁，确保并发 HTTP 提交时安全按序处理。
+///   3. 原子写盘防损坏：采用“写入同目录临时文件 -> fsync 刷盘 -> 原子重命名”机制，即便遭遇掉电也不会破坏原配置。
 pub struct ConfigManager {
     file_path: PathBuf,
     current: Arc<RwLock<Arc<AppConfig>>>,
@@ -30,6 +40,12 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     /// 初始化配置管理器（从指定路径加载，若不存在则创建默认配置）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在程序冷启动时提供安全自愈能力，首次运行时自动生成完整的样例配置文件。
+    ///
+    /// # Errors
+    /// 当配置文件存在但格式非法，或磁盘无写入权限导致无法创建默认配置时返回错误。
     pub fn load_or_create(path: PathBuf) -> Result<Self, ConfigError> {
         let config = if path.exists() {
             info!("正在加载配置文件: {}", path.display());
@@ -54,7 +70,7 @@ impl ConfigManager {
         })
     }
 
-    /// 获取当前最新配置快照
+    /// 获取当前最新配置快照 (零阻塞克隆内部 Arc 引用)
     pub fn get_config(&self) -> Arc<AppConfig> {
         self.current.read().clone()
     }
@@ -70,6 +86,9 @@ impl ConfigManager {
     }
 
     /// 原子更新并持久化配置
+    ///
+    /// # Errors
+    /// 当磁盘写盘失败或序列化异常时返回错误。
     pub fn update_config(&self, new_config: AppConfig) -> Result<(), ConfigError> {
         self.modify_config::<_, ConfigError>(|_| Ok(new_config))
             .map(|_| ())
@@ -84,14 +103,15 @@ impl ConfigManager {
     }
 
     /// 在持有写锁的情况下原子修改并持久化配置
-    /// 注意：同步修改主要用于 CLI 启动初始化阶段或无 Tokio 异步上下文的场景；在 Web 服务运行期一律请使用 `modify_config_async`。
-    /// 若在 Tokio runtime 线程内调用且未能立即获取锁，将直接返回错误以防止无锁并发穿插。
+    ///
+    /// # Errors
+    /// 当临时文件生成失败、磁盘写入出错或闭包逻辑校验失败时返回错误。
     pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError>,
     {
-        let _sync_guard = match tokio::runtime::Handle::try_current() {
+        let _sync_guard = match Handle::try_current() {
             Ok(_) => self.async_write_lock.try_lock().map_err(|_| {
                 ConfigError::TempFile(
                     "配置文件正被异步更新锁定，请在异步上下文中调用 modify_config_async"
@@ -112,12 +132,17 @@ impl ConfigManager {
     }
 
     /// 异步在持有写锁的情况下原子修改并持久化配置 (严格互斥串行化，防止并发更新丢失)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在异步 Web API 下持久化大配置，通过 `spawn_blocking` 将同步磁盘 IO 调度至阻塞线程池，杜绝阻塞 Tokio 事件循环。
+    ///
+    /// # Errors
+    /// 当写锁争用超时、后台持久化任务失败或闭包业务校验失败时返回错误。
     pub async fn modify_config_async<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError> + Send + 'static,
     {
-        // 1. 获取异步写锁，确保从读取当前快照到磁盘写入与内存更新全过程串行互斥
         let _async_guard = self.async_write_lock.lock().await;
 
         let current_config = self.get_config();
@@ -126,7 +151,7 @@ impl ConfigManager {
         let path = self.file_path.clone();
         let config_clone = new_config.clone();
 
-        tokio::task::spawn_blocking(move || Self::atomic_save_to_path(&path, &config_clone))
+        spawn_blocking(move || Self::atomic_save_to_path(&path, &config_clone))
             .await
             .map_err(|e| {
                 E::from(ConfigError::TempFile(format!(
@@ -173,6 +198,7 @@ impl ConfigManager {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use tokio::spawn;
 
     #[test]
     fn test_atomic_save_and_load() {
@@ -224,7 +250,7 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..10 {
             let mgr = manager.clone();
-            handles.push(tokio::spawn(async move {
+            handles.push(spawn(async move {
                 mgr.modify_config_async::<_, ConfigError>(|conf| {
                     let mut c = conf.clone();
                     c.interval_secs += 10;

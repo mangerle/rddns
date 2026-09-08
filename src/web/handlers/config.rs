@@ -1,11 +1,16 @@
 use super::{ApiResponse, AppError, AppState};
-use crate::config::model::{AppConfig, UserAuthConfig};
+use crate::config::model::{
+    AppConfig, DnsTaskConfig, IpSourceType, NotificationConfig, UserAuthConfig,
+};
 use crate::config::storage::ConfigError;
+use crate::util::crypto::hash_password_async;
 use crate::util::dns_resolver::{clear_custom_dns_server, set_custom_dns_server};
+use crate::util::http::clear_http_client_cache;
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use std::collections::HashSet;
 
 /// 获取当前配置 (将用户密码哈希置空，配合 skip_serializing_if 彻底不向前端输出密码字段)
 pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -17,37 +22,35 @@ pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoRespo
     Json(ApiResponse::ok(clean_conf))
 }
 
+/// 保存更新配置的请求入参
 #[derive(Debug, Deserialize)]
 pub struct SaveConfigRequest {
     pub config: AppConfig,
     pub new_password: Option<String>,
 }
 
-/// 保存更新配置
-pub async fn save_config_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<SaveConfigRequest>,
-) -> Result<Json<ApiResponse<()>>, AppError> {
-    let new_config = payload.config;
-
-    // 1. 基础参数与数值边界校验
-    if new_config.interval_secs < 5 {
+/// 校验配置的基础数值与周期边界
+fn validate_basic_limits(config: &AppConfig) -> Result<(), AppError> {
+    if config.interval_secs < 5 {
         return Err(AppError::bad_request("同步检查间隔时间必须大于或等于 5 秒"));
     }
-    if new_config.cache_times < 1 {
+    if config.cache_times < 1 {
         return Err(AppError::bad_request(
             "强制校对云端记录间隔次数必须大于或等于 1 次",
         ));
     }
-    if new_config.listen_port == 0 {
+    if config.listen_port == 0 {
         return Err(AppError::bad_request(
             "Web 服务监听端口必须在 1 到 65535 之间",
         ));
     }
+    Ok(())
+}
 
-    // 2. 校验任务名称非空与唯一性，以及 URL 端点合法协议 (仅允许 http:// 或 https://)
-    let mut task_names = std::collections::HashSet::new();
-    for task in &new_config.dns_tasks {
+/// 校验 DNS 任务名称唯一性与 URL 端点合法性
+fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
+    let mut task_names = HashSet::with_capacity(tasks.len());
+    for task in tasks {
         let name = task.name.trim();
         if name.is_empty() {
             return Err(AppError::bad_request("任务名称不能为空"));
@@ -60,7 +63,7 @@ pub async fn save_config_handler(
         }
 
         for ip_cfg in [&task.ipv4, &task.ipv6] {
-            if ip_cfg.source_type == crate::config::model::IpSourceType::Url {
+            if ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
                     if !trimmed.is_empty()
@@ -76,60 +79,91 @@ pub async fn save_config_handler(
             }
         }
     }
+    Ok(())
+}
 
-    // 校验通知配置中的自定义 URL 必须以 http:// 或 https:// 开头
-    let notif = &new_config.notifications;
-    if let Some(ref bark) = notif.bark {
-        let s = bark.server_url.trim();
+/// 校验通知渠道配置中的 URL 地址合法性
+fn validate_notification_urls(notif: &NotificationConfig) -> Result<(), AppError> {
+    let check_url = |url: &str, name: &str| -> Result<(), AppError> {
+        let s = url.trim();
         if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            return Err(AppError::bad_request(format!(
-                "Bark 通知服务器地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                s
-            )));
+            Err(AppError::bad_request(format!(
+                "{} [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+                name, s
+            )))
+        } else {
+            Ok(())
         }
+    };
+
+    if let Some(ref bark) = notif.bark {
+        check_url(&bark.server_url, "Bark 通知服务器地址")?;
     }
     if let Some(ref webhook) = notif.webhook {
-        let s = webhook.url.trim();
-        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            return Err(AppError::bad_request(format!(
-                "自定义 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                s
-            )));
-        }
+        check_url(&webhook.url, "自定义 Webhook 地址")?;
     }
     if let Some(ref tg) = notif.telegram
         && let Some(ref proxy) = tg.api_proxy
     {
-        let s = proxy.trim();
-        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            return Err(AppError::bad_request(format!(
-                "Telegram API 代理地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                s
-            )));
-        }
+        check_url(proxy, "Telegram API 代理地址")?;
     }
     if let Some(ref wecom) = notif.wecom
         && let Some(ref webhook_url) = wecom.webhook_url
     {
-        let s = webhook_url.trim();
-        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            return Err(AppError::bad_request(format!(
-                "企业微信机器人 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                s
-            )));
-        }
+        check_url(webhook_url, "企业微信机器人 Webhook 地址")?;
     }
     if let Some(ref feishu) = notif.feishu {
-        let s = feishu.webhook_url.trim();
-        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            return Err(AppError::bad_request(format!(
-                "飞书机器人 Webhook 地址 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                s
-            )));
-        }
+        check_url(&feishu.webhook_url, "飞书机器人 Webhook 地址")?;
     }
+    Ok(())
+}
 
-    // 3. 如果用户提交了新密码，异步生成 bcrypt 哈希
+/// 合并管理员认证凭证（密码更新或保留旧密码）
+fn resolve_saved_auth(
+    mut new_auth: Option<UserAuthConfig>,
+    old_auth: Option<&UserAuthConfig>,
+    new_password_hash: Option<String>,
+) -> Option<UserAuthConfig> {
+    if let Some(new_hash) = new_password_hash {
+        let username = new_auth
+            .as_ref()
+            .map(|a| a.username.clone())
+            .or_else(|| old_auth.map(|a| a.username.clone()))
+            .unwrap_or_else(|| "admin".to_string());
+        Some(UserAuthConfig {
+            username,
+            password_hash: new_hash,
+        })
+    } else if let Some(old) = old_auth {
+        if let Some(ref mut auth) = new_auth {
+            if auth.username.trim().is_empty() {
+                auth.username = old.username.clone();
+            }
+            auth.password_hash = old.password_hash.clone();
+            new_auth
+        } else {
+            Some(old.clone())
+        }
+    } else {
+        new_auth
+    }
+}
+
+/// 保存更新配置的 Web 接口
+///
+/// # Errors
+///
+/// 当参数校验失败、密码生成异常或磁盘刷盘失败时返回 [`AppError`]。
+pub async fn save_config_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<SaveConfigRequest>,
+) -> Result<Json<ApiResponse<()>>, AppError> {
+    let new_config = payload.config;
+
+    validate_basic_limits(&new_config)?;
+    validate_task_configs(&new_config.dns_tasks)?;
+    validate_notification_urls(&new_config.notifications)?;
+
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.trim().is_empty()
     {
@@ -138,7 +172,7 @@ pub async fn save_config_handler(
             return Err(AppError::bad_request("新密码长度不能少于 4 个字符"));
         }
         Some(
-            crate::util::crypto::hash_password_async(clean_pwd.to_string())
+            hash_password_async(clean_pwd.to_string())
                 .await
                 .map_err(|e| AppError::internal(format!("密码哈希失败: {}", e)))?,
         )
@@ -146,44 +180,18 @@ pub async fn save_config_handler(
         None
     };
 
-    // 4. 异步原子更新并持久化配置 (刷盘在后台线程池执行)
     state
         .config_manager
         .modify_config_async::<_, ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
-
-            // 锁定 Web 服务监听端口：禁止通过 Web API 修改端口，始终继承原有配置
             to_save.listen_port = old_config.listen_port;
-
-            // 管理员凭据处理：若提交了新密码则更新哈希，否则自动继承保留原配置中的账号凭据
-            if let Some(new_hash) = new_password_hash {
-                let username = to_save
-                    .auth
-                    .as_ref()
-                    .map(|a| a.username.clone())
-                    .or_else(|| old_config.auth.as_ref().map(|a| a.username.clone()))
-                    .unwrap_or_else(|| "admin".to_string());
-                to_save.auth = Some(UserAuthConfig {
-                    username,
-                    password_hash: new_hash,
-                });
-            } else if let Some(old_auth) = &old_config.auth {
-                if let Some(new_auth) = &mut to_save.auth {
-                    if new_auth.username.trim().is_empty() {
-                        new_auth.username = old_auth.username.clone();
-                    }
-                    new_auth.password_hash = old_auth.password_hash.clone();
-                } else {
-                    to_save.auth = Some(old_auth.clone());
-                }
-            }
-
+            to_save.auth =
+                resolve_saved_auth(to_save.auth, old_config.auth.as_ref(), new_password_hash);
             Ok(to_save)
         })
         .await
         .map_err(|e| AppError::internal(format!("保存配置失败: {}", e)))?;
 
-    // 5. 持久化成功后，热更新全局 DNS 解析服务器配置 (若清空则重置回系统默认) 并刷新客户端连接池
     if let Some(ref dns_srv) = new_config.dns_server {
         let clean = dns_srv.trim();
         if !clean.is_empty() {
@@ -194,7 +202,7 @@ pub async fn save_config_handler(
     } else {
         clear_custom_dns_server();
     }
-    crate::util::http::clear_http_client_cache();
+    clear_http_client_cache();
 
     Ok(Json(ApiResponse::ok(())))
 }

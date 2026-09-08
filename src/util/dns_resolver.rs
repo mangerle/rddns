@@ -3,9 +3,14 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::str::from_utf8;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::time::timeout;
+
+use crate::util::crypto::random_u16;
 
 /// 全局自定义 DNS 递归解析服务器地址 (如 "223.5.5.5" 或 "1.1.1.1:53")
 static CUSTOM_DNS_SERVER: RwLock<Option<String>> = RwLock::new(None);
@@ -21,10 +26,14 @@ type DnsCacheKey = (String, String, u8);
 type DnsCacheMap = RwLock<HashMap<DnsCacheKey, DnsCacheEntry>>;
 
 /// 全局 DNS 解析内存缓存池 (Key: (dns_server, domain, qtype))
-static GLOBAL_DNS_CACHE: std::sync::LazyLock<DnsCacheMap> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static GLOBAL_DNS_CACHE: LazyLock<DnsCacheMap> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// 设置全局自定义 DNS 解析服务器
+///
+/// # 设计原理
+/// - **实现初衷**：在运营商本地 DNS 存在劫持、投毒或缓存严重滞后的网络环境下，
+///   允许用户指定可靠的上游公共 DNS（如阿里 223.5.5.5、腾讯 119.29.29.29 或 Cloudflare 1.1.1.1）进行纯净解析。
+/// - **核心优势**：直接影响所有任务的当前解析 IP 查询，无需重启进程。
 pub fn set_custom_dns_server(server: String) {
     let clean = server.trim().to_string();
     if !clean.is_empty() {
@@ -34,12 +43,15 @@ pub fn set_custom_dns_server(server: String) {
 }
 
 /// 清空全局自定义 DNS 解析服务器（恢复系统默认解析）
+///
+/// # 设计原理
+/// - **实现初衷**：用户移除自定义 DNS 后无缝回退至操作系统原生 libc/socket 解析。
 pub fn clear_custom_dns_server() {
     info!("已清空自定义 DNS 递归解析服务器，恢复系统原生 DNS 解析");
     *CUSTOM_DNS_SERVER.write() = None;
 }
 
-/// 获取全局自定义 DNS 解析服务器
+/// 获取当前配置的全局自定义 DNS 解析服务器
 pub fn get_custom_dns_server() -> Option<String> {
     CUSTOM_DNS_SERVER.read().clone()
 }
@@ -151,7 +163,7 @@ fn read_dns_name_at(buf: &[u8], mut offset: usize) -> Result<String> {
         if offset + len > buf.len() {
             bail!("DNS 域名 Label 长度超出数据包边界");
         }
-        let label_str = std::str::from_utf8(&buf[offset..offset + len])
+        let label_str = from_utf8(&buf[offset..offset + len])
             .map_err(|e| anyhow!("DNS Label UTF-8 解析失败: {}", e))?;
         labels.push(label_str);
         offset += len;
@@ -160,12 +172,8 @@ fn read_dns_name_at(buf: &[u8], mut offset: usize) -> Result<String> {
     Ok(labels.join("."))
 }
 
-/// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒)、可能存在的 CNAME 别名目标以及是否被截断 (TC 标志)
-fn parse_dns_response_packet(
-    buf: &[u8],
-    query_id: u16,
-    qtype: QueryRecordType,
-) -> Result<(Vec<IpAddr>, u32, Option<String>, bool)> {
+/// 校验 DNS 响应报文头部（包含 ID、截断标志与返回码）并返回 Question 和 Answer 数量
+fn validate_dns_header(buf: &[u8], query_id: u16) -> Result<(usize, usize, bool)> {
     if buf.len() < 12 {
         bail!("DNS 响应包长度过短");
     }
@@ -187,7 +195,73 @@ fn parse_dns_response_packet(
 
     let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
     let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    Ok((qdcount, ancount, tc))
+}
 
+/// 解析 Answer 区段中的单个资源记录
+fn parse_single_answer(
+    buf: &[u8],
+    offset: &mut usize,
+    qtype: QueryRecordType,
+    ips: &mut Vec<IpAddr>,
+    min_ttl: &mut u32,
+    cname_target: &mut Option<String>,
+) -> Result<()> {
+    skip_dns_name(buf, offset)?;
+    if *offset + 10 > buf.len() {
+        bail!("DNS Answer 区段被截断");
+    }
+
+    let atype = u16::from_be_bytes([buf[*offset], buf[*offset + 1]]);
+    let ttl = u32::from_be_bytes([
+        buf[*offset + 4],
+        buf[*offset + 5],
+        buf[*offset + 6],
+        buf[*offset + 7],
+    ]);
+    let rdlength = u16::from_be_bytes([buf[*offset + 8], buf[*offset + 9]]) as usize;
+    *offset += 10;
+
+    if *offset + rdlength > buf.len() {
+        bail!("DNS Answer RDATA 数据区被截断");
+    }
+
+    if atype == (qtype as u16) {
+        let valid_ttl = if ttl <= 0x7FFFFFFF { ttl } else { 0 };
+        if valid_ttl < *min_ttl {
+            *min_ttl = valid_ttl;
+        }
+        if qtype == QueryRecordType::A && rdlength == 4 {
+            let ipv4 = Ipv4Addr::new(
+                buf[*offset],
+                buf[*offset + 1],
+                buf[*offset + 2],
+                buf[*offset + 3],
+            );
+            ips.push(IpAddr::V4(ipv4));
+        } else if qtype == QueryRecordType::AAAA && rdlength == 16 {
+            let mut octets = [0u8; 16];
+            octets.copy_from_slice(&buf[*offset..*offset + 16]);
+            ips.push(IpAddr::V6(Ipv6Addr::from(octets)));
+        }
+    } else if atype == 5
+        && let Ok(cname) = read_dns_name_at(buf, *offset)
+        && !cname.trim().is_empty()
+    {
+        *cname_target = Some(cname);
+    }
+
+    *offset += rdlength;
+    Ok(())
+}
+
+/// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒)、可能存在的 CNAME 别名目标以及是否被截断 (TC 标志)
+fn parse_dns_response_packet(
+    buf: &[u8],
+    query_id: u16,
+    qtype: QueryRecordType,
+) -> Result<(Vec<IpAddr>, u32, Option<String>, bool)> {
+    let (qdcount, ancount, tc) = validate_dns_header(buf, query_id)?;
     let mut offset = 12;
 
     // 跳过 Question 部分
@@ -196,95 +270,34 @@ fn parse_dns_response_packet(
         if offset + 4 > buf.len() {
             bail!("DNS Question 区段被截断");
         }
-        offset += 4; // QTYPE (2B) + QCLASS (2B)
+        offset += 4;
     }
 
     let mut ips = Vec::new();
     let mut min_ttl = 300u32;
-    let mut cname_target: Option<String> = None;
+    let mut cname_target = None;
 
     // 解析 Answer 部分
     for _ in 0..ancount {
-        skip_dns_name(buf, &mut offset)?;
-        if offset + 10 > buf.len() {
-            bail!("DNS Answer 区段被截断");
-        }
-
-        let atype = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let ttl = u32::from_be_bytes([
-            buf[offset + 4],
-            buf[offset + 5],
-            buf[offset + 6],
-            buf[offset + 7],
-        ]);
-        let rdlength = u16::from_be_bytes([buf[offset + 8], buf[offset + 9]]) as usize;
-        offset += 10;
-
-        if offset + rdlength > buf.len() {
-            bail!("DNS Answer RDATA 数据区被截断");
-        }
-
-        if atype == (qtype as u16) {
-            // RFC 2181: 若 TTL 最高位为 1 (大于 2^31 - 1)，应视为 0
-            let valid_ttl = if ttl <= 0x7FFFFFFF { ttl } else { 0 };
-            if valid_ttl < min_ttl {
-                min_ttl = valid_ttl;
-            }
-            if qtype == QueryRecordType::A && rdlength == 4 {
-                let ipv4 = Ipv4Addr::new(
-                    buf[offset],
-                    buf[offset + 1],
-                    buf[offset + 2],
-                    buf[offset + 3],
-                );
-                ips.push(IpAddr::V4(ipv4));
-            } else if qtype == QueryRecordType::AAAA && rdlength == 16 {
-                let mut octets = [0u8; 16];
-                octets.copy_from_slice(&buf[offset..offset + 16]);
-                let ipv6 = Ipv6Addr::from(octets);
-                ips.push(IpAddr::V6(ipv6));
-            }
-        } else if atype == 5 {
-            // CNAME 别名记录类型
-            if let Ok(cname) = read_dns_name_at(buf, offset)
-                && !cname.trim().is_empty()
-            {
-                cname_target = Some(cname);
-            }
-        }
-
-        offset += rdlength;
+        parse_single_answer(
+            buf,
+            &mut offset,
+            qtype,
+            &mut ips,
+            &mut min_ttl,
+            &mut cname_target,
+        )?;
     }
 
     Ok((ips, min_ttl.clamp(5, 3600), cname_target, tc))
 }
 
-/// 执行 TCP 53 端口 DNS 查询 (RFC 1035: 带 2 字节报文长度前缀，用于大包响应或截断兜底)
-pub async fn query_dns_server_tcp(
-    target_server: SocketAddr,
-    clean_domain: &str,
-    qtype: QueryRecordType,
-    query_id: u16,
+/// 读取 TCP 53 端口响应报文
+async fn read_tcp_dns_response(
+    tcp_stream: &mut TcpStream,
     timeout_duration: Duration,
-) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
-    let packet = build_dns_query_packet(clean_domain, qtype, query_id)?;
-    let mut tcp_stream =
-        match tokio::time::timeout(timeout_duration, TcpStream::connect(target_server)).await {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => bail!("连接 DNS 服务器 {} (TCP:53) 失败: {}", target_server, e),
-            Err(_) => bail!("连接 DNS 服务器 {} (TCP:53) 超时", target_server),
-        };
-
-    // RFC 1035: TCP 报文发送前须包含 2 字节的大端长度前缀
-    let len_prefix = (packet.len() as u16).to_be_bytes();
-    let mut send_buf = Vec::with_capacity(2 + packet.len());
-    send_buf.extend_from_slice(&len_prefix);
-    send_buf.extend_from_slice(&packet);
-
-    let write_and_read = async {
-        tcp_stream.write_all(&send_buf).await?;
-        tcp_stream.flush().await?;
-
+) -> Result<Vec<u8>> {
+    let read_fut = async {
         let mut len_bytes = [0u8; 2];
         tcp_stream.read_exact(&mut len_bytes).await?;
         let resp_len = u16::from_be_bytes(len_bytes) as usize;
@@ -297,17 +310,116 @@ pub async fn query_dns_server_tcp(
         Ok::<Vec<u8>, anyhow::Error>(resp_buf)
     };
 
-    let resp_bytes = match tokio::time::timeout(timeout_duration, write_and_read).await {
-        Ok(Ok(bytes)) => bytes,
+    match timeout(timeout_duration, read_fut).await {
+        Ok(Ok(bytes)) => Ok(bytes),
         Ok(Err(e)) => bail!("TCP DNS 报文收发失败: {}", e),
         Err(_) => bail!("TCP DNS 请求超时"),
+    }
+}
+
+/// 执行 TCP 53 端口 DNS 查询 (RFC 1035: 带 2 字节报文长度前缀，用于大包响应或截断兜底)
+///
+/// # 设计原理
+/// - **实现初衷**：当 UDP 响应报文超出 512 字节触发截断 (TC=1) 时，RFC 1035 要求回退至 TCP 查询完整应答。
+/// - **核心优势**：自动构造 RFC 规定的 2 字节前缀并完整读取流式响应。
+///
+/// # Errors
+/// 当 TCP 连接超时、建连被拒或报文格式截断时返回错误。
+pub async fn query_dns_server_tcp(
+    target_server: SocketAddr,
+    clean_domain: &str,
+    qtype: QueryRecordType,
+    query_id: u16,
+    timeout_duration: Duration,
+) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
+    let packet = build_dns_query_packet(clean_domain, qtype, query_id)?;
+    let mut tcp_stream = match timeout(timeout_duration, TcpStream::connect(target_server)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => bail!("连接 DNS 服务器 {} (TCP:53) 失败: {}", target_server, e),
+        Err(_) => bail!("连接 DNS 服务器 {} (TCP:53) 超时", target_server),
     };
 
+    let len_prefix = (packet.len() as u16).to_be_bytes();
+    let mut send_buf = Vec::with_capacity(2 + packet.len());
+    send_buf.extend_from_slice(&len_prefix);
+    send_buf.extend_from_slice(&packet);
+
+    tcp_stream.write_all(&send_buf).await?;
+    tcp_stream.flush().await?;
+
+    let resp_bytes = read_tcp_dns_response(&mut tcp_stream, timeout_duration).await?;
     let (ips, ttl_secs, cname, _) = parse_dns_response_packet(&resp_bytes, query_id, qtype)?;
     Ok((ips, ttl_secs, cname))
 }
 
+/// 解析 DNS 服务器的主机与端口为标准套接字地址
+fn resolve_dns_server_addr(server_addr: &str) -> Result<SocketAddr> {
+    if let Ok(addr) = server_addr.parse() {
+        Ok(addr)
+    } else if let Ok(ip) = server_addr.parse::<IpAddr>() {
+        Ok(SocketAddr::new(ip, 53))
+    } else {
+        bail!("无法解析 DNS 服务器地址 [{}]", server_addr);
+    }
+}
+
+/// 将成功解析的 DNS 记录写入全局内存缓存
+fn cache_dns_result(key: DnsCacheKey, ips: &[IpAddr], ttl_secs: u32) {
+    if ips.is_empty() {
+        return;
+    }
+    let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
+    let mut cache = GLOBAL_DNS_CACHE.write();
+    if cache.len() >= 512 {
+        let now = Instant::now();
+        cache.retain(|_, entry| entry.expires_at > now);
+    }
+    cache.insert(
+        key,
+        DnsCacheEntry {
+            ips: ips.to_vec(),
+            expires_at,
+        },
+    );
+}
+
+/// 执行单次 UDP DNS 发送与接收
+async fn perform_udp_attempt(
+    target_server: SocketAddr,
+    packet: &[u8],
+    timeout_duration: Duration,
+) -> Result<(Vec<u8>, SocketAddr)> {
+    let bind_addr = if target_server.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let socket = UdpSocket::bind(bind_addr)
+        .await
+        .map_err(|e| anyhow!("绑定本地 UDP 失败: {}", e))?;
+
+    socket
+        .send_to(packet, target_server)
+        .await
+        .map_err(|e| anyhow!("向 DNS 服务器 {} 发送查询失败: {}", target_server, e))?;
+
+    let mut buf = [0u8; 512];
+    let (len, src_addr) = timeout(timeout_duration, socket.recv_from(&mut buf))
+        .await
+        .map_err(|_| anyhow!("DNS 查询超时"))?
+        .map_err(|e| anyhow!("接收 DNS 响应失败: {}", e))?;
+
+    Ok((buf[..len].to_vec(), src_addr))
+}
+
 /// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存、CNAME 追溯与 TCP 截断兜底)
+///
+/// # 设计原理
+/// - **实现初衷**：防止本地运营商 DNS 污染或缓存未刷新导致误报已同步，支持直连上游 DNS 权威服务器。
+/// - **核心优势**：内置内存 TTL 缓存池、支持 CNAME 别名自动追溯与 UDP 截断自动 TCP 回退。
+///
+/// # Errors
+/// 当网络不可达、DNS 超时、递归深度超限或返回非零 RCODE 错误码时返回错误。
 pub async fn query_dns_server(
     server_addr: &str,
     domain: &str,
@@ -332,77 +444,43 @@ async fn query_dns_server_recursive(
     let clean_domain = domain.trim_end_matches('.').to_lowercase();
     let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
 
-    // 1. 检查全局内存缓存
+    // 1. 优先命中内存缓存
     if let Some(entry) = GLOBAL_DNS_CACHE.read().get(&cache_key)
         && entry.expires_at > Instant::now()
     {
         return Ok(entry.ips.clone());
     }
 
-    let target_server: SocketAddr = if let Ok(addr) = server_addr.parse() {
-        addr
-    } else if let Ok(ip) = server_addr.parse::<IpAddr>() {
-        SocketAddr::new(ip, 53)
-    } else {
-        bail!("无法解析 DNS 服务器地址 [{}]", server_addr);
-    };
-
-    // 绑定随机本地 UDP 端口
-    let bind_addr = if target_server.is_ipv6() {
-        "[::]:0"
-    } else {
-        "0.0.0.0:0"
-    };
-
+    let target_server = resolve_dns_server_addr(server_addr)?;
     let mut last_err = None;
+
     for attempt in 1..=2 {
-        let query_id = crate::util::crypto::random_u16();
+        let query_id = random_u16();
         let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
 
-        let socket = match UdpSocket::bind(bind_addr).await {
-            Ok(s) => s,
-            Err(e) => bail!("绑定本地 UDP 失败: {}", e),
-        };
-
-        if let Err(e) = socket.send_to(&packet, target_server).await {
-            last_err = Some(anyhow!(
-                "向 DNS 服务器 {} 发送查询失败: {}",
-                target_server,
-                e
-            ));
-            continue;
-        }
-
-        let mut buf = [0u8; 512];
-        let recv_fut = socket.recv_from(&mut buf);
-
-        let (len, src_addr) = match tokio::time::timeout(timeout_duration, recv_fut).await {
-            Ok(Ok((l, addr))) => (l, addr),
-            Ok(Err(e)) => {
-                last_err = Some(anyhow!("接收 DNS 响应失败: {}", e));
-                continue;
-            }
-            Err(_) => {
-                last_err = Some(anyhow!("DNS 查询超时 (第 {} 次尝试)", attempt));
-                continue;
-            }
-        };
+        let (resp_bytes, src_addr) =
+            match perform_udp_attempt(target_server, &packet, timeout_duration).await {
+                Ok(res) => res,
+                Err(e) => {
+                    last_err = Some(anyhow!("第 {} 次查询失败: {}", attempt, e));
+                    continue;
+                }
+            };
 
         if src_addr != target_server {
             last_err = Some(anyhow!(
-                "DNS 响应来源地址不匹配: 期望 {}, 实际 {}",
+                "DNS 响应来源不匹配: 期望 {}, 实际 {}",
                 target_server,
                 src_addr
             ));
             continue;
         }
 
-        match parse_dns_response_packet(&buf[..len], query_id, qtype) {
+        match parse_dns_response_packet(&resp_bytes, query_id, qtype) {
             Ok((mut ips, mut ttl_secs, mut cname_target, is_truncated)) => {
-                // 若 UDP 响应被截断 (TC=1)，自动回退至 TCP 53 端口获取完整数据
                 if is_truncated {
                     info!(
-                        "DNS 查询 [{}] 响应被截断 (TC=1)，正在自动回退至 TCP 53 端口获取完整数据...",
+                        "DNS 查询 [{}] 响应被截断 (TC=1)，正在回退至 TCP 53 获取完整数据...",
                         clean_domain
                     );
                     if let Ok((tcp_ips, tcp_ttl, tcp_cname)) = query_dns_server_tcp(
@@ -420,59 +498,28 @@ async fn query_dns_server_recursive(
                     }
                 }
 
-                // 如果直接解析到了目标 IP 地址
                 if !ips.is_empty() {
-                    let expires_at = Instant::now() + Duration::from_secs(ttl_secs as u64);
-                    let mut cache = GLOBAL_DNS_CACHE.write();
-                    if cache.len() >= 512 {
-                        let now = Instant::now();
-                        cache.retain(|_, entry| entry.expires_at > now);
-                    }
-                    cache.insert(
-                        cache_key,
-                        DnsCacheEntry {
-                            ips: ips.clone(),
-                            expires_at,
-                        },
-                    );
+                    cache_dns_result(cache_key, &ips, ttl_secs);
                     return Ok(ips);
                 }
 
-                // 如果未直接返回 IP 但携带了 CNAME 别名记录，递归查询别名目标
                 if let Some(cname) = cname_target {
                     debug!(
-                        "DNS 查询 [{}] 收到 CNAME 别名 [{}]，正在发起追溯查询...",
+                        "DNS 查询 [{}] 收到 CNAME 别名 [{}]，追溯查询中...",
                         clean_domain, cname
                     );
-                    match Box::pin(query_dns_server_recursive(
+                    let resolved = Box::pin(query_dns_server_recursive(
                         server_addr,
                         &cname,
                         qtype,
                         timeout_duration,
                         depth + 1,
                     ))
-                    .await
-                    {
-                        Ok(resolved_ips) => {
-                            if !resolved_ips.is_empty() {
-                                let expires_at =
-                                    Instant::now() + Duration::from_secs(ttl_secs as u64);
-                                let mut cache = GLOBAL_DNS_CACHE.write();
-                                cache.insert(
-                                    cache_key,
-                                    DnsCacheEntry {
-                                        ips: resolved_ips.clone(),
-                                        expires_at,
-                                    },
-                                );
-                            }
-                            return Ok(resolved_ips);
-                        }
-                        Err(e) => {
-                            last_err = Some(anyhow!("递归追溯 CNAME [{}] 失败: {}", cname, e));
-                            continue;
-                        }
+                    .await?;
+                    if !resolved.is_empty() {
+                        cache_dns_result(cache_key, &resolved, ttl_secs);
                     }
+                    return Ok(resolved);
                 }
 
                 return Ok(Vec::new());

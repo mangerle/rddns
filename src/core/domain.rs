@@ -1,8 +1,15 @@
+use idna::domain_to_ascii;
 use psl::Psl;
 use std::collections::HashMap;
+use std::str::from_utf8;
 use url::form_urlencoded;
 
 /// 解析后的单个域名实体
+///
+/// # 设计原理
+/// - **实现初衷**: 标准化用户在配置文件或 Web UI 中填写的各类异构域名格式（标准 FQDN、URL 复制粘贴、中文 Punycode、显式指定 `sub:root` 以及带查询参数的扩展语法），为 DNS 提供商驱动提供确定的主从域名结构。
+/// - **核心优势**: 基于官方 Public Suffix List (PSL) 准确识别多级公共后缀（如 `.com.cn`, `.co.uk`），避免因简单切分导致根域名误判；同时兼容各种人性化输入容错。
+/// - **代价与局限**: 依赖内置 PSL 静态规则库，新增或极其小众的特殊国别后缀需定期随 crate 升级维护。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDomain {
     /// 原始用户输入字符串
@@ -47,41 +54,30 @@ impl ParsedDomain {
 fn to_ascii_domain(raw: &str) -> String {
     let lower = raw.trim().to_ascii_lowercase();
     if !lower.is_ascii() {
-        idna::domain_to_ascii(&lower).unwrap_or(lower)
+        domain_to_ascii(&lower).unwrap_or(lower)
     } else {
         lower
     }
 }
 
-/// 解析用户配置的单个域名字符串
-/// 支持格式:
-/// - "example.com" -> sub: "@", root: "example.com"
-/// - "www.example.com" -> sub: "www", root: "example.com"
-/// - "*.example.com" -> sub: "*", root: "example.com"
-/// - "sub:example.com" -> sub: "sub", root: "example.com"
-/// - "https://www.example.com/" -> 自动清洗为 sub: "www", root: "example.com"
-/// - "sub:example.com?line=telecom" -> 带自定义参数
-pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
+/// 清洗输入的 URL 文本并提取查询参数
+fn clean_url_and_extract_params(raw_input: &str) -> Option<(&str, HashMap<String, String>)> {
     let trimmed = raw_input.trim();
-    // 忽略空行以及以 # 或 // 开头的注释行
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
         return None;
     }
 
-    // 1. 去除协议头 (如 http://, https://, 大小写不敏感)
     let no_protocol = if let Some(idx) = trimmed.find("://") {
         &trimmed[idx + 3..]
     } else {
         trimmed
     };
 
-    // 2. 提取 query 参数 (以 ? 分割)
     let (domain_and_path, query_part) = match no_protocol.split_once('?') {
         Some((d, q)) => (d.trim(), Some(q.trim())),
         None => (no_protocol.trim(), None),
     };
 
-    // 3. 去除末尾斜杠及 URL 路径 (例如 example.com/path -> example.com)
     let domain_raw = domain_and_path.split('/').next().unwrap_or("").trim();
     if domain_raw.is_empty() {
         return None;
@@ -94,19 +90,63 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         }
     }
 
-    // 4. 检查冒号自定义子域名格式: "sub:domain.com"
-    // 注意：若冒号右侧为纯数字端口（如 "example.com:8080"），应视为端口号剥离，而非 sub:root 冒号语法
-    let (domain_cleaned, explicit_sub_root) =
-        if let Some((left, right)) = domain_raw.split_once(':') {
-            if right.parse::<u16>().is_ok() {
-                // 右侧为端口号，剥离端口后保留左侧作为真实域名
-                (left.trim(), None)
-            } else {
-                (domain_raw, Some((left, right)))
-            }
+    Some((domain_raw, custom_params))
+}
+
+/// 解析显式冒号语法 "sub:root.com"
+fn parse_explicit_sub_root(domain_raw: &str) -> (Option<&str>, Option<(&str, &str)>) {
+    if let Some((left, right)) = domain_raw.split_once(':') {
+        if right.parse::<u16>().is_ok() {
+            // 右侧为端口号，剥离端口后保留左侧作为真实域名
+            (Some(left.trim()), None)
         } else {
-            (domain_raw, None)
-        };
+            (None, Some((left, right)))
+        }
+    } else {
+        (Some(domain_raw), None)
+    }
+}
+
+/// 使用标准 Public Suffix List (PSL) 拆分根域名与子域名
+fn split_sub_and_root_by_psl(domain_ascii: &str) -> (String, String) {
+    if let Some(domain) = psl::List.domain(domain_ascii.as_bytes()) {
+        let root_str = from_utf8(domain.as_bytes()).unwrap_or(domain_ascii);
+        if root_str == domain_ascii {
+            ("@".to_string(), root_str.to_string())
+        } else if let Some(prefix) = domain_ascii.strip_suffix(root_str) {
+            let sub = prefix.trim_end_matches('.');
+            (
+                if sub.is_empty() {
+                    "@".to_string()
+                } else {
+                    sub.to_string()
+                },
+                root_str.to_string(),
+            )
+        } else {
+            ("@".to_string(), root_str.to_string())
+        }
+    } else {
+        let parts: Vec<&str> = domain_ascii.split('.').collect();
+        let sub = parts[..parts.len() - 2].join(".");
+        let root = parts[parts.len() - 2..].join(".");
+        (if sub.is_empty() { "@".to_string() } else { sub }, root)
+    }
+}
+
+/// 解析用户配置的单个域名字符串
+///
+/// # 设计原理
+/// - **支持格式**:
+///   - `example.com` -> sub: `@`, root: `example.com`
+///   - `www.example.com` -> sub: `www`, root: `example.com`
+///   - `*.example.com` -> sub: `*`, root: `example.com`
+///   - `sub:example.com` -> sub: `sub`, root: `example.com`
+///   - `https://www.example.com:8080/path` -> 自动剥离协议与端口
+///   - `sub:example.com?line=telecom` -> 提取扩展参数
+pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
+    let (domain_raw, custom_params) = clean_url_and_extract_params(raw_input)?;
+    let (cleaned_domain_opt, explicit_sub_root) = parse_explicit_sub_root(domain_raw);
 
     if let Some((sub, root)) = explicit_sub_root {
         let root_ascii = to_ascii_domain(root);
@@ -129,40 +169,12 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         });
     }
 
-    // 5. 若包含非 ASCII 字符（如中文域名），使用 IDNA Punycode 转码为 xn--... 形式
-    let domain_ascii = to_ascii_domain(domain_cleaned);
-
-    let parts: Vec<&str> = domain_ascii.split('.').collect();
-    if parts.len() < 2 {
-        // 单个单词无法作为有效公网域名
+    let domain_ascii = to_ascii_domain(cleaned_domain_opt.unwrap_or(domain_raw));
+    if domain_ascii.split('.').count() < 2 {
         return None;
     }
 
-    // 6. 使用标准 Public Suffix List (PSL) 精准提取根域名与子域名
-    let (sub_domain, root_domain) = if let Some(domain) = psl::List.domain(domain_ascii.as_bytes())
-    {
-        let root_str = std::str::from_utf8(domain.as_bytes()).unwrap_or(&domain_ascii);
-        if root_str == domain_ascii {
-            ("@".to_string(), root_str.to_string())
-        } else if let Some(prefix) = domain_ascii.strip_suffix(root_str) {
-            let sub = prefix.trim_end_matches('.');
-            (
-                if sub.is_empty() {
-                    "@".to_string()
-                } else {
-                    sub.to_string()
-                },
-                root_str.to_string(),
-            )
-        } else {
-            ("@".to_string(), root_str.to_string())
-        }
-    } else {
-        // 兜底：按倒数第二级与第一级作为根域名
-        let sub = parts[..parts.len() - 2].join(".");
-        let root = parts[parts.len() - 2..].join(".");
-        (if sub.is_empty() { "@".to_string() } else { sub }, root)
-    };
+    let (sub_domain, root_domain) = split_sub_and_root_by_psl(&domain_ascii);
 
     Some(ParsedDomain {
         raw: raw_input.to_string(),

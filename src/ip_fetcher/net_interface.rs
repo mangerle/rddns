@@ -5,9 +5,12 @@ use crate::util::net::{
 use async_trait::async_trait;
 use log::warn;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
+use tokio::task::spawn_blocking;
 
 /// Linux 内核 IPv6 地址标志位常量 (定义于 include/uapi/linux/if_addr.h，使用 32 位掩码避免高位溢出)
 pub const IFA_F_TEMPORARY: u32 = 0x01; // RFC 4941 临时隐私地址
@@ -133,6 +136,12 @@ pub struct NetInterfaceIpFetcher {
 }
 
 impl NetInterfaceIpFetcher {
+    /// 创建网卡 IP 提取器
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 适用于具有公网 IPv4 或原生运营商公网 IPv6 直接分配到主机的环境（如光猫桥接软路由、VPS、原生双栈服务器），无需向外部服务发起 HTTP/STUN 探测。
+    /// - **核心优势**: 零网络请求开销、探测纳秒级响应，并在 Linux 平台深度对接 `/proc/net/if_inet6` 解析内核地址标志，优先提取稳定非废弃的全球单播 IPv6。
+    /// - **代价与局限**: 若主机处于多层 NAT 内网且未分配公网 IP，本提取器只能获取到内网局域网私网 IP，无法探测公网反射 IP。
     pub fn new(interface_name: String, regex: Option<String>) -> Self {
         Self {
             interface_name,
@@ -143,7 +152,7 @@ impl NetInterfaceIpFetcher {
     /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池)
     async fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
         let name = self.interface_name.clone();
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking(move || {
             let interfaces = NetworkInterface::show()
                 .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
 
@@ -154,6 +163,73 @@ impl NetInterfaceIpFetcher {
         })
         .await
         .map_err(|e| FetchError::Other(format!("异步执行网卡查询任务失败: {}", e)))?
+    }
+
+    /// 从 Linux `/proc/net/if_inet6` 读取指定网卡的 IPv6 候选集并按稳定性排序
+    async fn collect_linux_ipv6_candidates(if_name: &str) -> Option<Vec<Ipv6Addr>> {
+        let target_name = if_name.to_string();
+        let entries = spawn_blocking(move || read_linux_if_inet6(Some(&target_name)))
+            .await
+            .unwrap_or(None)?;
+
+        let mut stable = Vec::new();
+        let mut temp = Vec::new();
+        for entry in entries {
+            if entry.is_stable_global() {
+                stable.push(entry.ip);
+            } else if entry.is_global_scope()
+                && !entry.is_deprecated()
+                && !entry.is_tentative_or_failed()
+                && is_global_unicast_ipv6(&entry.ip)
+            {
+                temp.push(entry.ip);
+            }
+        }
+
+        let mut candidates = Vec::new();
+        if let Some(best) = select_best_ipv6(&stable) {
+            candidates.push(best);
+            for ip in stable {
+                if ip != best {
+                    candidates.push(ip);
+                }
+            }
+        } else {
+            candidates.extend(stable);
+        }
+
+        for ip in temp {
+            if !candidates.contains(&ip) {
+                candidates.push(ip);
+            }
+        }
+        Some(candidates)
+    }
+
+    /// 跨平台从网卡绑定地址列表中提取并优选全球单播 IPv6 候选集
+    fn collect_fallback_ipv6_candidates(target_if: &NetworkInterface) -> Vec<Ipv6Addr> {
+        let mut raw_addrs = Vec::new();
+        for addr in &target_if.addr {
+            if let Addr::V6(v6_addr) = addr {
+                let ip = v6_addr.ip;
+                if is_global_unicast_ipv6(&ip) {
+                    raw_addrs.push(ip);
+                }
+            }
+        }
+
+        if let Some(best) = select_best_ipv6(&raw_addrs) {
+            let mut candidates = Vec::with_capacity(raw_addrs.len());
+            candidates.push(best);
+            for ip in raw_addrs {
+                if ip != best {
+                    candidates.push(ip);
+                }
+            }
+            candidates
+        } else {
+            raw_addrs
+        }
     }
 }
 
@@ -190,73 +266,14 @@ impl IpFetcher for NetInterfaceIpFetcher {
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
         let target_if = self.get_target_interface().await?;
 
-        let mut candidates = Vec::new();
-
-        // 1. Linux 环境：优先尝试从 /proc/net/if_inet6 精准读取并构建有序候选集 (委托给阻塞线程池)
-        let if_name = target_if.name.clone();
-        let linux_entries =
-            tokio::task::spawn_blocking(move || read_linux_if_inet6(Some(&if_name)))
-                .await
-                .unwrap_or(None);
-
-        if let Some(entries) = linux_entries {
-            let mut stable = Vec::new();
-            let mut temp = Vec::new();
-
-            for entry in entries {
-                if entry.is_stable_global() {
-                    stable.push(entry.ip);
-                } else if entry.is_global_scope()
-                    && !entry.is_deprecated()
-                    && !entry.is_tentative_or_failed()
-                    && is_global_unicast_ipv6(&entry.ip)
-                {
-                    // 仅将健康的临时隐私地址加入备选，明确排除已废弃和 DAD 冲突中的地址
-                    temp.push(entry.ip);
-                }
-            }
-
-            // 稳定集合内部再做一次启发式优选置顶 (优先 EUI-64 与静态分配短后缀)
-            if let Some(best) = select_best_ipv6(&stable) {
-                candidates.push(best);
-                for ip in stable {
-                    if ip != best {
-                        candidates.push(ip);
-                    }
-                }
-            } else {
-                candidates.extend(stable);
-            }
-
-            // 追加健康的临时全球单播备选
-            for ip in temp {
-                if !candidates.contains(&ip) {
-                    candidates.push(ip);
-                }
-            }
-        }
+        // 1. Linux 环境：优先尝试从 /proc/net/if_inet6 精准读取并构建有序候选集
+        let mut candidates = Self::collect_linux_ipv6_candidates(&target_if.name)
+            .await
+            .unwrap_or_default();
 
         // 2. 跨平台通用兜底（非 Linux 环境，或 Linux 下 procfs 解析为空/网卡别名无法匹配时）
         if candidates.is_empty() {
-            let mut raw_addrs = Vec::new();
-            for addr in target_if.addr {
-                if let Addr::V6(v6_addr) = addr {
-                    let ip = v6_addr.ip;
-                    if is_global_unicast_ipv6(&ip) {
-                        raw_addrs.push(ip);
-                    }
-                }
-            }
-            if let Some(best) = select_best_ipv6(&raw_addrs) {
-                candidates.push(best);
-                for ip in raw_addrs {
-                    if ip != best {
-                        candidates.push(ip);
-                    }
-                }
-            } else {
-                candidates = raw_addrs;
-            }
+            candidates = Self::collect_fallback_ipv6_candidates(&target_if);
         }
 
         if let Some(ref r) = self.regex {
@@ -272,7 +289,12 @@ impl IpFetcher for NetInterfaceIpFetcher {
 }
 
 /// 依据序号 (@n) 或正则表达式从候选 IP 列表中筛选目标 IP
-pub fn select_ip_by_ordinal_or_regex<T: Clone + std::fmt::Display>(
+///
+/// # 参数
+/// - `candidates`: 候选 IP 列表
+/// - `rule`: 规则字符串，支持 `@1` / `@2` 序号索引语法，或标准正则表达式
+/// - `custom_extractor`: 自定义提取回调函数
+pub fn select_ip_by_ordinal_or_regex<T: Clone + Display>(
     candidates: &[T],
     rule: Option<&str>,
     custom_extractor: impl Fn(&str, &str) -> Option<T>,
@@ -315,7 +337,7 @@ pub fn select_ip_by_ordinal_or_regex<T: Clone + std::fmt::Display>(
 }
 
 /// 网卡信息结构体
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceInfo {
     pub name: String,
     pub display_name: String,
@@ -323,89 +345,107 @@ pub struct InterfaceInfo {
     pub ipv6s: Vec<String>,
 }
 
-/// 枚举当前系统上所有可用的物理与虚拟网卡
-pub fn list_system_interfaces() -> Vec<InterfaceInfo> {
-    let mut result = Vec::new();
-    let linux_entries = read_linux_if_inet6(None);
+/// 根据网卡及 Linux procfs 条目对 IPv6 进行排序与去重
+fn sort_linux_interface_ipv6s(
+    if_name: &str,
+    ipv6s: Vec<String>,
+    all_entries: &[LinuxIfInet6Entry],
+) -> Vec<String> {
+    let if_entries: Vec<&LinuxIfInet6Entry> = all_entries
+        .iter()
+        .filter(|e| e.if_name.eq_ignore_ascii_case(if_name))
+        .collect();
 
-    if let Ok(interfaces) = NetworkInterface::show() {
-        for iface in interfaces {
-            let mut ipv4s = Vec::new();
-            let mut ipv6s = Vec::new();
-            for addr in &iface.addr {
-                match addr {
-                    Addr::V4(v4) => {
-                        let ip = v4.ip;
-                        if !ip.is_loopback() {
-                            ipv4s.push(ip.to_string());
-                        }
-                    }
-                    Addr::V6(v6) => {
-                        let ip = v6.ip;
-                        if is_global_unicast_ipv6(&ip) {
-                            ipv6s.push(ip.to_string());
-                        }
-                    }
+    if if_entries.is_empty() {
+        return ipv6s;
+    }
+
+    let mut sorted_v6 = Vec::new();
+    let mut push_unique = |ip_str: String| {
+        if !sorted_v6.contains(&ip_str) {
+            sorted_v6.push(ip_str);
+        }
+    };
+
+    // 1. 优先加入稳定全球单播地址
+    for e in if_entries.iter().filter(|e| e.is_stable_global()) {
+        push_unique(e.ip.to_string());
+    }
+    // 2. 其次加入健康的临时全球单播地址 (排除废弃与 DAD 冲突)
+    for e in if_entries.iter().filter(|e| {
+        e.is_global_scope()
+            && !e.is_stable_global()
+            && !e.is_deprecated()
+            && !e.is_tentative_or_failed()
+    }) {
+        push_unique(e.ip.to_string());
+    }
+    // 3. 补充其它非全局单播
+    for v6_str in ipv6s {
+        push_unique(v6_str);
+    }
+    sorted_v6
+}
+
+/// 构建单个网卡的信息展示对象
+fn build_interface_info(
+    iface: NetworkInterface,
+    linux_entries: Option<&[LinuxIfInet6Entry]>,
+) -> InterfaceInfo {
+    let mut ipv4s = Vec::new();
+    let mut ipv6s = Vec::new();
+    for addr in &iface.addr {
+        match addr {
+            Addr::V4(v4) => {
+                let ip = v4.ip;
+                if !ip.is_loopback() {
+                    ipv4s.push(ip.to_string());
                 }
             }
-
-            // 如果在 Linux 下读取到了 if_inet6 信息，对 ipv6s 按照稳定性重排（稳定地址排在最前面）
-            if let Some(ref all_entries) = linux_entries {
-                let if_entries: Vec<&LinuxIfInet6Entry> = all_entries
-                    .iter()
-                    .filter(|e| e.if_name.eq_ignore_ascii_case(&iface.name))
-                    .collect();
-
-                if !if_entries.is_empty() {
-                    let mut sorted_v6 = Vec::new();
-                    let mut push_unique = |ip_str: String| {
-                        if !sorted_v6.contains(&ip_str) {
-                            sorted_v6.push(ip_str);
-                        }
-                    };
-
-                    // 1. 优先加入稳定全球单播地址
-                    for e in if_entries.iter().filter(|e| e.is_stable_global()) {
-                        push_unique(e.ip.to_string());
-                    }
-                    // 2. 其次加入健康的临时全球单播地址 (排除废弃与 DAD 冲突)
-                    for e in if_entries.iter().filter(|e| {
-                        e.is_global_scope()
-                            && !e.is_stable_global()
-                            && !e.is_deprecated()
-                            && !e.is_tentative_or_failed()
-                    }) {
-                        push_unique(e.ip.to_string());
-                    }
-                    // 3. 补充其它非全局单播
-                    for v6_str in ipv6s {
-                        push_unique(v6_str);
-                    }
-                    ipv6s = sorted_v6;
+            Addr::V6(v6) => {
+                let ip = v6.ip;
+                if is_global_unicast_ipv6(&ip) {
+                    ipv6s.push(ip.to_string());
                 }
             }
-
-            let mut desc_parts = Vec::new();
-            if !ipv4s.is_empty() {
-                desc_parts.push(format!("IPv4: {}", ipv4s.join(", ")));
-            }
-            if !ipv6s.is_empty() {
-                desc_parts.push(format!("IPv6: {}", ipv6s.join(", ")));
-            }
-            let display_name = if desc_parts.is_empty() {
-                iface.name.clone()
-            } else {
-                format!("{} ({})", iface.name, desc_parts.join(" | "))
-            };
-            result.push(InterfaceInfo {
-                name: iface.name,
-                display_name,
-                ipv4s,
-                ipv6s,
-            });
         }
     }
-    result
+
+    if let Some(all_entries) = linux_entries {
+        ipv6s = sort_linux_interface_ipv6s(&iface.name, ipv6s, all_entries);
+    }
+
+    let mut desc_parts = Vec::new();
+    if !ipv4s.is_empty() {
+        desc_parts.push(format!("IPv4: {}", ipv4s.join(", ")));
+    }
+    if !ipv6s.is_empty() {
+        desc_parts.push(format!("IPv6: {}", ipv6s.join(", ")));
+    }
+    let display_name = if desc_parts.is_empty() {
+        iface.name.clone()
+    } else {
+        format!("{} ({})", iface.name, desc_parts.join(" | "))
+    };
+
+    InterfaceInfo {
+        name: iface.name,
+        display_name,
+        ipv4s,
+        ipv6s,
+    }
+}
+
+/// 枚举当前系统上所有可用的物理与虚拟网卡
+pub fn list_system_interfaces() -> Vec<InterfaceInfo> {
+    let linux_entries = read_linux_if_inet6(None);
+    match NetworkInterface::show() {
+        Ok(interfaces) => interfaces
+            .into_iter()
+            .map(|iface| build_interface_info(iface, linux_entries.as_deref()))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 #[cfg(test)]

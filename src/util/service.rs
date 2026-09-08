@@ -2,15 +2,26 @@ use anyhow::{Context, Result, bail};
 use std::env;
 use std::path::Path;
 use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::fs;
+
+use crate::util::daemon::configure_daemon_command;
 
 const SERVICE_NAME: &str = "rddns";
 #[cfg(unix)]
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
 
 /// 处理系统服务管理命令 (install | uninstall | start | stop | restart | status)
+///
+/// # 设计原理
+/// - **实现初衷**：为用户提供统一的跨平台 CLI 接口（`rddns service <action>`），一键注册为系统级常驻服务，无需手写复杂的服务脚本。
+/// - **核心优势**：自动解析二进制与配置文件的绝对路径、Windows 下智能优先使用 schtasks 计划任务并降级注册表 Run 键、Linux 下生成标准 systemd unit、macOS 下生成 launchd plist。
+///
+/// # Errors
+/// 当路径解析失败、无管理员权限导致注册失败或传入不支持的操作动作时返回错误。
 pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
     let current_exe = env::current_exe().context("获取当前程序可执行路径失败")?;
     let abs_exe = current_exe.canonicalize().unwrap_or(current_exe.clone());
@@ -51,166 +62,175 @@ pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
+fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -> Result<()> {
+    println!("正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
+    let sch_out = Command::new("schtasks.exe")
+        .args([
+            "/create",
+            "/tn",
+            SERVICE_NAME,
+            "/tr",
+            run_cmd,
+            "/sc",
+            "onlogon",
+            "/rl",
+            "highest",
+            "/f",
+        ])
+        .output();
+
+    let sch_success = match sch_out {
+        Ok(ref out) => out.status.success(),
+        Err(_) => false,
+    };
+
+    if sch_success {
+        let _ = Command::new("reg.exe")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                SERVICE_NAME,
+                "/f",
+            ])
+            .output();
+    } else {
+        let _ = Command::new("reg.exe")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                SERVICE_NAME,
+                "/t",
+                "REG_SZ",
+                "/d",
+                run_cmd,
+                "/f",
+            ])
+            .output();
+        println!("提示: 计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
+    }
+
+    println!("正在启动后台守护进程...");
+    let mut spawn_cmd = Command::new(exe_path);
+    spawn_cmd.args(["-c", &config_path.to_string_lossy(), "-d"]);
+    configure_daemon_command(&mut spawn_cmd);
+    let _ = spawn_cmd.spawn();
+
+    println!("==========================================");
+    println!("RDDNS 已成功安装并设置为 Windows 开机自启！");
+    println!("服务名称: {}", SERVICE_NAME);
+    println!("运行程序: {}", exe_path.display());
+    println!("配置文件: {}", config_path.display());
+    println!("Web 控制台: http://localhost:9876");
+    println!("==========================================");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn uninstall_windows_service() -> Result<()> {
+    println!("正在停止并卸载 Windows 自启服务 [{}]...", SERVICE_NAME);
+    let _ = Command::new("schtasks.exe")
+        .args(["/delete", "/tn", SERVICE_NAME, "/f"])
+        .output();
+    let _ = Command::new("reg.exe")
+        .args([
+            "delete",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            SERVICE_NAME,
+            "/f",
+        ])
+        .output();
+    let _ = Command::new("taskkill.exe")
+        .args(["/f", "/im", "rddns.exe"])
+        .output();
+    println!("[{}] Windows 自启服务与运行实例已成功清除！", SERVICE_NAME);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn start_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
+    println!("正在启动 [{}] 后台守护进程...", SERVICE_NAME);
+    let mut spawn_cmd = Command::new(exe_path);
+    spawn_cmd.args(["-c", cfg_str, "-d"]);
+    configure_daemon_command(&mut spawn_cmd);
+    spawn_cmd.spawn().context("启动后台守护进程失败")?;
+    println!("[{}] 后台进程已成功启动！", SERVICE_NAME);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn stop_windows_service() -> Result<()> {
+    println!("正在停止 [{}] 后台守护进程...", SERVICE_NAME);
+    let out = Command::new("taskkill.exe")
+        .args(["/f", "/im", "rddns.exe"])
+        .output()
+        .context("执行 taskkill 停止进程失败")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    println!("{}", stdout.trim());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restart_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
+    let _ = Command::new("taskkill.exe")
+        .args(["/f", "/im", "rddns.exe"])
+        .output();
+    sleep(Duration::from_millis(800));
+    let mut spawn_cmd = Command::new(exe_path);
+    spawn_cmd.args(["-c", cfg_str, "-d"]);
+    configure_daemon_command(&mut spawn_cmd);
+    spawn_cmd.spawn().context("重启后台守护进程失败")?;
+    println!("[{}] 后台守护进程已完成重启！", SERVICE_NAME);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn status_windows_service() -> Result<()> {
+    println!("正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
+    let out = Command::new("tasklist.exe")
+        .args(["/fi", "IMAGENAME eq rddns.exe"])
+        .output()
+        .context("查询进程列表失败")?;
+    println!("{}", String::from_utf8_lossy(&out.stdout));
+
+    let reg_out = Command::new("reg.exe")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            SERVICE_NAME,
+        ])
+        .output();
+    if let Ok(r) = reg_out {
+        if r.status.success() {
+            println!("开机自启注册表: 已启用");
+        } else {
+            println!("开机自启注册表: 未启用");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
     let exe_str = exe_path.to_string_lossy();
     let cfg_str = config_path.to_string_lossy();
     let run_cmd = format!("\"{}\" -c \"{}\" -d", exe_str, cfg_str);
 
     match action {
-        "install" => {
-            println!("正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
-
-            // 优先尝试创建 Windows 高权限计划任务 (登录自启与防休眠恢复)
-            let sch_out = Command::new("schtasks.exe")
-                .args([
-                    "/create",
-                    "/tn",
-                    SERVICE_NAME,
-                    "/tr",
-                    &run_cmd,
-                    "/sc",
-                    "onlogon",
-                    "/rl",
-                    "highest",
-                    "/f",
-                ])
-                .output();
-
-            let sch_success = match sch_out {
-                Ok(ref out) => out.status.success(),
-                Err(_) => false,
-            };
-
-            if sch_success {
-                // 计划任务注册成功，清理注册表 Run 项以杜绝双实例启动冲突
-                let _ = Command::new("reg.exe")
-                    .args([
-                        "delete",
-                        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                        "/v",
-                        SERVICE_NAME,
-                        "/f",
-                    ])
-                    .output();
-            } else {
-                // 降级为当前用户开机自启注册表项 (Run)
-                let _ = Command::new("reg.exe")
-                    .args([
-                        "add",
-                        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                        "/v",
-                        SERVICE_NAME,
-                        "/t",
-                        "REG_SZ",
-                        "/d",
-                        &run_cmd,
-                        "/f",
-                    ])
-                    .output();
-                println!("提示: 计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
-            }
-
-            // 3. 立即拉起后台守护进程
-            println!("正在启动后台守护进程...");
-            let mut spawn_cmd = Command::new(exe_path);
-            spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
-            let _ = spawn_cmd.spawn();
-
-            println!("==========================================");
-            println!("RDDNS 已成功安装并设置为 Windows 开机自启！");
-            println!("服务名称: {}", SERVICE_NAME);
-            println!("运行程序: {}", exe_path.display());
-            println!("配置文件: {}", config_path.display());
-            println!("Web 控制台: http://localhost:9876");
-            println!("==========================================");
-        }
-        "uninstall" => {
-            println!("正在停止并卸载 Windows 自启服务 [{}]...", SERVICE_NAME);
-
-            // 1. 清理计划任务
-            let _ = Command::new("schtasks.exe")
-                .args(["/delete", "/tn", SERVICE_NAME, "/f"])
-                .output();
-
-            // 2. 清理注册表 Run 项
-            let _ = Command::new("reg.exe")
-                .args([
-                    "delete",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                    "/v",
-                    SERVICE_NAME,
-                    "/f",
-                ])
-                .output();
-
-            // 3. 停止后台正在运行的进程
-            let _ = Command::new("taskkill.exe")
-                .args(["/f", "/im", "rddns.exe"])
-                .output();
-
-            println!("[{}] Windows 自启服务与运行实例已成功清除！", SERVICE_NAME);
-        }
-        "start" => {
-            println!("正在启动 [{}] 后台守护进程...", SERVICE_NAME);
-            let mut spawn_cmd = Command::new(exe_path);
-            spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
-            spawn_cmd.spawn().context("启动后台守护进程失败")?;
-            println!("[{}] 后台进程已成功启动！", SERVICE_NAME);
-        }
-        "stop" => {
-            println!("正在停止 [{}] 后台守护进程...", SERVICE_NAME);
-            let out = Command::new("taskkill.exe")
-                .args(["/f", "/im", "rddns.exe"])
-                .output()
-                .context("执行 taskkill 停止进程失败")?;
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            println!("{}", stdout.trim());
-        }
-        "restart" => {
-            let _ = Command::new("taskkill.exe")
-                .args(["/f", "/im", "rddns.exe"])
-                .output();
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            let mut spawn_cmd = Command::new(exe_path);
-            spawn_cmd.args(["-c", &cfg_str, "-d"]);
-            crate::util::daemon::configure_daemon_command(&mut spawn_cmd);
-            spawn_cmd.spawn().context("重启后台守护进程失败")?;
-            println!("[{}] 后台守护进程已完成重启！", SERVICE_NAME);
-        }
-        "status" => {
-            println!("正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
-            let out = Command::new("tasklist.exe")
-                .args(["/fi", "IMAGENAME eq rddns.exe"])
-                .output()
-                .context("查询进程列表失败")?;
-            println!("{}", String::from_utf8_lossy(&out.stdout));
-
-            let reg_out = Command::new("reg.exe")
-                .args([
-                    "query",
-                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                    "/v",
-                    SERVICE_NAME,
-                ])
-                .output();
-            if let Ok(r) = reg_out {
-                if r.status.success() {
-                    println!("开机自启注册表: 已启用");
-                } else {
-                    println!("开机自启注册表: 未启用");
-                }
-            }
-        }
-        _ => {
-            bail!(
-                "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
-                action
-            );
-        }
+        "install" => install_windows_service(exe_path, config_path, &run_cmd),
+        "uninstall" => uninstall_windows_service(),
+        "start" => start_windows_service(exe_path, &cfg_str),
+        "stop" => stop_windows_service(),
+        "restart" => restart_windows_service(exe_path, &cfg_str),
+        "status" => status_windows_service(),
+        _ => bail!(
+            "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
+            action
+        ),
     }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]

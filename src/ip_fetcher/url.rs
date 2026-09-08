@@ -1,12 +1,14 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
+use crate::util::http::{create_http_client, create_task_http_client_builder_for_family};
 use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6};
 use async_trait::async_trait;
 use log::{debug, warn};
-use reqwest::Client;
+use reqwest::{Client, Response};
+use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
-/// 基于 HTTP(S) URL 接口提取公网 IP
+/// 基于 HTTP(S) URL 接口提取公网 IP 的探测器
 pub struct UrlIpFetcher {
     endpoints: Vec<String>,
     regex: Option<String>,
@@ -15,13 +17,14 @@ pub struct UrlIpFetcher {
 }
 
 impl UrlIpFetcher {
+    /// 针对指定地址族构建具备超时与 User-Agent 的 HTTP 客户端
     fn build_client(
         http_interface: Option<&str>,
         is_ipv6: bool,
         timeout: Duration,
         user_agent: &'static str,
     ) -> Client {
-        match crate::util::http::create_task_http_client_builder_for_family(http_interface, is_ipv6)
+        match create_task_http_client_builder_for_family(http_interface, is_ipv6)
             .timeout(timeout)
             .user_agent(user_agent)
             .build()
@@ -36,7 +39,7 @@ impl UrlIpFetcher {
                         e
                     );
                 }
-                crate::util::http::create_http_client(timeout).unwrap_or_else(|_| {
+                create_http_client(timeout).unwrap_or_else(|_| {
                     Client::builder()
                         .timeout(timeout)
                         .build()
@@ -46,6 +49,12 @@ impl UrlIpFetcher {
         }
     }
 
+    /// 创建基于 HTTP(S) URL 接口的公网 IP 探测器
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 适用于绝大多数普通家用或云端服务器环境，通过请求公共的 IP 反射 API（如 ipify, icanhazip, cip.cc 等）直接获取对外公网 IP。
+    /// - **核心优势**: 穿透能力最强，能穿越绝大多数 NAT、代理与安全网关；天然支持通过多端点列表进行多源主备容灾切换。
+    /// - **代价与局限**: 依赖第三方公共 HTTP 服务的可用性与稳定性；每次探测伴随完整的 TLS 握手与 HTTP 报文解析开销。
     pub fn new(
         endpoints: Vec<String>,
         regex: Option<String>,
@@ -65,7 +74,15 @@ impl UrlIpFetcher {
         }
     }
 
-    async fn read_limited_text(mut resp: reqwest::Response) -> Result<String, FetchError> {
+    /// 流式限制读取响应体文本内容，防止恶意超大响应耗尽内存
+    ///
+    /// # Errors
+    ///
+    /// - 响应状态码非成功返回 [`FetchError::Other`]
+    /// - 网络传输异常返回 [`FetchError::Http`]
+    /// - 响应体超过 64KB 返回 [`FetchError::Other`]
+    /// - 文本非 UTF-8 编码返回 [`FetchError::Other`]
+    async fn read_limited_text(mut resp: Response) -> Result<String, FetchError> {
         let status = resp.status();
         if !status.is_success() {
             return Err(FetchError::Other(format!(
@@ -93,7 +110,7 @@ impl UrlIpFetcher {
     }
 
     /// 通用 URL 遍历与 IP 提取循环
-    async fn fetch_ip_generic<T: std::fmt::Display>(
+    async fn fetch_ip_generic<T: Display>(
         &self,
         client: &Client,
         ip_name: &str,

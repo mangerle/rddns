@@ -57,7 +57,16 @@ pub use trait_def::*;
 use crate::config::model::ProviderConfig;
 use std::sync::Arc;
 
-/// 根据配置创建 DNS 驱动实例 (支持指定物理出站网卡)
+/// 根据服务商配置创建具体的 DNS 同步驱动实例 (支持指定物理出站网卡)
+///
+/// # 设计原理
+/// - **实现初衷**: 集中封装不同服务商的凭证初始化、客户端定制与出站网卡绑定逻辑，向上层任务调度返回统一的 `Arc<dyn DnsProvider>`。
+/// - **核心优势**: 编译期穷尽匹配所有 `ProviderConfig` 变体，防止遗漏驱动实例化；各驱动内部自洽验证凭据有效性。
+/// - **代价与局限**: 包含全部提供商的初始化依赖，单函数 match 分支较多。
+///
+/// # Errors
+///
+/// 当提供商的必要认证凭据缺失、格式无效或初始 HTTP 客户端构建失败时返回 [`DnsProviderError`]。
 pub fn create_dns_provider(
     config: &ProviderConfig,
     http_interface: Option<&str>,

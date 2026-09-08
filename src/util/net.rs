@@ -2,10 +2,11 @@ use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::LazyLock;
 
 /// 自定义正则编译缓存池，避免高频任务重复编译 DFA 状态机
-static CUSTOM_REGEX_CACHE: std::sync::LazyLock<RwLock<HashMap<String, Option<Regex>>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+static CUSTOM_REGEX_CACHE: LazyLock<RwLock<HashMap<String, Option<Regex>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
     {
@@ -31,21 +32,46 @@ fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
 }
 
 /// IPv4 正则提取器（严谨匹配四段点分十进制 IPv4 地址文本）
-static IPV4_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+///
+/// # 不变性保证
+/// 正则表达式为硬编码且通过单元测试验证的字面量，初始化编译必然成功。
+static IPV4_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
     )
-    .expect("编译 IPv4 正则表达式失败")
+    .expect("内置 IPv4 静态正则表达式语法正确，编译不应失败")
 });
 
+/// 辅助检查 IPv6 是否命中过渡隧道或保留前缀
+#[inline]
+fn is_reserved_or_tunnel_ipv6(segments: &[u16; 8]) -> bool {
+    // 排除文档与丢弃前缀 (2001:db8::/32, 100::/64)
+    if segments[0] == 0x2001 && segments[1] == 0xdb8 {
+        return true;
+    }
+    if segments[0] == 0x0100 {
+        return true;
+    }
+    // 排除过渡与隧道前缀 (6to4 2002::/16, Teredo 2001::/32, NAT64 64:ff9b::/96)
+    if segments[0] == 0x2002 {
+        return true;
+    }
+    if segments[0] == 0x2001 && segments[1] == 0 {
+        return true;
+    }
+    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+        return true;
+    }
+    false
+}
+
 /// 判断 IPv6 地址是否为全球可路由的单播地址 (Global Unicast Address)
-/// 严格过滤掉：
-/// - 未指定地址 (::)
-/// - 回环地址 (::1)
-/// - 链路本地地址 (Link-Local fe80::/10)
-/// - 唯一本地私网地址 (ULA fc00::/7, fd00::/7)
-/// - 多播地址 (ff00::/8)
-/// - 文档与保留地址 (2001:db8::/32 等)
+///
+/// # 设计原理
+/// - **实现初衷**：DDNS 解析必须绑定公网可达的全球单播地址，严防将 Link-Local、ULA、NAT64
+///   或未指定地址错误解析上报，避免造成域名解析不可达。
+/// - **核心优势**：通过 16 位分段按位掩码就地快速匹配，零堆内存分配，吞吐量极高。
+/// - **代价与局限**：静态匹配常见 RFC 标准保留前缀，无法感知运营商在局域网内自定义的非标准策略路由。
 pub fn is_global_unicast_ipv6(addr: &Ipv6Addr) -> bool {
     let segments = addr.segments();
 
@@ -80,22 +106,8 @@ pub fn is_global_unicast_ipv6(addr: &Ipv6Addr) -> bool {
         return false;
     }
 
-    // 排除文档与丢弃前缀 (2001:db8::/32, 100::/64)
-    if segments[0] == 0x2001 && segments[1] == 0xdb8 {
-        return false;
-    }
-    if segments[0] == 0x0100 {
-        return false;
-    }
-
-    // 排除过渡与隧道前缀 (6to4 2002::/16, Teredo 2001::/32, NAT64 64:ff9b::/96)
-    if segments[0] == 0x2002 {
-        return false;
-    }
-    if segments[0] == 0x2001 && segments[1] == 0 {
-        return false;
-    }
-    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+    // 排除文档、丢弃前缀及过渡/隧道前缀
+    if is_reserved_or_tunnel_ipv6(&segments) {
         return false;
     }
 
@@ -103,12 +115,23 @@ pub fn is_global_unicast_ipv6(addr: &Ipv6Addr) -> bool {
 }
 
 /// 判断 IPv4 是否为运营商级 NAT (CGNAT 100.64.0.0/10, RFC 6598)
+///
+/// # 设计原理
+/// - **实现初衷**：ISP 在宽带缺乏公网 IPv4 时广泛分配此类内部地址，DDNS 解析若绑定此类 IP
+///   会导致公网无法访问，需精准识别并告警或降级。
+/// - **核心优势**：位运算快速判断，性能极高。
+/// - **代价与局限**：仅判定 RFC 6598 规定的 `100.64.0.0/10` 网段。
 pub fn is_cgnat_ipv4(addr: &Ipv4Addr) -> bool {
     let octets = addr.octets();
     octets[0] == 100 && (octets[1] & 0xc0) == 64
 }
 
 /// 判断 IPv4 是否为公网地址 (非私有/回环/链路本地/CGNAT/多播/保留/文档)
+///
+/// # 设计原理
+/// - **实现初衷**：确保解析同步的 IPv4 是全球公网单播地址，避免把局域网或广播等无效 IP 提交给云解析。
+/// - **核心优势**：基于标准 RFC 规则快速位运算与区间判定，零分配。
+/// - **代价与局限**：不校验该 IP 是否当前实际具备端到端双向连通性。
 pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
     let octets = addr.octets();
     !(addr.is_private()
@@ -126,6 +149,10 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
 }
 
 /// 判断 IP 是否属于私有局域网、CGNAT 或本地回环 (包括 RFC1918 私网, 100.64.0.0/10, 127.0.0.1, ::1, fe80::, fd00::)
+///
+/// # 设计原理
+/// - **实现初衷**：统一抽象 IPv4 与 IPv6 的内网属性判断，主要用于 Web 控制台的安全来源校验与警告提示。
+/// - **核心优势**：统一枚举分发，复用各协议的高效位检测。
 pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => {
@@ -142,6 +169,11 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
 }
 
 /// 从字符串文本中提取第一个合法的 IPv4 地址
+///
+/// # 设计原理
+/// - **实现初衷**：外部 API 响应可能包含纯文本、HTML 网页或 JSON 数据，通过正则模糊匹配提取 IPv4。
+/// - **核心优势**：支持用户自定义正则表达式针对特殊接口定制提取，具备全局 DFA 状态机缓存。
+/// - **代价与局限**：多 IP 返回场景下默认仅返回首个有效地址。
 pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> {
     if let Some(pattern) = custom_regex
         && let Some(re) = get_or_compile_regex(pattern)
@@ -167,6 +199,10 @@ pub fn extract_ipv4(text: &str, custom_regex: Option<&str>) -> Option<Ipv4Addr> 
 
 /// 从字符串文本中提取合法的 IPv6 地址
 /// 若指定了 custom_regex 则使用自定义正则表达式筛选目标 IPv6 (不匹配则返回 None)
+///
+/// # 设计原理
+/// - **实现初衷**：兼容各种 API 格式（如包含中括号、引号或纯文本）的 IPv6 提取。
+/// - **核心优势**：双模提取机制，分词提取时过滤包围字符并强类型解析校验。
 pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> {
     if let Some(pattern) = custom_regex
         && let Some(re) = get_or_compile_regex(pattern)
@@ -205,6 +241,11 @@ pub fn extract_ipv6(text: &str, custom_regex: Option<&str>) -> Option<Ipv6Addr> 
 }
 
 /// 判断 IPv6 是否为基于网卡硬件 MAC 地址生成的 EUI-64 稳定单播地址
+///
+/// # 设计原理
+/// - **实现初衷**：EUI-64 地址根据网卡硬件 MAC 生成，接口标识在网络重连时固定不变，
+///   非常适合作为长期稳定的 DDNS 目标地址，避开短期过期的临时隐私扩展地址。
+/// - **核心优势**：检查第 6、7 分段的 0x00ff 与 0xfe00 标志位，效率极高。
 pub fn is_eui64_ipv6(addr: &Ipv6Addr) -> bool {
     if !is_global_unicast_ipv6(addr) {
         return false;
@@ -214,11 +255,18 @@ pub fn is_eui64_ipv6(addr: &Ipv6Addr) -> bool {
 }
 
 /// 在候选 IPv6 地址列表中智能优选最稳定的公网地址（优先 EUI-64 硬件地址和静态分配地址，避开临时隐私地址）
+///
+/// # 设计原理
+/// - **实现初衷**：现代操作系统通常同时分配临时隐私地址（随机频繁变动）与硬件/静态地址，
+///   若更新临时隐私地址会导致客户端每隔数小时断连重解析，因此需优先挑选长期稳定的地址。
+/// - **核心优势**：三级优先级筛选，保证在无硬件地址时安全降级为静态分配或首个可用公网地址。
 pub fn select_best_ipv6(candidates: &[Ipv6Addr]) -> Option<Ipv6Addr> {
-    let global_addrs: Vec<&Ipv6Addr> = candidates
-        .iter()
-        .filter(|ip| is_global_unicast_ipv6(ip))
-        .collect();
+    let mut global_addrs = Vec::with_capacity(candidates.len());
+    for ip in candidates {
+        if is_global_unicast_ipv6(ip) {
+            global_addrs.push(ip);
+        }
+    }
 
     if global_addrs.is_empty() {
         return None;

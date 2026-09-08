@@ -1,9 +1,11 @@
 use crate::core::domain::ParsedDomain;
 use async_trait::async_trait;
 use log::info;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 /// DNS 记录类型
@@ -171,20 +173,28 @@ impl SyncRecordResult {
     }
 }
 
+/// 匹配 URL 查询参数中敏感凭据的正则表达式
+///
+/// # 逻辑不变性保证
+/// 正则表达式模式串为静态硬编码常量，符合标准正则语法，编译绝对安全且不会失败。
+static SENSITIVE_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s)]+)")
+        .expect("静态敏感参数正则表达式语法必定合法")
+});
+
 /// 对包含敏感信息（如 API Key、密码、签名等）的 URL 或错误文本进行脱敏
+///
+/// # 设计原理
+/// - **实现初衷**: 部分 DNS 服务商（如 NameSilo, Namecheap 等）使用 GET 请求传递鉴权密钥，当网络异常抛错时会将带凭据的完整 URL 输出到错误上下文。
+/// - **核心优势**: 通过静态预编译正则对敏感键值对进行统一脱敏掩码（替换为 `******`），彻底防范日志与通知中的凭证泄漏。
+/// - **代价与局限**: 采用全局正则替换产生轻微字符串复制开销，仅在网络错误或脱敏日志输出时触发。
 pub fn sanitize_sensitive_url_params(input: &str) -> String {
-    static SENSITIVE_PARAM_REGEX: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| {
-            regex::Regex::new(
-                r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s)]+)",
-            )
-            .expect("编译敏感参数正则失败")
-        });
     SENSITIVE_PARAM_REGEX
         .replace_all(input, "$1=******")
         .to_string()
 }
 
+/// DNS 提供商同步与通信过程中可能发生的领域错误类型
 #[derive(Debug, Error)]
 pub enum DnsProviderError {
     #[error("HTTP 通信错误: {0}")]
@@ -208,12 +218,21 @@ impl From<reqwest::Error> for DnsProviderError {
 }
 
 /// DNS 提供商抽象接口
+///
+/// # 设计原理
+/// - **实现初衷**: 屏蔽不同 DNS 解析商（如阿里云、腾讯云、Cloudflare、华为云、火山引擎等）各异的 REST API、签名算法与数据模型，向上层调度引擎暴露统一的同步契约。
+/// - **核心优势**: 标准化单条解析记录的查询、比对与同步（新增/修改/跳过），支持零变动检测避免无谓调用。
+/// - **代价与局限**: 各服务商针对特定记录（如 CAA, TXT 或 SRV）的高级特性被屏蔽，仅专注于 DDNS 必需的 A 与 AAAA 记录同步。
 #[async_trait]
 pub trait DnsProvider: Send + Sync {
     /// 服务商名称标识
     fn provider_name(&self) -> &'static str;
 
     /// 执行记录同步（查询、对比、增删改）
+    ///
+    /// # Errors
+    ///
+    /// 当凭据不正确、网络通信失败或服务商 API 返回错误码时返回 [`DnsProviderError`]。
     async fn sync_record(
         &self,
         domain: &ParsedDomain,

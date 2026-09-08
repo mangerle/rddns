@@ -1,20 +1,36 @@
 use anyhow::{Context, Result, bail};
+use flate2::read::GzDecoder;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::env;
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::{self, File};
+use std::io::{Cursor, Write, copy};
+use std::path::{Path, PathBuf};
+use std::process::{Command, exit};
 use std::time::Duration;
+use tar::Archive;
+use tokio::spawn;
+use tokio::time::sleep;
+use zip::ZipArchive;
+
+use crate::util::daemon::configure_daemon_command;
+use crate::util::http::create_http_client_builder;
 
 const GITHUB_API_LATEST: &str = "https://api.github.com/repos/mangerle/rddns/releases/latest";
 
+/// 版本检查结果信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
+    /// 当前正在运行的程序版本
     pub current_version: String,
+    /// GitHub 远端发布的最新版本 Tag
     pub latest_version: String,
+    /// 是否存在可用新版本更新
     pub has_update: bool,
+    /// GitHub Release 页面 Web 链接
     pub release_url: String,
+    /// 远端发布说明日志 Markdown
     pub release_notes: String,
 }
 
@@ -35,11 +51,14 @@ struct GithubRelease {
 }
 
 /// 比较版本号：若 latest > current 返回 true
+///
+/// # 设计原理
+/// - **实现初衷**：解析语义化版本点分数字（如 0.2.1 vs 0.3.0），安全忽略 'v' 前缀与预发布后缀。
+/// - **核心优势**：纯数值迭代比较，避免字符串直接比较引发的字典序错误（如 "0.10.0" < "0.9.0"）。
 pub fn is_newer_version(current: &str, latest: &str) -> bool {
     let clean_v = |v: &str| -> Vec<u64> {
         v.trim()
-            .trim_start_matches('v')
-            .trim_start_matches('V')
+            .trim_start_matches(['v', 'V'])
             .split('.')
             .filter_map(|s| s.parse::<u64>().ok())
             .collect()
@@ -60,10 +79,17 @@ pub fn is_newer_version(current: &str, latest: &str) -> bool {
 }
 
 /// 检查 GitHub Releases 最新版本信息
+///
+/// # 设计原理
+/// - **实现初衷**：通过 GitHub 开放 REST API 轮询最新版本 Release，便于在前端提示升级。
+/// - **核心优势**：轻量级请求，短超时保护。
+///
+/// # Errors
+/// 当网络通信中断、GitHub API 限流或响应 JSON 解析异常时返回错误。
 pub async fn check_version() -> Result<VersionInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-    let client = crate::util::http::create_http_client_builder()
+    let client = create_http_client_builder()
         .timeout(Duration::from_secs(10))
         .user_agent(format!("RDDNS-Updater/v{}", current_version))
         .build()
@@ -80,8 +106,7 @@ pub async fn check_version() -> Result<VersionInfo> {
     }
 
     let release: GithubRelease = resp.json().await.context("解析 Release 信息失败")?;
-
-    let latest_ver_clean = release.tag_name.trim_start_matches('v').to_string();
+    let latest_ver_clean = release.tag_name.trim_start_matches(['v', 'V']).to_string();
     let has_update = is_newer_version(&current_version, &latest_ver_clean);
 
     let info = VersionInfo {
@@ -95,44 +120,12 @@ pub async fn check_version() -> Result<VersionInfo> {
     Ok(info)
 }
 
-/// 执行原地一键热升级（下载最新发布包 -> SHA256校验 -> 解压 -> 安全备份替换 -> 重启进程）
-pub async fn upgrade_self() -> Result<()> {
-    info!(
-        "正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
-        env!("CARGO_PKG_VERSION")
-    );
-
-    let current_version = env!("CARGO_PKG_VERSION");
-    let client = crate::util::http::create_http_client_builder()
-        .timeout(Duration::from_secs(60))
-        .user_agent(format!("RDDNS-Updater/v{}", current_version))
-        .build()
-        .context("创建 HTTP 客户端失败")?;
-
-    let resp = client
-        .get(GITHUB_API_LATEST)
-        .send()
-        .await
-        .context("获取 Release 下载列表失败")?;
-
-    if !resp.status().is_success() {
-        bail!("GitHub API 响应异常: HTTP {}", resp.status());
-    }
-
-    let release: GithubRelease = resp.json().await.context("解析 Release 资产失败")?;
-
-    let latest_ver_clean = release.tag_name.trim_start_matches(['v', 'V']).to_string();
-    if !is_newer_version(current_version, &latest_ver_clean) {
-        println!("当前已是最新版本 (v{})，无需更新", current_version);
-        info!("当前已是最新版本 (v{})，无需更新", current_version);
-        return Ok(());
-    }
-
+/// 匹配最适合当前系统的 Release 资产 (精准匹配架构与操作系统)
+fn match_system_asset(assets: &[GithubReleaseAsset]) -> Option<&GithubReleaseAsset> {
     let target_os = env::consts::OS;
     let target_arch = env::consts::ARCH;
 
-    // 匹配最适合当前系统的 Release 资产 (精准匹配架构与操作系统)
-    let matched_asset = release.assets.iter().find(|a| {
+    assets.iter().find(|a| {
         let name = a.name.to_lowercase();
         let os_match = match target_os {
             "windows" => name.contains("windows") || name.ends_with(".exe"),
@@ -160,89 +153,54 @@ pub async fn upgrade_self() -> Result<()> {
             _ => false,
         };
         os_match && arch_match
-    });
+    })
+}
 
-    let asset = match matched_asset {
-        Some(a) => a,
-        None => {
-            bail!(
-                "未在 Release 中找到适配当前系统架构 ({}-{}) 的安装包，请手动访问: {}",
-                target_os,
-                target_arch,
-                release.html_url
-            );
-        }
-    };
-
-    // 尝试寻找匹配的 SHA256 校验文件 (如 asset_name.sha256 / asset_name.sha256.txt)
-    let sha256_asset = release.assets.iter().find(|a| {
-        let name = a.name.to_lowercase();
-        name == format!("{}.sha256", asset.name.to_lowercase())
-            || name == format!("{}.sha256.txt", asset.name.to_lowercase())
-    });
-
-    println!("正在下载更新文件 [{}]...", asset.name);
-    let download_resp = client
-        .get(&asset.browser_download_url)
+/// 校验下载安装包的 SHA256 签名文件
+async fn verify_downloaded_sha256(
+    client: &reqwest::Client,
+    sha_asset: &GithubReleaseAsset,
+    actual_sha256: &str,
+) -> Result<()> {
+    info!("正在下载并校验 SHA256 签名 [{}]...", sha_asset.name);
+    let sha_resp = client
+        .get(&sha_asset.browser_download_url)
         .send()
         .await
-        .context("下载安装包失败")?;
+        .context("下载 SHA256 校验文件失败")?;
 
-    if !download_resp.status().is_success() {
-        bail!("下载失败，HTTP 状态码: {}", download_resp.status());
+    if !sha_resp.status().is_success() {
+        bail!("下载 SHA256 校验文件返回异常状态码: {}", sha_resp.status());
     }
 
-    let raw_bytes = download_resp.bytes().await.context("读取下载数据失败")?;
+    let sha_text = sha_resp
+        .text()
+        .await
+        .context("读取 SHA256 校验文件内容失败")?;
+    let expected_sha256 = sha_text
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
 
-    // 校验 SHA256 完整性
-    use sha2::{Digest, Sha256};
-    let actual_sha256 = hex::encode(Sha256::digest(&raw_bytes));
+    if expected_sha256.is_empty() {
+        bail!("SHA256 校验文件格式异常，未读取到有效的哈希指纹");
+    }
 
-    if let Some(sha_asset) = sha256_asset {
-        println!("正在下载并校验 SHA256 签名 [{}]...", sha_asset.name);
-        let sha_resp = client
-            .get(&sha_asset.browser_download_url)
-            .send()
-            .await
-            .context("下载 SHA256 校验文件失败")?;
-
-        if !sha_resp.status().is_success() {
-            bail!("下载 SHA256 校验文件返回异常状态码: {}", sha_resp.status());
-        }
-
-        let sha_text = sha_resp
-            .text()
-            .await
-            .context("读取 SHA256 校验文件内容失败")?;
-        let expected_sha256 = sha_text
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
-
-        if expected_sha256.is_empty() {
-            bail!("SHA256 校验文件格式异常，未读取到有效的哈希指纹");
-        }
-
-        if actual_sha256 != expected_sha256 {
-            bail!(
-                "安装包 SHA256 完整性校验失败！预期值: {}, 实际值: {}",
-                expected_sha256,
-                actual_sha256
-            );
-        }
-        info!("安装包 SHA256 校验通过: {}", actual_sha256);
-    } else {
-        warn!(
-            "Release 资产中未提供匹配的 SHA256 校验文件，当前安装包指纹: {}",
+    if actual_sha256 != expected_sha256 {
+        bail!(
+            "安装包 SHA256 完整性校验失败！预期值: {}, 实际值: {}",
+            expected_sha256,
             actual_sha256
         );
     }
+    info!("安装包 SHA256 校验通过: {}", actual_sha256);
+    Ok(())
+}
 
-    let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
-
-    let current_exe = env::current_exe().context("获取当前程序路径失败")?;
+/// 原子安全备份并原地替换二进制可执行文件
+fn atomic_replace_binary(current_exe: &Path, binary_bytes: &[u8]) -> Result<()> {
     let backup_exe: PathBuf = if let Some(ext) = current_exe.extension() {
         current_exe.with_extension(format!("{}.old", ext.to_string_lossy()))
     } else {
@@ -253,50 +211,133 @@ pub async fn upgrade_self() -> Result<()> {
         let _ = fs::remove_file(&backup_exe);
     }
 
-    println!("正在执行二进制文件热替换...");
-    fs::rename(&current_exe, &backup_exe)
+    info!("正在执行二进制文件热替换...");
+    fs::rename(current_exe, &backup_exe)
         .context("备份当前运行程序失败 (可能缺少管理员写入权限)")?;
 
-    // 将解压/提取的新二进制文件写入当前程序路径
     let write_res = (|| -> Result<(), std::io::Error> {
-        let mut file = fs::File::create(&current_exe)?;
-        file.write_all(&binary_bytes)?;
+        let mut file = File::create(current_exe)?;
+        file.write_all(binary_bytes)?;
         file.flush()?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&current_exe)?.permissions();
+            let mut perms = fs::metadata(current_exe)?.permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&current_exe, perms)?;
+            fs::set_permissions(current_exe, perms)?;
         }
 
         Ok(())
     })();
 
     if let Err(err) = write_res {
-        // 回滚备份
-        let _ = fs::rename(&backup_exe, &current_exe);
+        let _ = fs::rename(&backup_exe, current_exe);
         bail!("写入新版本失败，已恢复原版本: {}", err);
     }
-
-    println!("==========================================");
-    println!("RDDNS 成功更新至最新版本 {}！", release.tag_name);
-    println!("请重启程序或服务以使更新完全生效。");
-    println!("==========================================");
 
     Ok(())
 }
 
+/// 执行原地一键热升级（下载最新发布包 -> SHA256校验 -> 解压 -> 安全备份替换）
+///
+/// # 设计原理
+/// - **实现初衷**：在无包管理器或容器编排的环境下，为嵌入式/服务器环境提供开箱即用的自动化自升级能力。
+/// - **核心优势**：自动识别操作系统与 CPU 架构、强制 SHA256 签名校验、原地原子备份与失败自动回滚。
+///
+/// # Errors
+/// 当网络中断、校验失败、无文件写入权限或架构不适配时返回错误。
+pub async fn upgrade_self() -> Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    info!(
+        "正在检查最新发布版本并准备原地自更新 (当前版本: v{})...",
+        current_version
+    );
+
+    let client = create_http_client_builder()
+        .timeout(Duration::from_secs(60))
+        .user_agent(format!("RDDNS-Updater/v{}", current_version))
+        .build()
+        .context("创建 HTTP 客户端失败")?;
+
+    let resp = client
+        .get(GITHUB_API_LATEST)
+        .send()
+        .await
+        .context("获取 Release 下载列表失败")?;
+    if !resp.status().is_success() {
+        bail!("GitHub API 响应异常: HTTP {}", resp.status());
+    }
+
+    let release: GithubRelease = resp.json().await.context("解析 Release 资产失败")?;
+    let latest_ver_clean = release.tag_name.trim_start_matches(['v', 'V']).to_string();
+    if !is_newer_version(current_version, &latest_ver_clean) {
+        info!("当前已是最新版本 (v{})，无需更新", current_version);
+        return Ok(());
+    }
+
+    let asset = match_system_asset(&release.assets).ok_or_else(|| {
+        anyhow::anyhow!(
+            "未在 Release 中找到适配当前系统架构 ({}-{}) 的安装包，请手动访问: {}",
+            env::consts::OS,
+            env::consts::ARCH,
+            release.html_url
+        )
+    })?;
+
+    let download_resp = client
+        .get(&asset.browser_download_url)
+        .send()
+        .await
+        .context("下载安装包失败")?;
+    if !download_resp.status().is_success() {
+        bail!("下载失败，HTTP 状态码: {}", download_resp.status());
+    }
+
+    let raw_bytes = download_resp.bytes().await.context("读取下载数据失败")?;
+    let actual_sha256 = hex::encode(Sha256::digest(&raw_bytes));
+
+    let sha256_asset = release.assets.iter().find(|a| {
+        let name = a.name.to_lowercase();
+        name == format!("{}.sha256", asset.name.to_lowercase())
+            || name == format!("{}.sha256.txt", asset.name.to_lowercase())
+    });
+
+    if let Some(sha_asset) = sha256_asset {
+        verify_downloaded_sha256(&client, sha_asset, &actual_sha256).await?;
+    } else {
+        warn!(
+            "Release 资产中未提供匹配的 SHA256 校验文件，当前安装包指纹: {}",
+            actual_sha256
+        );
+    }
+
+    let binary_bytes = extract_binary_from_bytes(&asset.name, &raw_bytes)?;
+    let current_exe = env::current_exe().context("获取当前程序路径失败")?;
+    atomic_replace_binary(&current_exe, &binary_bytes)?;
+
+    info!(
+        "RDDNS 成功更新至最新版本 {}！请重启程序或服务以使更新完全生效。",
+        release.tag_name
+    );
+    Ok(())
+}
+
 /// 重启当前程序进程以加载新升级的二进制文件
+///
+/// # 设计原理
+/// - **实现初衷**：在热替换二进制文件后平滑拉起新版本进程，自动继承原有启动参数。
+/// - **核心优势**：跨平台兼容（Windows 采用 PowerShell 规避 cmd 转义注入，Unix 采用 sh exec 释放旧端口）。
+///
+/// # Errors
+/// 当当前程序路径获取失败或派生辅助进程异常时返回错误。
 pub fn restart_process() -> Result<()> {
     let current_exe = env::current_exe().context("获取当前程序路径失败")?;
     let args: Vec<String> = env::args().skip(1).collect();
 
     #[cfg(target_os = "windows")]
     {
-        // Windows 平台：通过 PowerShell 延时 1 秒后以独立进程启动新版本，安全传递参数数组并规避 cmd 元字符截断与注入
-        let mut launcher = std::process::Command::new("powershell");
+        let mut launcher = Command::new("powershell");
         let ps_script = format!(
             "Start-Sleep -Milliseconds 1000; Start-Process -FilePath '{}' -ArgumentList @({})",
             current_exe.to_string_lossy().replace('\'', "''"),
@@ -314,95 +355,96 @@ pub fn restart_process() -> Result<()> {
             "-Command",
             &ps_script,
         ]);
-        crate::util::daemon::configure_daemon_command(&mut launcher);
+        configure_daemon_command(&mut launcher);
         launcher.spawn().context("派生重启辅助进程失败")?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        // Unix / Linux 平台：通过 sh 延时 1 秒后 exec 拉起新进程，确保旧进程端口完全释放
-        let mut launcher = std::process::Command::new("sh");
+        let mut launcher = Command::new("sh");
         let mut sh_cmd = format!("sleep 1 && exec \"{}\"", current_exe.to_string_lossy());
         for arg in &args {
             sh_cmd.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
         }
         launcher.args(["-c", &sh_cmd]);
-        crate::util::daemon::configure_daemon_command(&mut launcher);
+        configure_daemon_command(&mut launcher);
         launcher.spawn().context("派生重启辅助进程失败")?;
     }
 
-    // 短暂延时 300 毫秒确保当前 Web 接口响应顺利发出，随后退出旧进程释放端口
-    tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        std::process::exit(0);
+    spawn(async {
+        sleep(Duration::from_millis(300)).await;
+        exit(0);
     });
 
     Ok(())
 }
 
-/// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包、Tar.gz 归档与原始二进制)
-fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
-    // 1. 处理 ZIP 归档
-    if bytes.starts_with(b"PK\x03\x04") || asset_name.ends_with(".zip") {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(cursor).context("解析 ZIP 压缩包失败")?;
+/// 从 ZIP 压缩归档数据中提取主程序二进制
+fn extract_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).context("解析 ZIP 压缩包失败")?;
 
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i).context("读取 ZIP 压缩文件条目失败")?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).context("读取 ZIP 压缩文件条目失败")?;
+        if file.is_dir() {
+            continue;
+        }
 
-            if file.is_dir() {
+        let entry_name = file.name().replace('\\', "/");
+        let file_name = entry_name.split('/').next_back().unwrap_or(&entry_name);
+
+        if file_name.eq_ignore_ascii_case("rddns.exe") || file_name.eq_ignore_ascii_case("rddns") {
+            let mut out = Vec::new();
+            copy(&mut file, &mut out).context("解压可执行程序数据失败")?;
+            return Ok(out);
+        }
+    }
+    bail!("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
+}
+
+/// 从 Tar.gz 压缩归档数据中提取主程序二进制
+fn extract_from_tar_gz(bytes: &[u8]) -> Result<Vec<u8>> {
+    let cursor = Cursor::new(bytes);
+    let gz_decoder = GzDecoder::new(cursor);
+    let mut archive = Archive::new(gz_decoder);
+
+    if let Ok(entries) = archive.entries() {
+        for mut entry in entries.flatten() {
+            if entry.header().entry_type().is_dir() {
                 continue;
             }
 
-            let entry_name = file.name().replace('\\', "/");
-            let file_name = entry_name.split('/').next_back().unwrap_or(&entry_name);
+            let entry_path = entry
+                .path()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            let file_name = entry_path.split('/').next_back().unwrap_or(&entry_path);
 
-            // 寻找主程序文件 (如 rddns 或 rddns.exe)
             if file_name.eq_ignore_ascii_case("rddns.exe")
                 || file_name.eq_ignore_ascii_case("rddns")
             {
                 let mut out = Vec::new();
-                std::io::copy(&mut file, &mut out).context("解压可执行程序数据失败")?;
+                copy(&mut entry, &mut out).context("解压 Tar.gz 可执行程序失败")?;
                 return Ok(out);
             }
         }
-        bail!("ZIP 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
+    }
+    bail!("Tar.gz 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
+}
+
+/// 从下载的数据流中提取最终可执行二进制文件 (支持 ZIP 压缩包、Tar.gz 归档与原始二进制)
+fn extract_binary_from_bytes(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+    if bytes.starts_with(b"PK\x03\x04") || asset_name.ends_with(".zip") {
+        return extract_from_zip(bytes);
     }
 
-    // 2. 处理 Tar.gz / Tgz 归档 (Gzip 魔数 0x1F, 0x8B)
     if bytes.starts_with(&[0x1f, 0x8b])
         || asset_name.ends_with(".tar.gz")
         || asset_name.ends_with(".tgz")
     {
-        let cursor = std::io::Cursor::new(bytes);
-        let gz_decoder = flate2::read::GzDecoder::new(cursor);
-        let mut archive = tar::Archive::new(gz_decoder);
-
-        if let Ok(entries) = archive.entries() {
-            for mut entry in entries.flatten() {
-                if entry.header().entry_type().is_dir() {
-                    continue;
-                }
-
-                let entry_path = entry
-                    .path()
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                let file_name = entry_path.split('/').next_back().unwrap_or(&entry_path);
-
-                if file_name.eq_ignore_ascii_case("rddns.exe")
-                    || file_name.eq_ignore_ascii_case("rddns")
-                {
-                    let mut out = Vec::new();
-                    std::io::copy(&mut entry, &mut out).context("解压 Tar.gz 可执行程序失败")?;
-                    return Ok(out);
-                }
-            }
-        }
-        bail!("Tar.gz 压缩归档中未找到可执行程序文件 (rddns / rddns.exe)");
+        return extract_from_tar_gz(bytes);
     }
 
-    // 若非已知归档，直接作为原始二进制返回
     Ok(bytes.to_vec())
 }
 

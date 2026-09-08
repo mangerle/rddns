@@ -5,8 +5,9 @@ use log::warn;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::time::timeout;
 
-/// 基于外部命令/脚本提取 IP
+/// 基于外部命令/脚本提取 IP 的探测器
 pub struct CommandIpFetcher {
     cmd: String,
     regex: Option<String>,
@@ -14,6 +15,12 @@ pub struct CommandIpFetcher {
 }
 
 impl CommandIpFetcher {
+    /// 创建基于外部命令的 IP 提取器
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 面对复杂网络拓扑（如多拨 PPPoE、特种路由器 API、VPN 虚拟隧道或需调用私有认证脚本取 IP 时），为用户提供最大程度的灵活性，可通过自定义脚本或 CLI 工具提取 IP。
+    /// - **核心优势**: 具备进程级隔离与强制生命周期管理（启用 `kill_on_drop` 与超时保护），杜绝孤儿进程与僵尸进程驻留。
+    /// - **代价与局限**: 每次提取均需创建子进程，CPU 与系统上下文切换开销高于纯内存操作或原生 Socket，且依赖本地 Shell 环境安全性。
     pub fn new(cmd: String, regex: Option<String>, timeout_secs: u64) -> Self {
         let secs = if timeout_secs == 0 { 10 } else { timeout_secs };
         Self {
@@ -23,6 +30,13 @@ impl CommandIpFetcher {
         }
     }
 
+    /// 执行外部命令并获取标准输出文本
+    ///
+    /// # Errors
+    ///
+    /// - 命令执行超时返回 [`FetchError::Timeout`]
+    /// - 进程启动或 IO 异常返回 [`FetchError::Io`]
+    /// - 命令非 0 退出码返回 [`FetchError::Other`]
     async fn execute(&self) -> Result<String, FetchError> {
         let mut command = if cfg!(target_os = "windows") {
             let mut c = Command::new("cmd");
@@ -36,7 +50,7 @@ impl CommandIpFetcher {
         command.kill_on_drop(true);
 
         let output_fut = command.output();
-        let output = tokio::time::timeout(self.timeout, output_fut)
+        let output = timeout(self.timeout, output_fut)
             .await
             .map_err(|_| FetchError::Timeout)?
             .map_err(FetchError::Io)?;

@@ -1,4 +1,5 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
+use crate::util::crypto::fill_random_bytes;
 use crate::util::dns_resolver::{QueryRecordType, query_dns_server};
 use crate::util::http::{find_interface_ipv4, find_interface_ipv6};
 use crate::util::net::is_global_unicast_ipv6;
@@ -6,7 +7,8 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
-use tokio::net::UdpSocket;
+use tokio::net::{UdpSocket, lookup_host};
+use tokio::time::timeout;
 
 /// STUN 协议核心常量定义 (RFC 5389)
 const STUN_BINDING_REQUEST: u16 = 0x0001;
@@ -48,6 +50,12 @@ pub struct StunIpFetcher {
 }
 
 impl StunIpFetcher {
+    /// 创建基于 STUN 协议的公网 IP 探测器
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 当上级路由器开启 NAT 且无公网 IP 暴露在本地网卡、亦或不依赖第三方 HTTP 接口探测时，通过标准 STUN 协议与全球公共服务器通信，能够极低延迟、零解析成本地获取本端映射的外网公网 IP。
+    /// - **核心优势**: 采用零堆分配的 20 字节原生 UDP 数据包，无需 TLS 握手与 HTTP 协议层编解码开销；支持国内高可用节点与双栈 fallback。
+    /// - **代价与局限**: 依赖公网 UDP 3478 出站端口连通性；在对称 NAT (Symmetric NAT) 下探测到的端口可能与常规端口不同（但不影响 DDNS 提取宿主 IP）。
     pub fn new(custom_server: Option<String>, http_interface: Option<&str>) -> Self {
         Self {
             custom_server: custom_server
@@ -94,18 +102,71 @@ impl StunIpFetcher {
 
         // 4. Transaction ID (12 字节密码学安全随机数)
         let mut tx_id = [0u8; 12];
-        crate::util::crypto::fill_random_bytes(&mut tx_id);
+        fill_random_bytes(&mut tx_id);
         req[8..20].copy_from_slice(&tx_id);
 
         (req, tx_id)
     }
 
+    /// 解析 XOR-MAPPED-ADDRESS 属性 (RFC 5389)
+    fn parse_xor_mapped_address(val_bytes: &[u8], expected_tx_id: &[u8; 12]) -> Option<IpAddr> {
+        if val_bytes.len() < 4 {
+            return None;
+        }
+        let family = val_bytes[1];
+        if family == 0x01 && val_bytes.len() >= 8 {
+            // IPv4: 4 字节地址与 Magic Cookie 逐字节异或
+            let mut ip_octets = [0u8; 4];
+            for i in 0..4 {
+                ip_octets[i] = val_bytes[4 + i] ^ STUN_MAGIC_COOKIE_BYTES[i];
+            }
+            Some(IpAddr::V4(Ipv4Addr::from(ip_octets)))
+        } else if family == 0x02 && val_bytes.len() >= 20 {
+            // IPv6: 16 字节地址与 [Magic Cookie (4字节) + Transaction ID (12字节)] 逐字节异或
+            let mut key = [0u8; 16];
+            key[0..4].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
+            key[4..16].copy_from_slice(expected_tx_id);
+
+            let mut ip_octets = [0u8; 16];
+            for i in 0..16 {
+                ip_octets[i] = val_bytes[4 + i] ^ key[i];
+            }
+            Some(IpAddr::V6(Ipv6Addr::from(ip_octets)))
+        } else {
+            None
+        }
+    }
+
+    /// 解析传统 MAPPED-ADDRESS 属性 (RFC 3489)
+    fn parse_mapped_address(val_bytes: &[u8]) -> Option<IpAddr> {
+        if val_bytes.len() < 4 {
+            return None;
+        }
+        let family = val_bytes[1];
+        if family == 0x01 && val_bytes.len() >= 8 {
+            let ip_octets = [val_bytes[4], val_bytes[5], val_bytes[6], val_bytes[7]];
+            Some(IpAddr::V4(Ipv4Addr::from(ip_octets)))
+        } else if family == 0x02 && val_bytes.len() >= 20 {
+            let mut ip_octets = [0u8; 16];
+            ip_octets.copy_from_slice(&val_bytes[4..20]);
+            Some(IpAddr::V6(Ipv6Addr::from(ip_octets)))
+        } else {
+            None
+        }
+    }
+
     /// 解析 STUN 响应二进制报文 (支持 XOR-MAPPED-ADDRESS 与传统 MAPPED-ADDRESS)
+    ///
+    /// # Errors
+    ///
+    /// - 报文长度不足 20 字节
+    /// - 消息类型非 Binding Response
+    /// - Magic Cookie 或 Transaction ID 校验失败
+    /// - 报文中不存在有效的反射地址属性
     pub fn parse_binding_response(
         buf: &[u8],
         expected_tx_id: &[u8; 12],
     ) -> Result<IpAddr, FetchError> {
-        // 基础长度校验
         if buf.len() < 20 {
             return Err(FetchError::Other(format!(
                 "STUN 响应报文长度不足 20 字节 (实际: {} 字节)",
@@ -113,7 +174,6 @@ impl StunIpFetcher {
             )));
         }
 
-        // 校验 Message Type
         let msg_type = u16::from_be_bytes([buf[0], buf[1]]);
         if msg_type != STUN_BINDING_RESPONSE {
             return Err(FetchError::Other(format!(
@@ -122,7 +182,6 @@ impl StunIpFetcher {
             )));
         }
 
-        // 校验 Magic Cookie
         let cookie = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if cookie != STUN_MAGIC_COOKIE {
             return Err(FetchError::Other(format!(
@@ -131,7 +190,6 @@ impl StunIpFetcher {
             )));
         }
 
-        // 校验 Transaction ID
         if &buf[8..20] != expected_tx_id {
             return Err(FetchError::Other(
                 "STUN 响应 Transaction ID 与发出的请求不匹配".to_string(),
@@ -139,16 +197,12 @@ impl StunIpFetcher {
         }
 
         let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-        let total_available = buf.len() - 20;
-        let attr_data_len = msg_len.min(total_available);
-
+        let end_offset = 20 + msg_len.min(buf.len() - 20);
         let mut offset = 20;
-        let end_offset = 20 + attr_data_len;
 
         let mut mapped_ip: Option<IpAddr> = None;
         let mut xor_mapped_ip: Option<IpAddr> = None;
 
-        // 遍历 TLV (Type-Length-Value) 属性
         while offset + 4 <= end_offset {
             let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
             let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
@@ -160,59 +214,86 @@ impl StunIpFetcher {
             }
 
             let val_bytes = &buf[val_start..val_end];
-
-            if (attr_type == ATTR_XOR_MAPPED_ADDRESS || attr_type == ATTR_XOR_MAPPED_ADDRESS_ALT)
-                && val_bytes.len() >= 4
-            {
-                let family = val_bytes[1];
-                if family == 0x01 && val_bytes.len() >= 8 {
-                    // IPv4: 4 字节地址与 Magic Cookie 逐字节异或
-                    let mut ip_octets = [0u8; 4];
-                    for i in 0..4 {
-                        ip_octets[i] = val_bytes[4 + i] ^ STUN_MAGIC_COOKIE_BYTES[i];
-                    }
-                    xor_mapped_ip = Some(IpAddr::V4(Ipv4Addr::from(ip_octets)));
-                } else if family == 0x02 && val_bytes.len() >= 20 {
-                    // IPv6: 16 字节地址与 [Magic Cookie (4字节) + Transaction ID (12字节)] 逐字节异或
-                    let mut key = [0u8; 16];
-                    key[0..4].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
-                    key[4..16].copy_from_slice(expected_tx_id);
-
-                    let mut ip_octets = [0u8; 16];
-                    for i in 0..16 {
-                        ip_octets[i] = val_bytes[4 + i] ^ key[i];
-                    }
-                    xor_mapped_ip = Some(IpAddr::V6(Ipv6Addr::from(ip_octets)));
-                }
-            } else if attr_type == ATTR_MAPPED_ADDRESS && val_bytes.len() >= 4 {
-                let family = val_bytes[1];
-                if family == 0x01 && val_bytes.len() >= 8 {
-                    let ip_octets = [val_bytes[4], val_bytes[5], val_bytes[6], val_bytes[7]];
-                    mapped_ip = Some(IpAddr::V4(Ipv4Addr::from(ip_octets)));
-                } else if family == 0x02 && val_bytes.len() >= 20 {
-                    let mut ip_octets = [0u8; 16];
-                    ip_octets.copy_from_slice(&val_bytes[4..20]);
-                    mapped_ip = Some(IpAddr::V6(Ipv6Addr::from(ip_octets)));
-                }
+            if attr_type == ATTR_XOR_MAPPED_ADDRESS || attr_type == ATTR_XOR_MAPPED_ADDRESS_ALT {
+                xor_mapped_ip =
+                    Self::parse_xor_mapped_address(val_bytes, expected_tx_id).or(xor_mapped_ip);
+            } else if attr_type == ATTR_MAPPED_ADDRESS {
+                mapped_ip = Self::parse_mapped_address(val_bytes).or(mapped_ip);
             }
 
-            // 根据 RFC 5389，每个属性按 4 字节边界对齐
             let padding = (4 - (attr_len % 4)) % 4;
             offset = val_end + padding;
         }
 
-        // 首选 XOR-MAPPED-ADDRESS，次选 MAPPED-ADDRESS
         xor_mapped_ip.or(mapped_ip).ok_or_else(|| {
             FetchError::Other("STUN 响应中未找到有效的 (XOR-)MAPPED-ADDRESS 属性".to_string())
         })
     }
 
-    /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP
-    async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
-        let norm_server = Self::normalize_server_addr(server);
+    /// 解析 STUN 服务器地址字符串为主机与端口元组
+    fn parse_server_host_port(norm_server: &str) -> (&str, u16) {
+        if norm_server.starts_with('[') {
+            if let Some(bracket_end) = norm_server.find("]:") {
+                (
+                    &norm_server[1..bracket_end],
+                    norm_server[bracket_end + 2..]
+                        .parse::<u16>()
+                        .unwrap_or(3478),
+                )
+            } else {
+                (norm_server.trim_matches(|c| c == '[' || c == ']'), 3478)
+            }
+        } else if let Some(idx) = norm_server.rfind(':') {
+            (
+                &norm_server[..idx],
+                norm_server[idx + 1..].parse::<u16>().unwrap_or(3478),
+            )
+        } else {
+            (norm_server, 3478)
+        }
+    }
 
-        // 1. 域名解析为目标 SocketAddr (支持系统原生解析与内置纯 Rust 递归 DNS 兜底)
-        let mut target_addrs: Vec<SocketAddr> = match tokio::net::lookup_host(&norm_server).await {
+    /// 使用公共递归 DNS 兜底查询 STUN 服务器的 AAAA 记录
+    async fn resolve_fallback_ipv6(norm_server: &str) -> Vec<SocketAddr> {
+        let (host, port) = Self::parse_server_host_port(norm_server);
+        let host_clean = host.trim();
+        if let Ok(ip) = host_clean.parse::<IpAddr>() {
+            if ip.is_ipv6() {
+                return vec![SocketAddr::new(ip, port)];
+            }
+            return Vec::new();
+        }
+
+        let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
+        let mut results = Vec::new();
+        for dns in dns_servers {
+            if let Ok(ips) = query_dns_server(
+                dns,
+                host_clean,
+                QueryRecordType::AAAA,
+                Duration::from_secs(2),
+            )
+            .await
+            {
+                for ip in ips {
+                    if let IpAddr::V6(v6) = ip {
+                        results.push(SocketAddr::new(IpAddr::V6(v6), port));
+                    }
+                }
+                if !results.is_empty() {
+                    break;
+                }
+            }
+        }
+        results
+    }
+
+    /// 解析 STUN 服务器为具体的目标 Socket 地址
+    async fn resolve_stun_target_addr(
+        norm_server: &str,
+        is_ipv6: bool,
+    ) -> Result<SocketAddr, FetchError> {
+        let mut target_addrs: Vec<SocketAddr> = match lookup_host(norm_server).await {
             Ok(iter) => iter
                 .filter(|a| if is_ipv6 { a.is_ipv6() } else { a.is_ipv4() })
                 .collect(),
@@ -222,84 +303,43 @@ impl StunIpFetcher {
             }
         };
 
-        // 如果系统 DNS 针对 IPv6 未返回记录 (例如 Windows 在本地无公网 IPv6 时过滤了 AAAA)，
-        // 尝试通过内置纯 Rust 递归 DNS 查询器强制解析 AAAA 记录
         if target_addrs.is_empty() && is_ipv6 {
-            let (host, port) = if norm_server.starts_with('[') {
-                if let Some(bracket_end) = norm_server.find("]:") {
-                    (
-                        &norm_server[1..bracket_end],
-                        norm_server[bracket_end + 2..]
-                            .parse::<u16>()
-                            .unwrap_or(3478),
-                    )
-                } else {
-                    (norm_server.trim_matches(|c| c == '[' || c == ']'), 3478)
-                }
-            } else if let Some(idx) = norm_server.rfind(':') {
-                (
-                    &norm_server[..idx],
-                    norm_server[idx + 1..].parse::<u16>().unwrap_or(3478),
-                )
-            } else {
-                (norm_server.as_str(), 3478)
-            };
-            let host_clean = host.trim();
-            if let Ok(ip) = host_clean.parse::<IpAddr>() {
-                if ip.is_ipv6() {
-                    target_addrs.push(SocketAddr::new(ip, port));
-                }
-            } else {
-                // 依次尝试向公共 DNS (阿里 223.5.5.5 / 腾讯 119.29.29.29 / Cloudflare 1.1.1.1) 强制查询 AAAA 记录
-                let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
-                for dns in dns_servers {
-                    if let Ok(ips) = query_dns_server(
-                        dns,
-                        host_clean,
-                        QueryRecordType::AAAA,
-                        Duration::from_secs(2),
-                    )
-                    .await
-                    {
-                        for ip in ips {
-                            if let IpAddr::V6(v6) = ip {
-                                target_addrs.push(SocketAddr::new(IpAddr::V6(v6), port));
-                            }
-                        }
-                        if !target_addrs.is_empty() {
-                            break;
-                        }
-                    }
-                }
-            }
+            target_addrs = Self::resolve_fallback_ipv6(norm_server).await;
         }
 
-        if target_addrs.is_empty() {
-            return Err(FetchError::Other(format!(
+        target_addrs.into_iter().next().ok_or_else(|| {
+            FetchError::Other(format!(
                 "未能解析到 STUN 服务器 [{}] 对应的 {} 地址 (请检查网络 DNS 或该服务器是否支持双栈)",
                 norm_server,
                 if is_ipv6 { "IPv6" } else { "IPv4" }
-            )));
-        }
+            ))
+        })
+    }
 
-        let target_addr = target_addrs[0];
-
-        // 2. 绑定本地出站 UDP Socket (支持绑定到指定网卡源 IP)
-        let bind_addr: SocketAddr = if is_ipv6 {
-            if let Some(ref iface) = self.http_interface
+    /// 确定本地出站 UDP Socket 绑定地址
+    fn determine_bind_addr(http_interface: Option<&str>, is_ipv6: bool) -> SocketAddr {
+        if is_ipv6 {
+            if let Some(iface) = http_interface
                 && let Some(src_v6) = find_interface_ipv6(iface)
             {
                 SocketAddr::new(IpAddr::V6(src_v6), 0)
             } else {
                 SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
             }
-        } else if let Some(ref iface) = self.http_interface
+        } else if let Some(iface) = http_interface
             && let Some(src_v4) = find_interface_ipv4(iface)
         {
             SocketAddr::new(IpAddr::V4(src_v4), 0)
         } else {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
-        };
+        }
+    }
+
+    /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP
+    async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
+        let norm_server = Self::normalize_server_addr(server);
+        let target_addr = Self::resolve_stun_target_addr(&norm_server, is_ipv6).await?;
+        let bind_addr = Self::determine_bind_addr(self.http_interface.as_deref(), is_ipv6);
 
         let socket = UdpSocket::bind(bind_addr).await.map_err(|e| {
             if is_ipv6 {
@@ -312,7 +352,6 @@ impl StunIpFetcher {
             }
         })?;
 
-        // 3. 构建并发送 STUN 请求
         let (req_bytes, tx_id) = Self::build_binding_request();
         socket.send_to(&req_bytes, target_addr).await.map_err(|e| {
             if is_ipv6 {
@@ -325,16 +364,14 @@ impl StunIpFetcher {
             }
         })?;
 
-        // 4. 等待回包并设置超时控制
         let mut recv_buf = [0u8; 1024];
         let recv_future = socket.recv_from(&mut recv_buf);
 
-        let (len, from_addr) = tokio::time::timeout(self.timeout, recv_future)
+        let (len, from_addr) = timeout(self.timeout, recv_future)
             .await
             .map_err(|_| FetchError::Timeout)?
             .map_err(FetchError::Io)?;
 
-        // 校验回包来源地址，防止伪造的虚假响应注入
         if from_addr != target_addr {
             return Err(FetchError::Other(format!(
                 "STUN 响应来源地址不匹配: 期望 {}, 实际 {}",
@@ -342,7 +379,6 @@ impl StunIpFetcher {
             )));
         }
 
-        // 5. 解析回包字节
         Self::parse_binding_response(&recv_buf[..len], &tx_id)
     }
 

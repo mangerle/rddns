@@ -295,6 +295,10 @@ fn opt_not_empty(s: &Option<String>) -> bool {
 
 impl ProviderConfig {
     /// 判断是否已配置了有效的认证凭据
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：在启动周期任务前先行判断用户是否已输入该服务商的有效密钥，避免空凭据发往云端产生无效 HTTP 报错。
+    /// - **核心优势**：针对不同 DNS 厂商模式匹配聚类，判断高效直接。
     pub fn is_configured(&self) -> bool {
         match self {
             Self::Cloudflare {
@@ -311,63 +315,81 @@ impl ProviderConfig {
                 access_key_id,
                 access_key_secret,
                 ..
-            } => not_empty(access_key_id) && not_empty(access_key_secret),
-            Self::TencentCloud {
-                secret_id,
-                secret_key,
+            }
+            | Self::TencentCloud {
+                secret_id: access_key_id,
+                secret_key: access_key_secret,
             }
             | Self::EdgeOne {
-                secret_id,
-                secret_key,
-            } => not_empty(secret_id) && not_empty(secret_key),
-            Self::HuaweiCloud {
+                secret_id: access_key_id,
+                secret_key: access_key_secret,
+            }
+            | Self::HuaweiCloud {
                 access_key_id,
-                secret_access_key,
+                secret_access_key: access_key_secret,
                 ..
             }
             | Self::BaiduCloud {
                 access_key_id,
-                secret_access_key,
+                secret_access_key: access_key_secret,
             }
             | Self::TrafficRoute {
                 access_key_id,
-                secret_access_key,
-            } => not_empty(access_key_id) && not_empty(secret_access_key),
-            Self::Porkbun {
-                api_key,
-                secret_key,
-            } => not_empty(api_key) && not_empty(secret_key),
-            Self::GoDaddy {
-                api_key,
-                api_secret,
+                secret_access_key: access_key_secret,
+            }
+            | Self::Porkbun {
+                api_key: access_key_id,
+                secret_key: access_key_secret,
+            }
+            | Self::GoDaddy {
+                api_key: access_key_id,
+                api_secret: access_key_secret,
             }
             | Self::Spaceship {
-                api_key,
-                api_secret,
+                api_key: access_key_id,
+                api_secret: access_key_secret,
             }
             | Self::DnsLa {
-                api_id: api_key,
-                api_secret,
-            } => not_empty(api_key) && not_empty(api_secret),
-            Self::ClouDNS {
-                auth_id,
-                auth_password,
-            } => not_empty(auth_id) && not_empty(auth_password),
-            Self::NameCom {
-                username,
-                api_token,
-            } => not_empty(username) && not_empty(api_token),
-            Self::NowCn { id, secret }
-            | Self::Eranet { id, secret }
-            | Self::TNetHk { id, secret } => not_empty(id) && not_empty(secret),
-            Self::Namecheap { password } | Self::Dynadot { password } => not_empty(password),
-            Self::Dynv6 { token } | Self::Vercel { token, .. } => not_empty(token),
-            Self::NameSilo { api_key }
-            | Self::RainYun { api_key, .. }
-            | Self::Gcore { api_key }
-            | Self::NsOne { api_key } => not_empty(api_key),
-            Self::HipmDnsMgr { api_token, .. } => not_empty(api_token),
-            Self::Callback { url, .. } => not_empty(url),
+                api_id: access_key_id,
+                api_secret: access_key_secret,
+            }
+            | Self::ClouDNS {
+                auth_id: access_key_id,
+                auth_password: access_key_secret,
+            }
+            | Self::NameCom {
+                username: access_key_id,
+                api_token: access_key_secret,
+            }
+            | Self::NowCn {
+                id: access_key_id,
+                secret: access_key_secret,
+            }
+            | Self::Eranet {
+                id: access_key_id,
+                secret: access_key_secret,
+            }
+            | Self::TNetHk {
+                id: access_key_id,
+                secret: access_key_secret,
+            } => not_empty(access_key_id) && not_empty(access_key_secret),
+            Self::Namecheap { password }
+            | Self::Dynadot { password }
+            | Self::Dynv6 { token: password }
+            | Self::Vercel {
+                token: password, ..
+            }
+            | Self::NameSilo { api_key: password }
+            | Self::RainYun {
+                api_key: password, ..
+            }
+            | Self::Gcore { api_key: password }
+            | Self::NsOne { api_key: password }
+            | Self::HipmDnsMgr {
+                api_token: password,
+                ..
+            }
+            | Self::Callback { url: password, .. } => not_empty(password),
         }
     }
 }

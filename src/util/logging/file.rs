@@ -4,7 +4,24 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
+/// 文件日志 Appender 配置选项
+#[derive(Debug, Clone)]
+pub struct FileAppenderConfig<P: AsRef<Path>> {
+    /// 日志存放目录
+    pub log_dir: P,
+    /// 主日志文件名 (如 "rddns.log")
+    pub file_name: String,
+    /// 单文件大小上限 (字节)
+    pub max_bytes: u64,
+    /// 最多保留的旧归档日志文件数量
+    pub max_files: usize,
+}
+
 /// 按文件大小自动轮转的文件写入器
+///
+/// # 设计原理
+/// - **实现初衷**：长时间运行的 DDNS 进程会产生持续日志流，若不加以控制会导致磁盘空间爆满。
+/// - **核心优势**：在写入边界自动检查当前文件尺寸，达到阈值立即原子化重命名递增备份（如 `.1`, `.2`），并严格限制最大文件数。
 pub struct SizeRollingWriter {
     log_dir: PathBuf,
     file_name: String,
@@ -15,30 +32,46 @@ pub struct SizeRollingWriter {
 }
 
 impl SizeRollingWriter {
-    /// 创建一个新的基于大小轮转的文件写入器
-    pub fn new(log_dir: &Path, file_name: &str, max_bytes: u64, max_files: usize) -> Result<Self> {
-        if !log_dir.exists() {
-            fs::create_dir_all(log_dir)
-                .with_context(|| format!("创建日志目录失败: {}", log_dir.display()))?;
+    /// 基于配置对象创建新的大小轮转文件写入器
+    ///
+    /// # Errors
+    /// 当日志目录创建失败或日志文件打开失败时返回错误。
+    pub fn with_config<P: AsRef<Path>>(config: FileAppenderConfig<P>) -> Result<Self> {
+        let dir_ref = config.log_dir.as_ref();
+        if !dir_ref.exists() {
+            fs::create_dir_all(dir_ref)
+                .with_context(|| format!("创建日志目录失败: {}", dir_ref.display()))?;
         }
 
         let mut writer = Self {
-            log_dir: log_dir.to_path_buf(),
-            file_name: file_name.to_string(),
-            max_bytes: max_bytes.max(1), // 允许自定义最小字节
-            max_files,
+            log_dir: dir_ref.to_path_buf(),
+            file_name: config.file_name,
+            max_bytes: config.max_bytes.max(1),
+            max_files: config.max_files,
             current_file: None,
             current_size: 0,
         };
 
         writer.open_current_file()?;
 
-        // 如果启动时已有日志文件且已超出大小限制，立即执行一次轮转
         if writer.current_size >= writer.max_bytes {
             writer.rotate()?;
         }
 
         Ok(writer)
+    }
+
+    /// 创建一个新的基于大小轮转的文件写入器
+    ///
+    /// # Errors
+    /// 当日志目录创建失败或日志文件打开失败时返回错误。
+    pub fn new(log_dir: &Path, file_name: &str, max_bytes: u64, max_files: usize) -> Result<Self> {
+        Self::with_config(FileAppenderConfig {
+            log_dir,
+            file_name: file_name.to_string(),
+            max_bytes,
+            max_files,
+        })
     }
 
     /// 获取主日志文件完整路径

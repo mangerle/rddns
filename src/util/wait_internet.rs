@@ -1,8 +1,11 @@
 use log::{info, warn};
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::join;
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
+
+use crate::util::http::create_http_client;
 
 /// 常用高可用 DNS 探测端点 (涵盖 IPv4 与 IPv6 双栈)
 const PROBE_DNS_TARGETS: &[&str] = &[
@@ -21,6 +24,10 @@ const PROBE_HTTP_TARGETS: &[&str] = &[
 ];
 
 /// 快速单次探测网络是否已就绪
+///
+/// # 设计原理
+/// - **实现初衷**：开机自启动时宽带拨号往往存在数秒延迟，若直接同步 DDNS 会由于 DNS 解析失败导致连续抛错。
+/// - **核心优势**：先并发探测 6 个全球顶级 IPv4/IPv6 DNS 的 53 端口（800ms 超时），被拦截时回退极简 HTTP 204 探测。
 pub async fn check_internet_once() -> bool {
     // 1. 并发发起 TCP 端口连接探测 (超时 800ms)
     async fn probe_target(target: &str) -> bool {
@@ -32,7 +39,7 @@ pub async fn check_internet_once() -> bool {
         false
     }
 
-    let (r1, r2, r3, r4, r5, r6) = tokio::join!(
+    let (r1, r2, r3, r4, r5, r6) = join!(
         probe_target(PROBE_DNS_TARGETS[0]),
         probe_target(PROBE_DNS_TARGETS[1]),
         probe_target(PROBE_DNS_TARGETS[2]),
@@ -46,7 +53,7 @@ pub async fn check_internet_once() -> bool {
     }
 
     // 2. 如果 TCP 端口被局域网防火墙阻断，尝试极简 HTTP 探测 (超时 1500ms)
-    let client = match crate::util::http::create_http_client(Duration::from_millis(1500)) {
+    let client = match create_http_client(Duration::from_millis(1500)) {
         Ok(c) => c,
         Err(_) => return false,
     };
@@ -64,10 +71,14 @@ pub async fn check_internet_once() -> bool {
 
 /// 开机等待网络连通
 ///
+/// # 设计原理
+/// - **实现初衷**：在开机启动阶段以优雅轮询阻塞主事件，待广域网就绪后再启动 DDNS 周期任务。
+/// - **核心优势**：首次快速无感知返回，超时兜底确保服务即使断网也能正常启动 Web 控制台。
+///
 /// * `max_wait_secs`: 最大允许等待的总秒数（超时后将退出等待并继续执行）
 /// * `probe_interval_secs`: 每次探测失败后的休眠重试间隔（秒）
 pub async fn wait_for_internet(max_wait_secs: u64, probe_interval_secs: u64) -> bool {
-    let start_time = std::time::Instant::now();
+    let start_time = Instant::now();
     let interval = Duration::from_secs(probe_interval_secs.max(1));
     let max_wait = Duration::from_secs(max_wait_secs);
 
@@ -90,7 +101,7 @@ pub async fn wait_for_internet(max_wait_secs: u64, probe_interval_secs: u64) -> 
             return false;
         }
 
-        tokio::time::sleep(interval).await;
+        sleep(interval).await;
 
         if check_internet_once().await {
             let total_waited = start_time.elapsed().as_secs();
