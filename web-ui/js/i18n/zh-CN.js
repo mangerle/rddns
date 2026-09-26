@@ -273,5 +273,23 @@ export default {
     clearLogs: '清空',
     closeLogs: '关闭 (Esc)',
     logsCleared: '日志已清空'
+  },
+  update: {
+    title: '发现新版本',
+    currentVer: '当前版本:',
+    targetVer: '目标版本:',
+    changelog: '更新日志与新特性:',
+    cancel: '稍后提醒',
+    upgradeNow: '立即自动升级',
+    downloading: '正在下载更新包...',
+    installing: '正在安装与校验...',
+    restarting: '正在平滑重启服务...',
+    stepDownload: '1. 下载安装包并校验数字签名',
+    stepInstall: '2. 程序热替换与权限写入',
+    stepRestart: '3. 平滑重启服务并自动重连',
+    regularImprovements: '常规性能优化与问题修复',
+    restartCountDown: '服务正在平滑重启中，{seconds} 秒后自动尝试重新连接...',
+    upgradeComplete: '升级成功！系统已顺利更新至最新版本。',
+    manualReload: '服务已就绪，立即刷新进入控制台'
   }
 };

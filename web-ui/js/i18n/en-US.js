@@ -273,5 +273,23 @@ export default {
     clearLogs: 'Clear',
     closeLogs: 'Close (Esc)',
     logsCleared: 'Logs cleared'
+  },
+  update: {
+    title: 'New Version Available',
+    currentVer: 'Current Version:',
+    targetVer: 'Target Version:',
+    changelog: 'Changelog & Features:',
+    cancel: 'Remind Me Later',
+    upgradeNow: 'Upgrade Now',
+    downloading: 'Downloading update package...',
+    installing: 'Installing and verifying...',
+    restarting: 'Gracefully restarting service...',
+    stepDownload: '1. Download package and verify signature',
+    stepInstall: '2. In-place binary replacement',
+    stepRestart: '3. Graceful restart and auto-reconnect',
+    regularImprovements: 'Regular improvements and bug fixes',
+    restartCountDown: 'Service is restarting, reconnecting in {seconds}s...',
+    upgradeComplete: 'Upgrade succeeded! The system is now up to date.',
+    manualReload: 'Service Ready, Reload Now'
   }
 };

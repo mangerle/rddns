@@ -34,8 +34,17 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
+// 日志监听器列表
+const logListeners = [];
+export function onLog(callback) {
+  logListeners.push(callback);
+}
+
 // 日志追加与渲染 (经 HTML 转义防范 XSS)
 export function appendLog(entry) {
+  logListeners.forEach(cb => {
+    try { cb(entry); } catch (_) {}
+  });
   const container = document.getElementById('logContainer');
   if (!container) return;
   const div = document.createElement('div');

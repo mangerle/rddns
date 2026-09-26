@@ -44,6 +44,103 @@
     </div>
   </div>
 
+  <!-- 版本升级与进度模态框 -->
+  <div class="modal-backdrop" id="updateModal" style="display:none;" onclick="handleUpdateModalBackdropClick(event)">
+    <div class="modal-content update-modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="icon" style="color:var(--primary); display:flex; align-items:center;">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </span>
+          <span id="updateModalTitle" data-i18n="update.title">发现新版本</span>
+          <span class="version-tag" id="updateModalVersionTag">v0.8.3</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-outline btn-sm" id="closeUpdateModalBtn" onclick="closeUpdateModal()" title="关闭 (Esc)">
+            <span class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </div>
+      
+      <!-- 视图 1：更新详情展示与确认 -->
+      <div class="modal-body update-modal-body" id="updatePromptView">
+        <div class="update-meta-row">
+          <div class="update-ver-compare">
+            <span class="update-ver-label" data-i18n="update.currentVer">当前版本:</span>
+            <span class="update-ver-val" id="updateCurrentVer">v0.8.2</span>
+            <span class="update-ver-arrow">→</span>
+            <span class="update-ver-label" data-i18n="update.targetVer">目标版本:</span>
+            <span class="update-ver-val highlight" id="updateTargetVer">v0.8.3</span>
+          </div>
+        </div>
+        <div class="update-notes-title" data-i18n="update.changelog">更新日志与功能特性:</div>
+        <div class="update-notes-container" id="updateNotesContainer"></div>
+        <div class="update-modal-footer">
+          <button class="btn-outline" onclick="closeUpdateModal()" data-i18n="update.cancel">稍后提醒</button>
+          <button class="btn-primary" id="startUpgradeBtn" onclick="startWebUpgrade()" data-i18n="update.upgradeNow">立即自动升级</button>
+        </div>
+      </div>
+
+      <!-- 视图 2：实时下载与安装进度条 -->
+      <div class="modal-body update-modal-body" id="updateProgressView" style="display:none;">
+        <div class="update-status-header">
+          <div class="update-spinner" id="updateSpinner"></div>
+          <div class="update-status-info">
+            <div class="update-status-title" id="updateStatusTitle" data-i18n="update.downloading">正在下载更新包...</div>
+            <div class="update-status-sub" id="updateStatusSub">准备连接更新服务器...</div>
+          </div>
+        </div>
+
+        <div class="update-progress-wrapper">
+          <div class="update-progress-track">
+            <div class="update-progress-fill" id="updateProgressBar" style="width: 0%;"></div>
+          </div>
+          <div class="update-progress-labels">
+            <span id="updateProgressTransferred">0 MB / 0 MB</span>
+            <span id="updateProgressPercent" style="font-weight:700;">0%</span>
+          </div>
+        </div>
+
+        <div class="update-step-list" id="updateStepList">
+          <div class="update-step-item active" id="stepDownload">
+            <span class="step-dot"></span>
+            <span data-i18n="update.stepDownload">1. 下载安装包并校验数字签名</span>
+          </div>
+          <div class="update-step-item" id="stepInstall">
+            <span class="step-dot"></span>
+            <span data-i18n="update.stepInstall">2. 程序热替换与权限写入</span>
+          </div>
+          <div class="update-step-item" id="stepRestart">
+            <span class="step-dot"></span>
+            <span data-i18n="update.stepRestart">3. 平滑重启服务并自动重连</span>
+          </div>
+        </div>
+
+        <div class="update-modal-footer" id="restartManualAction" style="display:none; justify-content:center; margin-top:14px;">
+          <button class="btn-primary" onclick="window.location.reload()" style="width:100%; justify-content:center;">
+            <span class="icon" style="display:flex; align-items:center;">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </span>
+            <span data-i18n="update.manualReload">服务已就绪，立即刷新进入控制台</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 全屏管理员登录页 -->
   <div id="loginPage" class="auth-page-wrapper" style="display:none;">
     <button class="btn-theme auth-theme-btn" onclick="toggleLanguage()" title="切换语言 / Language" data-i18n-title="common.langToggle" style="right: 70px;">

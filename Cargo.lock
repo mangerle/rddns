@@ -2021,9 +2021,9 @@ dependencies = [
 
 [[package]]
 name = "shipup"
-version = "0.4.2"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3db0af92c80dc960325ce361a25bd2219b49c08acfe33b7ab105aef5917a4d2"
+checksum = "f9585f7b8eabeba39e79d653111a7c189047e18924137e94b6fa25eafeaa0ff9"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",

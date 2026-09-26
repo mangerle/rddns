@@ -6,6 +6,7 @@ import { apiFetch } from './api.js';
 import { initTheme, toggleTheme } from './theme.js';
 import { showToast } from './toast.js';
 import { openLogModal, closeLogModal, clearLogs, handleBackdropClick, initSSE } from './modal.js';
+import { openUpdateModal, normalizeVersion } from './update-modal.js';
 import {
   t,
   initI18n,
@@ -338,28 +339,32 @@ export async function checkAppVersion(isManual = true) {
     showToast(t('common.checkingUpdate') || '正在检查更新...', 'info');
   }
   try {
+    let latestCachedInfo = null;
     const res = await apiFetch('/api/v1/version');
     const json = await res.json();
     if (json.success && json.data) {
       const info = json.data;
+      latestCachedInfo = info;
+      const cleanCurrent = normalizeVersion(info.current_version);
+      const cleanLatest = normalizeVersion(info.latest_version);
+
       const verTextEl = document.getElementById('versionText');
       if (verTextEl) {
-        verTextEl.dataset.version = info.current_version;
-        verTextEl.innerText = t('common.connected', { version: `v${info.current_version}` });
+        verTextEl.dataset.version = cleanCurrent;
+        verTextEl.innerText = t('common.connected', { version: `v${cleanCurrent}` });
       }
       const updateNoticeEl = document.getElementById('updateNotice');
       if (info.has_update) {
         if (updateNoticeEl) {
           updateNoticeEl.style.display = 'block';
-          updateNoticeEl.innerHTML = `<span>${t('common.newVersionFound', { version: `v${info.latest_version}` })}</span>`;
+          updateNoticeEl.innerHTML = `<span>${t('common.newVersionFound', { version: `v${cleanLatest}` })}</span>`;
+          updateNoticeEl.onclick = () => openUpdateModal(info);
         }
         if (isManual) {
-          if (confirm(t('common.newVersionUpgradePrompt', { version: info.latest_version, notes: info.release_notes || 'Regular improvements' }))) {
-            triggerWebUpgrade();
-          }
+          openUpdateModal(info);
         }
       } else if (isManual) {
-        showToast(t('common.latestVersionAlert', { version: info.current_version }), 'success');
+        showToast(t('common.latestVersionAlert', { version: cleanCurrent }), 'success');
       }
     }
   } catch (e) {
@@ -367,19 +372,16 @@ export async function checkAppVersion(isManual = true) {
   }
 }
 
-// 触发在线升级
+// 触发在线升级模态窗口
 export async function triggerWebUpgrade() {
-  if (!confirm(t('common.upgradeConfirm'))) return;
   try {
-    const res = await apiFetch('/api/v1/upgrade', { method: 'POST' });
+    const res = await apiFetch('/api/v1/version');
     const json = await res.json();
-    if (json.success) {
-      showToast(t('common.upgradeSuccess', { message: json.message }), 'success');
-    } else {
-      showToast(t('common.upgradeFailed', { message: json.message }), 'error');
+    if (json.success && json.data) {
+      openUpdateModal(json.data);
     }
   } catch (e) {
-    showToast(t('common.upgradeFailed', { message: e.message }), 'error');
+    showToast(t('common.checkUpdateFailed', { error: e.message }), 'error');
   }
 }
 
