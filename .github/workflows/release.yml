@@ -117,18 +117,64 @@ jobs:
     needs: upload-assets
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 生成 latest.json 更新清单
+      - name: 生成并上传 latest.json 清单
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          python3 .github/scripts/generate_manifest.py
+          python3 - << 'EOF'
+          import os, json, re, urllib.request
 
-      - name: 上传 latest.json 至 Release 附件
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
+          tag = os.environ["TAG_NAME"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+              headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "User-Agent": "shipup-manifest"}
+          )
+          with urllib.request.urlopen(req) as resp:
+              data = json.loads(resp.read().decode("utf-8"))
+
+          asset_map = {a["name"]: a for a in data.get("assets", [])}
+          packages = {}
+
+          for name, asset in asset_map.items():
+              m = re.match(r"^rddns-(.+)\.(zip|tar\.gz)$", name)
+              if not m:
+                  continue
+              target = m.group(1)
+              sha_name = f"rddns-{target}.sha256"
+              if sha_name not in asset_map:
+                  sha_name = f"{name}.sha256"
+                  if sha_name not in asset_map:
+                      continue
+
+              sha_req = urllib.request.Request(
+                  asset_map[sha_name]["browser_download_url"],
+                  headers={"Authorization": f"Bearer {token}", "User-Agent": "shipup-manifest"}
+              )
+              with urllib.request.urlopen(sha_req) as s_resp:
+                  sha_text = s_resp.read().decode("utf-8").strip()
+                  checksum = re.search(r"([a-fA-F0-9]{64})", sha_text).group(1).lower()
+
+              packages[target] = {
+                  "url": asset["browser_download_url"],
+                  "checksum": f"sha256:{checksum}",
+                  "package_type": "archive",
+                  "executable_path": "rddns.exe" if "windows" in target else "rddns",
+                  "size": asset.get("size", 0),
+              }
+
+          manifest = {
+              "version": tag.lstrip("vV"),
+              "notes": data.get("body", ""),
+              "pub_date": data.get("created_at", ""),
+              "packages": packages,
+          }
+
+          with open("latest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2, ensure_ascii=False)
+          EOF
+
           gh release upload "${{ github.ref_name }}" latest.json --clobber
