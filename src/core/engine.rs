@@ -173,8 +173,10 @@ impl DdnsEngine {
 
     /// 评估是否需要向云端发起 DNS 记录同步与比对
     fn evaluate_sync_necessity(params: &SyncEvaluationParams<'_>) -> bool {
-        let ipv4_changed = params.ipv4_opt.is_some() && params.ipv4_opt != params.current_state.last_ipv4;
-        let ipv6_changed = params.ipv6_opt.is_some() && params.ipv6_opt != params.current_state.last_ipv6;
+        let ipv4_changed =
+            params.ipv4_opt.is_some() && params.ipv4_opt != params.current_state.last_ipv4;
+        let ipv6_changed =
+            params.ipv6_opt.is_some() && params.ipv6_opt != params.current_state.last_ipv6;
         let ip_changed = ipv4_changed || ipv6_changed;
 
         let reach_cache_limit = params.current_state.check_counter >= params.app_config.cache_times;
@@ -183,13 +185,15 @@ impl DdnsEngine {
             && params.ipv4_opt.is_some()
             && params.v4_domains.iter().any(|d| {
                 let key = format!("{}:{:?}", d.full_domain(), DnsRecordType::A);
-                params.current_state.synced_domains.get(&key) != params.ipv4_opt.map(|ip| ip.to_string()).as_ref()
+                params.current_state.synced_domains.get(&key)
+                    != params.ipv4_opt.map(|ip| ip.to_string()).as_ref()
             });
         let has_unsynced_v6 = params.task.ipv6.enabled
             && params.ipv6_opt.is_some()
             && params.v6_domains.iter().any(|d| {
                 let key = format!("{}:{:?}", d.full_domain(), DnsRecordType::AAAA);
-                params.current_state.synced_domains.get(&key) != params.ipv6_opt.map(|ip| ip.to_string()).as_ref()
+                params.current_state.synced_domains.get(&key)
+                    != params.ipv6_opt.map(|ip| ip.to_string()).as_ref()
             });
 
         params.force_sync || ip_changed || reach_cache_limit || has_unsynced_v4 || has_unsynced_v6

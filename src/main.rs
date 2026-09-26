@@ -19,7 +19,8 @@ use crate::web::server::WebServer;
 use anyhow::{Context, Result};
 use bcrypt::{DEFAULT_COST, hash};
 use clap::Parser;
-use log::{error, info};
+use log::{error, info, warn};
+use shipup::{check_and_recover_current, confirm_update_success};
 use std::env::{current_dir, current_exe};
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -70,6 +71,10 @@ struct CliArgs {
     /// 检查并自动升级至最新版本
     #[arg(short = 'u', long = "upgrade", default_value_t = false)]
     upgrade: bool,
+
+    /// 内部参数：自更新系统标记
+    #[arg(long = "shipup-restarted", hide = true, default_value_t = false)]
+    shipup_restarted: bool,
 }
 
 /// 智能判定与解析配置文件实际物理路径
@@ -180,6 +185,11 @@ async fn main() -> Result<()> {
     let log_buffer = logging_handle.log_buffer;
     let _log_guard = logging_handle._guard;
 
+    // 0. 执行自更新健康检查与崩溃自愈（连续崩溃超阈值自动回滚）
+    if let Err(e) = check_and_recover_current(2) {
+        warn!("自更新健康状态检查异常: {}", e);
+    }
+
     let args = CliArgs::parse();
 
     info!("==========================================");
@@ -213,6 +223,9 @@ async fn main() -> Result<()> {
 
     let config_manager =
         Arc::new(ConfigManager::load_or_create(config_path).context("加载或初始化配置文件失败")?);
+
+    // 确认自更新成功，清除历史回滚与崩溃观察期状态
+    let _ = confirm_update_success();
 
     if let Some(ref dns_srv) = args.dns {
         set_custom_dns_server(dns_srv.clone());

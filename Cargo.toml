@@ -1,6 +1,6 @@
 [package]
 name = "rddns"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 description = "A high-performance, lightweight, and full-featured Dynamic DNS (DDNS) and notification service written in Rust"
 license = "MIT"
@@ -45,10 +45,8 @@ tempfile = "3.16"
 bcrypt = "0.17"
 tokio-stream = { version = "0.1", features = ["sync"] }
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
-flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-tar = { version = "0.4", default-features = false }
 psl = "2.1"
+shipup = { version = "0.4.2", default-features = false, features = ["async", "archive", "rustls-tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
