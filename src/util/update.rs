@@ -1,15 +1,9 @@
 use anyhow::{Context, Result};
 use log::info;
 use serde::{Deserialize, Serialize};
-use shipup::{UpdateEvent, Updater};
-use std::env;
-use std::process::{Command, exit};
+use shipup::{DownloadedUpdate, RestartOptions, Update, UpdateEvent, Updater, schedule_restart};
 use std::time::Duration;
-use tokio::spawn;
 use tokio::task::spawn_blocking;
-use tokio::time::sleep;
-
-use crate::util::daemon::configure_daemon_command;
 
 /// 版本检查结果信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +93,8 @@ pub async fn check_version() -> Result<VersionInfo> {
 /// # 设计原理
 /// - **实现初衷**：在无包管理器或容器编排的环境下，为各系统平台提供安全的自升级能力。
 /// - **核心优势**：
-///   - 委托 shipup 处理断点续传、SHA-256 完整性校验、防 Zip Slip 解压沙箱与同卷原子替换；
+///   - 委托 shipup 0.5.0 处理断点续传、SHA-256 完整性校验、防 Zip Slip 解压沙箱与同卷原子替换；
+///   - shipup 0.5.0 已实现全链路异步任务堆化，彻底规避 Windows 平台单线程运行时栈溢出（0xc00000fd）；
 ///   - 异步下载、阻塞安装隔离，不阻塞 Tokio 工作线程。
 ///
 /// # Errors
@@ -117,11 +112,22 @@ pub async fn upgrade_self() -> Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("当前已是最新版本 (v{})，无需更新", current_version))?;
 
+    let target_version = update.version().clone();
+    info!("检测到新版本 v{}，正在下载并校验安装包...", target_version);
+
+    let downloaded = download_package(&update).await?;
+    install_package(downloaded).await?;
+
     info!(
-        "检测到新版本 v{}，正在下载并校验安装包...",
-        update.version()
+        "RDDNS 成功更新至最新版本 v{}！请重启程序或服务以使更新完全生效。",
+        target_version
     );
-    let downloaded = update
+    Ok(())
+}
+
+/// 异步下载更新包并执行 SHA-256 与数字签名校验
+async fn download_package(update: &Update) -> Result<DownloadedUpdate> {
+    update
         .download_async(|event| match event {
             UpdateEvent::DownloadProgress {
                 percent: Some(p),
@@ -140,8 +146,11 @@ pub async fn upgrade_self() -> Result<()> {
             _ => {}
         })
         .await
-        .context("下载或校验更新包失败")?;
+        .context("下载或校验更新包失败")
+}
 
+/// 在阻塞工作线程池中执行解压与程序二进制安全替换
+async fn install_package(downloaded: DownloadedUpdate) -> Result<()> {
     info!("更新包校验通过，正在执行程序安全替换...");
     spawn_blocking(move || {
         downloaded.install(|event| {
@@ -152,71 +161,23 @@ pub async fn upgrade_self() -> Result<()> {
     })
     .await
     .context("调度安装任务异常")?
-    .context("执行程序替换失败")?;
-
-    info!(
-        "RDDNS 成功更新至最新版本 v{}！请重启程序或服务以使更新完全生效。",
-        update.version()
-    );
-    Ok(())
+    .context("执行程序替换失败")
 }
 
 /// 重启当前程序进程以加载新升级的二进制文件
 ///
 /// # 设计原理
-/// - **实现初衷**：在热替换二进制文件后平滑拉起新版本进程，自动继承原有启动参数。
-/// - **核心优势**：跨平台兼容（Windows 采用 PowerShell 规避 cmd 转义注入，Unix 采用 sh exec 释放旧端口），并保留 300ms 退出缓冲以确保 Web 响应成功返回。
+/// - **实现初衷**：在热替换二进制文件后平滑拉起新版本进程，避免网络端口冲突与 Web 响应截断。
+/// - **核心优势**：
+///   - 委托 shipup 0.5.0 内置跨平台平滑交接引擎，Windows 下采用轻量稳健的 cmd/ping 守护，Unix 下采用 sh 守护；
+///   - 自动预留 1000ms 启动缓冲释放 9876 端口与系统锁，预留 300ms 退出缓冲保障 Web 响应完整发送；
+///   - 自动剔除 `-u` 与 `--upgrade` 单次触发参数，彻底根除新版本无限自更新死循环与异常秒退。
 ///
 /// # Errors
-/// 当当前程序路径获取失败或派生辅助进程异常时返回错误。
+/// 当外部延迟拉起命令无法派生时返回错误。
 pub fn restart_process() -> Result<()> {
-    let current_exe = env::current_exe().context("获取当前程序路径失败")?;
-    let args: Vec<String> = env::args().skip(1).collect();
-
-    info!("正在重启程序以使更新生效: {}", current_exe.display());
-
-    #[cfg(target_os = "windows")]
-    {
-        let mut launcher = Command::new("powershell");
-        let ps_script = format!(
-            "Start-Sleep -Milliseconds 1000; Start-Process -FilePath '{}' -ArgumentList @({})",
-            current_exe.to_string_lossy().replace('\'', "''"),
-            args.iter()
-                .map(|a| format!("'{}'", a.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-
-        launcher.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            &ps_script,
-        ]);
-        configure_daemon_command(&mut launcher);
-        launcher.spawn().context("派生重启辅助进程失败")?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let mut launcher = Command::new("sh");
-        let mut sh_cmd = format!("sleep 1 && exec \"{}\"", current_exe.to_string_lossy());
-        for arg in &args {
-            sh_cmd.push_str(&format!(" '{}'", arg.replace('\'', "'\\''")));
-        }
-        launcher.args(["-c", &sh_cmd]);
-        configure_daemon_command(&mut launcher);
-        launcher.spawn().context("派生重启辅助进程失败")?;
-    }
-
-    spawn(async {
-        sleep(Duration::from_millis(300)).await;
-        exit(0);
-    });
-
-    Ok(())
+    info!("正在调度平滑重启服务以使更新生效...");
+    schedule_restart(&RestartOptions::new()).context("调度自更新平滑重启服务失败")
 }
 
 #[cfg(test)]
