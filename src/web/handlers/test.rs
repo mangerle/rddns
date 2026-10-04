@@ -5,12 +5,15 @@ use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
+use crate::util::net::is_private_or_loopback;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use url::{Host, Url};
 
 /// 测试 IP 提取器配置请求体
 #[derive(Debug, Deserialize)]
@@ -28,6 +31,47 @@ pub struct TestIpResult {
     pub ipv6: Option<String>,
 }
 
+/// 校验测试目标 URL 是否安全（防范 SSRF 滥用与协议走私）
+fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err(format!(
+            "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
+            trimmed
+        ));
+    }
+    let parsed =
+        Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
+    match parsed.host() {
+        Some(Host::Ipv4(v4)) => {
+            if is_private_or_loopback(&IpAddr::V4(v4)) {
+                return Err(format!(
+                    "出于安全策略，禁止测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址！",
+                    v4
+                ));
+            }
+        }
+        Some(Host::Ipv6(v6)) => {
+            if is_private_or_loopback(&IpAddr::V6(v6)) {
+                return Err(format!(
+                    "出于安全策略，禁止测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址！",
+                    v6
+                ));
+            }
+        }
+        Some(Host::Domain(domain)) => {
+            if domain.trim().eq_ignore_ascii_case("localhost") {
+                return Err("出于安全策略，禁止测试指向 localhost 的地址！".to_string());
+            }
+        }
+        None => return Err("URL 端点缺少有效的主机地址！".to_string()),
+    }
+    Ok(())
+}
+
 /// 测试 IP 提取器在线获取
 pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoResponse {
     let iface = payload.http_interface.as_deref();
@@ -43,20 +87,13 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
         );
     }
 
-    // 2. URL 型 IP 获取强制校验 Scheme 白名单 (仅允许 http:// 或 https://，防范协议走私与 SSRF 滥用)
+    // 2. URL 型 IP 获取强制校验安全限制 (防范协议走私与 SSRF 滥用)
     if config.source_type == IpSourceType::Url {
         for url in &config.url_endpoints {
-            let trimmed = url.trim();
-            if !trimmed.is_empty()
-                && !trimmed.starts_with("http://")
-                && !trimmed.starts_with("https://")
-            {
+            if let Err(err_msg) = validate_safe_url_endpoint(url) {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<TestIpResult>::err(format!(
-                        "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
-                        trimmed
-                    ))),
+                    Json(ApiResponse::<TestIpResult>::err(err_msg)),
                 );
             }
         }
@@ -255,5 +292,38 @@ mod tests {
         // 确保不会返回 BAD_REQUEST
         let res = test_ip_handler(Json(req)).await.into_response();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_test_ip_rejects_ssrf_private_and_loopback_addresses() {
+        let ssrf_targets = vec![
+            "http://127.0.0.1:8080/admin",
+            "http://localhost:3000/",
+            "http://192.168.1.1/router",
+            "http://10.0.0.1/",
+            "http://172.16.0.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]:8080/",
+        ];
+
+        for target in ssrf_targets {
+            let req = TestIpRequest {
+                ip_type: Some("ipv4".to_string()),
+                http_interface: None,
+                config: IpFetchConfig {
+                    enabled: true,
+                    source_type: IpSourceType::Url,
+                    url_endpoints: vec![target.to_string()],
+                    ..Default::default()
+                },
+            };
+            let res = test_ip_handler(Json(req)).await.into_response();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "应拦截 SSRF 目标地址: {}",
+                target
+            );
+        }
     }
 }
