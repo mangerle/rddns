@@ -108,6 +108,7 @@ mod tests {
     use super::*;
     use crate::config::model::{AppConfig, UserAuthConfig};
     use crate::config::storage::ConfigManager;
+    use crate::core::state::StateManager;
     use crate::util::logging::LogBuffer;
     use axum::Router;
     use axum::middleware::from_fn_with_state;
@@ -119,12 +120,13 @@ mod tests {
     async fn test_auth_middleware_blocks_when_no_auth() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.yaml");
+        let config_path = dir.path().join("config.toml");
         let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
         let state = AppState {
             config_manager,
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
+            state_manager: StateManager::new(),
         };
 
         let app = Router::new()
@@ -144,7 +146,7 @@ mod tests {
     async fn test_auth_middleware_ticket_and_header() {
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.yaml");
+        let config_path = dir.path().join("config.toml");
         let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
 
         let hash = bcrypt::hash("admin123", bcrypt::DEFAULT_COST).unwrap();
@@ -162,6 +164,7 @@ mod tests {
             config_manager,
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
+            state_manager: StateManager::new(),
         };
 
         let app = Router::new()

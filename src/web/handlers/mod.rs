@@ -1,14 +1,17 @@
 pub mod auth;
 pub mod config;
 pub mod system;
+pub mod tasks;
 pub mod test;
 
 pub use auth::*;
 pub use config::*;
 pub use system::*;
+pub use tasks::*;
 pub use test::*;
 
 use crate::config::storage::ConfigManager;
+use crate::core::state::StateManager;
 use crate::util::logging::LogBuffer;
 use axum::Json;
 use axum::http::StatusCode;
@@ -24,6 +27,12 @@ pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub trigger_sender: mpsc::Sender<()>,
     pub log_buffer: LogBuffer,
+    /// 任务运行时状态管理器
+    ///
+    /// # 设计原理
+    /// 与 DDNS 引擎共享同一实例（内部为 `Arc<RwLock<..>>`），使前端得以读取
+    /// 结构化运行状态，而不必解析日志文本。
+    pub state_manager: StateManager,
 }
 
 /// 统一 API 响应包装模型
@@ -91,12 +100,16 @@ impl IntoResponse for AppError {
     }
 }
 
-impl<E> From<E> for AppError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
-        let anyhow_err = err.into();
-        Self::internal(format!("{:#}", anyhow_err))
+/// 配置持久化失败统一映射为 500
+///
+/// # 设计原理
+/// 刻意**不实现** `impl<E: Into<anyhow::Error>> From<E> for AppError` 这类
+/// 全泛型转换：它会让任何可转为 `anyhow::Error` 的类型在 `?` 处被隐式
+/// 包装成 500 Internal Server Error，使参数校验失败一类的**业务错误**
+/// 被错误地伪装为服务端故障，掩盖真实原因。
+/// 各调用点应显式 `map_err` 并映射到语义正确的状态码。
+impl From<crate::config::storage::ConfigError> for AppError {
+    fn from(err: crate::config::storage::ConfigError) -> Self {
+        Self::internal(format!("配置读写失败: {}", err))
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::info;
 use std::env;
 use std::process::Command;
 
@@ -35,11 +36,11 @@ pub fn run_as_daemon() -> Result<()> {
 
     let child = cmd.spawn().context("派生后台守护进程失败")?;
 
-    println!("==========================================");
-    println!("RDDNS 已成功在后台静默运行！");
-    println!("后台进程 PID: {}", child.id());
-    println!("请访问 Web 管理界面查看运行状态与实时日志");
-    println!("==========================================");
+    info!("==========================================");
+    info!("RDDNS 已成功在后台静默运行！");
+    info!("后台进程 PID: {}", child.id());
+    info!("请访问 Web 管理界面查看运行状态与实时日志");
+    info!("==========================================");
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use log::{info, warn};
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -63,7 +64,7 @@ pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -> Result<()> {
-    println!("正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
+    info!("正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
     let sch_out = Command::new("schtasks.exe")
         .args([
             "/create",
@@ -108,28 +109,28 @@ fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -
                 "/f",
             ])
             .output();
-        println!("提示: 计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
+        warn!("计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
     }
 
-    println!("正在启动后台守护进程...");
+    info!("正在启动后台守护进程...");
     let mut spawn_cmd = Command::new(exe_path);
     spawn_cmd.args(["-c", &config_path.to_string_lossy(), "-d"]);
     configure_daemon_command(&mut spawn_cmd);
     let _ = spawn_cmd.spawn();
 
-    println!("==========================================");
-    println!("RDDNS 已成功安装并设置为 Windows 开机自启！");
-    println!("服务名称: {}", SERVICE_NAME);
-    println!("运行程序: {}", exe_path.display());
-    println!("配置文件: {}", config_path.display());
-    println!("Web 控制台: http://localhost:9876");
-    println!("==========================================");
+    info!("==========================================");
+    info!("RDDNS 已成功安装并设置为 Windows 开机自启！");
+    info!("服务名称: {}", SERVICE_NAME);
+    info!("运行程序: {}", exe_path.display());
+    info!("配置文件: {}", config_path.display());
+    info!("Web 控制台: http://localhost:9876");
+    info!("==========================================");
     Ok(())
 }
 
 #[cfg(windows)]
 fn uninstall_windows_service() -> Result<()> {
-    println!("正在停止并卸载 Windows 自启服务 [{}]...", SERVICE_NAME);
+    info!("正在停止并卸载 Windows 自启服务 [{}]...", SERVICE_NAME);
     let _ = Command::new("schtasks.exe")
         .args(["/delete", "/tn", SERVICE_NAME, "/f"])
         .output();
@@ -145,30 +146,30 @@ fn uninstall_windows_service() -> Result<()> {
     let _ = Command::new("taskkill.exe")
         .args(["/f", "/im", "rddns.exe"])
         .output();
-    println!("[{}] Windows 自启服务与运行实例已成功清除！", SERVICE_NAME);
+    info!("[{}] Windows 自启服务与运行实例已成功清除！", SERVICE_NAME);
     Ok(())
 }
 
 #[cfg(windows)]
 fn start_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
-    println!("正在启动 [{}] 后台守护进程...", SERVICE_NAME);
+    info!("正在启动 [{}] 后台守护进程...", SERVICE_NAME);
     let mut spawn_cmd = Command::new(exe_path);
     spawn_cmd.args(["-c", cfg_str, "-d"]);
     configure_daemon_command(&mut spawn_cmd);
     spawn_cmd.spawn().context("启动后台守护进程失败")?;
-    println!("[{}] 后台进程已成功启动！", SERVICE_NAME);
+    info!("[{}] 后台进程已成功启动！", SERVICE_NAME);
     Ok(())
 }
 
 #[cfg(windows)]
 fn stop_windows_service() -> Result<()> {
-    println!("正在停止 [{}] 后台守护进程...", SERVICE_NAME);
+    info!("正在停止 [{}] 后台守护进程...", SERVICE_NAME);
     let out = Command::new("taskkill.exe")
         .args(["/f", "/im", "rddns.exe"])
         .output()
         .context("执行 taskkill 停止进程失败")?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    println!("{}", stdout.trim());
+    info!("停止进程输出: {}", stdout.trim());
     Ok(())
 }
 
@@ -182,18 +183,18 @@ fn restart_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
     spawn_cmd.args(["-c", cfg_str, "-d"]);
     configure_daemon_command(&mut spawn_cmd);
     spawn_cmd.spawn().context("重启后台守护进程失败")?;
-    println!("[{}] 后台守护进程已完成重启！", SERVICE_NAME);
+    info!("[{}] 后台守护进程已完成重启！", SERVICE_NAME);
     Ok(())
 }
 
 #[cfg(windows)]
 fn status_windows_service() -> Result<()> {
-    println!("正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
+    info!("正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
     let out = Command::new("tasklist.exe")
         .args(["/fi", "IMAGENAME eq rddns.exe"])
         .output()
         .context("查询进程列表失败")?;
-    println!("{}", String::from_utf8_lossy(&out.stdout));
+    info!("当前进程列表:\n{}", String::from_utf8_lossy(&out.stdout));
 
     let reg_out = Command::new("reg.exe")
         .args([
@@ -205,9 +206,9 @@ fn status_windows_service() -> Result<()> {
         .output();
     if let Ok(r) = reg_out {
         if r.status.success() {
-            println!("开机自启注册表: 已启用");
+            info!("开机自启注册表: 已启用");
         } else {
-            println!("开机自启注册表: 未启用");
+            info!("开机自启注册表: 未启用");
         }
     }
     Ok(())
@@ -239,7 +240,7 @@ fn handle_linux_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 
     match action {
         "install" => {
-            println!("正在生成 systemd 服务配置文件 [{}]...", service_file_path);
+            info!("正在生成 systemd 服务配置文件 [{}]...", service_file_path);
             let service_content = format!(
                 r#"[Unit]
 Description={}
@@ -268,7 +269,7 @@ WantedBy=multi-user.target
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(service_file_path, fs::Permissions::from_mode(0o644));
             }
-            println!("正在重载 systemd 守护进程并启用自启服务...");
+            info!("正在重载 systemd 守护进程并启用自启服务...");
             Command::new("systemctl")
                 .args(["daemon-reload"])
                 .status()
@@ -278,16 +279,16 @@ WantedBy=multi-user.target
                 .status()
                 .context("启用 systemd 服务失败")?;
 
-            println!("==========================================");
-            println!("RDDNS systemd 服务已成功安装并启动！");
-            println!("服务文件: {}", service_file_path);
-            println!("运行程序: {}", exe_path.display());
-            println!("配置文件: {}", config_path.display());
-            println!("可使用 systemctl status rddns 查看服务实时状态");
-            println!("==========================================");
+            info!("==========================================");
+            info!("RDDNS systemd 服务已成功安装并启动！");
+            info!("服务文件: {}", service_file_path);
+            info!("运行程序: {}", exe_path.display());
+            info!("配置文件: {}", config_path.display());
+            info!("可使用 systemctl status rddns 查看服务实时状态");
+            info!("==========================================");
         }
         "uninstall" => {
-            println!("正在停止并卸载 systemd 服务 [{}]...", SERVICE_NAME);
+            info!("正在停止并卸载 systemd 服务 [{}]...", SERVICE_NAME);
             let _ = Command::new("systemctl")
                 .args(["disable", "--now", SERVICE_NAME])
                 .status();
@@ -295,28 +296,28 @@ WantedBy=multi-user.target
                 fs::remove_file(service_file_path).context("删除 systemd 服务文件失败")?;
             }
             let _ = Command::new("systemctl").args(["daemon-reload"]).status();
-            println!("[{}] systemd 服务已成功卸载！", SERVICE_NAME);
+            info!("[{}] systemd 服务已成功卸载！", SERVICE_NAME);
         }
         "start" => {
             Command::new("systemctl")
                 .args(["start", SERVICE_NAME])
                 .status()
                 .context("启动 systemd 服务失败")?;
-            println!("[{}] 服务已启动", SERVICE_NAME);
+            info!("[{}] 服务已启动", SERVICE_NAME);
         }
         "stop" => {
             Command::new("systemctl")
                 .args(["stop", SERVICE_NAME])
                 .status()
                 .context("停止 systemd 服务失败")?;
-            println!("[{}] 服务已停止", SERVICE_NAME);
+            info!("[{}] 服务已停止", SERVICE_NAME);
         }
         "restart" => {
             Command::new("systemctl")
                 .args(["restart", SERVICE_NAME])
                 .status()
                 .context("重启 systemd 服务失败")?;
-            println!("[{}] 服务已重启", SERVICE_NAME);
+            info!("[{}] 服务已重启", SERVICE_NAME);
         }
         "status" => {
             Command::new("systemctl")
@@ -340,7 +341,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 
     match action {
         "install" => {
-            println!("正在生成 launchd 配置文件 [{}]...", plist_path);
+            info!("正在生成 launchd 配置文件 [{}]...", plist_path);
             let plist_content = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -380,10 +381,10 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
                 .status()
                 .context("加载 launchd 服务失败")?;
 
-            println!("==========================================");
-            println!("RDDNS macOS launchd 服务已成功安装并启动！");
-            println!("配置文件: {}", plist_path);
-            println!("==========================================");
+            info!("==========================================");
+            info!("RDDNS macOS launchd 服务已成功安装并启动！");
+            info!("配置文件: {}", plist_path);
+            info!("==========================================");
         }
         "uninstall" => {
             let _ = Command::new("launchctl")
@@ -392,7 +393,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
             if Path::new(plist_path).exists() {
                 fs::remove_file(plist_path).context("删除 launchd plist 文件失败")?;
             }
-            println!("RDDNS macOS launchd 服务已成功卸载！");
+            info!("RDDNS macOS launchd 服务已成功卸载！");
         }
         "start" => {
             Command::new("launchctl")
