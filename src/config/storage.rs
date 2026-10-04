@@ -17,10 +17,19 @@ use tokio::task::spawn_blocking;
 pub enum ConfigError {
     #[error("配置文件 I/O 操作失败: {0}")]
     Io(#[from] IoError),
-    #[error("YAML 序列化/反序列化错误: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    #[error("TOML 反序列化错误: {0}")]
+    TomlDe(#[from] toml::de::Error),
+    #[error("TOML 序列化错误: {0}")]
+    TomlSer(#[from] toml::ser::Error),
     #[error("原子替换临时文件错误: {0}")]
     TempFile(String),
+    /// 配置正被另一处异步更新持有写锁
+    ///
+    /// # 设计原理
+    /// 独立于`TempFile` 变体，使调用方能明确区分「磁盘/序列化故障」与
+    /// 「并发写锁争用」两类根因，避免排障时被错误文案误导。
+    #[error("配置正被其他更新操作锁定，请改用 modify_config_async 或稍后重试")]
+    Locked,
 }
 
 /// 配置管理器（支持原子写入持久化与 Tokio watch 热广播）
@@ -50,7 +59,7 @@ impl ConfigManager {
         let config = if path.exists() {
             info!("正在加载配置文件: {}", path.display());
             let content = fs::read_to_string(&path)?;
-            let conf: AppConfig = serde_yaml::from_str(&content)?;
+            let conf: AppConfig = toml::from_str(&content)?;
             conf
         } else {
             info!("配置文件不存在，创建默认配置: {}", path.display());
@@ -102,22 +111,31 @@ impl ConfigManager {
         let _ = self.sender.send(new_arc);
     }
 
-    /// 在持有写锁的情况下原子修改并持久化配置
+    /// 在持有写锁的情况下原子修改并持久化配置（同步版本）
+    ///
+    /// # 适用场景
+    /// 仅限**启动期**等确定无并发写入的路径（如 `--reset-password` 命令行重置）。
+    /// 运行期的 Web API 写入必须使用 [`Self::modify_config_async`]，否则
+    /// 会在锁被占用时直接返回 [`ConfigError::Locked`]。
+    ///
+    /// # 设计原理
+    /// 同步版本内联执行磁盘 IO，故在异步上下文中调用时**不会**阻塞事件循环，
+    /// 而是以快速失败方式避让——这既是性能考量，也是避免阻塞 Tokio 工作线程
+    /// 的必要设计。
     ///
     /// # Errors
-    /// 当临时文件生成失败、磁盘写入出错或闭包逻辑校验失败时返回错误。
+    /// - 当临时文件生成失败、磁盘写入出错或闭包逻辑校验失败时返回错误；
+    /// - 在异步上下文中且写锁已被占用时返回 [`ConfigError::Locked`]。
     pub fn modify_config<F, E>(&self, f: F) -> Result<Arc<AppConfig>, E>
     where
         F: FnOnce(&AppConfig) -> Result<AppConfig, E>,
         E: From<ConfigError>,
     {
         let _sync_guard = match Handle::try_current() {
-            Ok(_) => self.async_write_lock.try_lock().map_err(|_| {
-                ConfigError::TempFile(
-                    "配置文件正被异步更新锁定，请在异步上下文中调用 modify_config_async"
-                        .to_string(),
-                )
-            })?,
+            Ok(_) => self
+                .async_write_lock
+                .try_lock()
+                .map_err(|_| ConfigError::Locked)?,
             Err(_) => self.async_write_lock.blocking_lock(),
         };
 
@@ -177,12 +195,12 @@ impl ConfigManager {
         let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent_dir)?;
 
-        let yaml_str = serde_yaml::to_string(config)?;
+        let toml_str = toml::to_string_pretty(config)?;
 
         let mut temp_file = NamedTempFile::new_in(parent_dir)
             .map_err(|e| ConfigError::TempFile(format!("创建临时文件失败: {}", e)))?;
 
-        temp_file.write_all(yaml_str.as_bytes())?;
+        temp_file.write_all(toml_str.as_bytes())?;
         temp_file.flush()?;
         temp_file.as_file().sync_all()?;
 
@@ -203,7 +221,7 @@ mod tests {
     #[test]
     fn test_atomic_save_and_load() {
         let dir = tempdir().unwrap();
-        let config_file = dir.path().join("test_config.yaml");
+        let config_file = dir.path().join("test_config.toml");
 
         let manager = ConfigManager::load_or_create(config_file.clone()).unwrap();
         let initial_conf = manager.get_config();
@@ -220,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn test_modify_config_async() {
         let dir = tempdir().unwrap();
-        let config_file = dir.path().join("test_async_config.yaml");
+        let config_file = dir.path().join("test_async_config.toml");
 
         let manager = ConfigManager::load_or_create(config_file.clone()).unwrap();
         let updated_arc = manager
@@ -240,9 +258,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_modify_config_reports_lock_contention_distinctly() {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("test_lock_contention.toml");
+
+        let manager = ConfigManager::load_or_create(config_file).unwrap();
+
+        // 先抢占异步写锁，模拟并发写入场景
+        let async_guard = manager.async_write_lock.lock().await;
+
+        // 同步版本在锁被占用时应返回专用的 Locked 变体，
+        // 而非语义错误的 TempFile，避免排障时被错误文案误导
+        let result: Result<_, ConfigError> = manager.modify_config(|conf| Ok(conf.clone()));
+
+        match result {
+            Err(ConfigError::Locked) => {}
+            Err(other) => panic!("应返回 Locked 变体，实际得到: {}", other),
+            Ok(_) => panic!("锁被占用时同步修改应当失败"),
+        }
+
+        drop(async_guard);
+    }
+
+    #[test]
+    fn test_config_error_variants_are_distinguishable() {
+        // 锁争用与磁盘故障必须能被调用方区分
+        let locked = ConfigError::Locked;
+        let temp = ConfigError::TempFile("磁盘写入失败".to_string());
+        assert_ne!(locked.to_string(), temp.to_string());
+        assert!(locked.to_string().contains("锁定"));
+        assert!(temp.to_string().contains("临时文件"));
+    }
+
+    #[tokio::test]
     async fn test_modify_config_async_concurrency_no_lost_update() {
         let dir = tempdir().unwrap();
-        let config_file = dir.path().join("test_concurrent_async_config.yaml");
+        let config_file = dir.path().join("test_concurrent_async_config.toml");
 
         let manager = Arc::new(ConfigManager::load_or_create(config_file.clone()).unwrap());
 
@@ -269,5 +320,15 @@ mod tests {
 
         let reloaded = ConfigManager::load_or_create(config_file).unwrap();
         assert_eq!(reloaded.get_config().interval_secs, 400);
+    }
+
+    #[test]
+    fn test_app_config_toml_roundtrip() {
+        let default_conf = AppConfig::default();
+        let toml_str =
+            toml::to_string_pretty(&default_conf).expect("默认配置序列化为 TOML 必须成功");
+        let parsed_conf: AppConfig =
+            toml::from_str(&toml_str).expect("从生成的 TOML 反序列化必须成功");
+        assert_eq!(default_conf, parsed_conf);
     }
 }

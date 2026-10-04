@@ -21,21 +21,21 @@ pub struct AppConfig {
     #[serde(default = "default_not_allow_wan_access")]
     pub not_allow_wan_access: bool,
 
-    /// Web 管理员登录凭证
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth: Option<UserAuthConfig>,
-
-    /// DNS 解析任务列表
-    #[serde(default)]
-    pub dns_tasks: Vec<DnsTaskConfig>,
-
     /// 自定义公共 DNS 递归解析服务器 (如 "223.5.5.5", "1.1.1.1:53")，用于防 Local DNS 缓存污染
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dns_server: Option<String>,
 
+    /// Web 管理员登录凭证
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<UserAuthConfig>,
+
     /// 通知渠道配置
     #[serde(default)]
     pub notifications: NotificationConfig,
+
+    /// DNS 解析任务列表
+    #[serde(default)]
+    pub dns_tasks: Vec<DnsTaskConfig>,
 }
 
 fn default_listen_port() -> u16 {
