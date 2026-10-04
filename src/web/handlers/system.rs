@@ -124,8 +124,12 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
 mod tests {
     use super::*;
 
+    // 串行化涉及全局静态原子标志位的单元测试，防止并发测试竞态
+    static TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn test_trigger_upgrade_concurrency_lock() {
+        let _guard = TEST_MUTEX.lock().await;
         IS_UPGRADING.store(true, Ordering::SeqCst);
         let resp = trigger_upgrade_handler().await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
@@ -133,8 +137,12 @@ mod tests {
         IS_UPGRADING.store(false, Ordering::SeqCst);
     }
 
-    #[test]
-    fn test_upgrade_lock_guard_raii_release() {
+    #[tokio::test]
+    async fn test_upgrade_lock_guard_raii_release() {
+        let _guard = TEST_MUTEX.lock().await;
+        // 确保初始状态已复位
+        IS_UPGRADING.store(false, Ordering::SeqCst);
+
         // 初始状态下应能成功获取锁
         let first_guard = UpgradeLockGuard::try_acquire();
         assert!(first_guard.is_some(), "应当成功获取首次更新锁");
@@ -149,5 +157,9 @@ mod tests {
         // 释放后应当能再次成功获取锁
         let third_guard = UpgradeLockGuard::try_acquire();
         assert!(third_guard.is_some(), "RAII 守卫释放后应可重新获取更新锁");
+
+        // 清理状态
+        drop(third_guard);
+        IS_UPGRADING.store(false, Ordering::SeqCst);
     }
 }

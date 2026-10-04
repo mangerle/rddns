@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
@@ -7,7 +8,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const DEFAULT_ALIDNS_ENDPOINT: &str = "https://alidns.aliyuncs.com";
 
@@ -35,8 +35,8 @@ impl AliDnsProvider {
             .filter(|e| !e.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_ALIDNS_ENDPOINT.to_string());
 
-        let client =
-            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
+        // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             client,
@@ -118,6 +118,128 @@ impl AliDnsProvider {
         let parsed: T = serde_json::from_str(&body_text)?;
         Ok(parsed)
     }
+
+    /// 获取域名自定义参数中指定的解析线路
+    fn resolve_line(domain: &ParsedDomain) -> &str {
+        domain
+            .custom_params
+            .get("Line")
+            .or_else(|| domain.custom_params.get("line"))
+            .map(|s| s.as_str())
+            .unwrap_or("default")
+    }
+}
+
+#[async_trait]
+impl RecordOps for AliDnsProvider {
+    fn provider_name(&self) -> &'static str {
+        "阿里云 (AliDNS)"
+    }
+
+    /// 查询现有解析记录列表 (使用 DescribeSubDomainRecords 精确检索，规避 20 条记录的分页截断)
+    async fn list_records(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let rr = domain.sub_domain_or_at();
+        let record_line = Self::resolve_line(domain);
+
+        let list_resp: AliDescribeRecordsResponse = self
+            .request_pop_api(
+                "DescribeSubDomainRecords",
+                vec![
+                    ("SubDomain", full_domain),
+                    ("Type", record_type.to_string()),
+                ],
+            )
+            .await?;
+
+        let records = list_resp
+            .domain_records
+            .and_then(|dr| dr.record)
+            .unwrap_or_default();
+
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                let rr_match = r.rr.eq_ignore_ascii_case(rr);
+                let type_match = r.record_type.eq_ignore_ascii_case(&record_type.to_string());
+                let line_match = if let Some(ref l) = r.line {
+                    l.eq_ignore_ascii_case(record_line)
+                } else {
+                    record_line.eq_ignore_ascii_case("default")
+                };
+                rr_match && type_match && line_match
+            })
+            .map(|r| RemoteRecord::new(r.record_id, r.value))
+            .collect();
+
+        Ok(matched)
+    }
+
+    /// 新增解析记录
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let rr = domain.sub_domain_or_at().to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let record_line = Self::resolve_line(domain).to_string();
+
+        let _: serde_json::Value = self
+            .request_pop_api(
+                "AddDomainRecord",
+                vec![
+                    ("DomainName", zone.to_string()),
+                    ("RR", rr),
+                    ("Type", record_type.to_string()),
+                    ("Value", ip.to_string()),
+                    ("TTL", ttl_val.to_string()),
+                    ("Line", record_line),
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// 更新既有解析记录
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let rr = domain.sub_domain_or_at().to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let record_line = Self::resolve_line(domain).to_string();
+
+        let _: serde_json::Value = self
+            .request_pop_api(
+                "UpdateDomainRecord",
+                vec![
+                    ("RecordId", record_id.to_string()),
+                    ("RR", rr),
+                    ("Type", record_type.to_string()),
+                    ("Value", ip.to_string()),
+                    ("TTL", ttl_val.to_string()),
+                    ("Line", record_line),
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -133,100 +255,7 @@ impl DnsProvider for AliDnsProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let rr = domain.sub_domain_or_at().to_string();
-        let root_domain = domain.root_domain.clone();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let record_line = domain
-            .custom_params
-            .get("Line")
-            .or_else(|| domain.custom_params.get("line"))
-            .cloned()
-            .unwrap_or_else(|| "default".to_string());
-
-        // 1. 查询现有解析记录列表 (使用 DescribeSubDomainRecords 精确检索，规避 20 条记录的分页截断)
-        let list_resp: AliDescribeRecordsResponse = self
-            .request_pop_api(
-                "DescribeSubDomainRecords",
-                vec![
-                    ("SubDomain", full_domain.clone()),
-                    ("Type", record_type.to_string()),
-                ],
-            )
-            .await?;
-
-        let records = list_resp
-            .domain_records
-            .and_then(|dr| dr.record)
-            .unwrap_or_default();
-
-        // 找到 RR、Type 与 Line 匹配的记录
-        let matched_record = records.into_iter().find(|r| {
-            let rr_match = r.rr.eq_ignore_ascii_case(&rr);
-            let type_match = r.record_type.eq_ignore_ascii_case(&record_type.to_string());
-            let line_match = if let Some(ref l) = r.line {
-                l.eq_ignore_ascii_case(&record_line)
-            } else {
-                record_line.eq_ignore_ascii_case("default")
-            };
-            rr_match && type_match && line_match
-        });
-
-        if let Some(existing) = matched_record {
-            if existing.value == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录
-            let _: serde_json::Value = self
-                .request_pop_api(
-                    "UpdateDomainRecord",
-                    vec![
-                        ("RecordId", existing.record_id),
-                        ("RR", rr),
-                        ("Type", record_type.to_string()),
-                        ("Value", target_ip_str.clone()),
-                        ("TTL", ttl_val.to_string()),
-                        ("Line", record_line),
-                    ],
-                )
-                .await?;
-
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 新增记录
-            let _: serde_json::Value = self
-                .request_pop_api(
-                    "AddDomainRecord",
-                    vec![
-                        ("DomainName", root_domain),
-                        ("RR", rr),
-                        ("Type", record_type.to_string()),
-                        ("Value", target_ip_str.clone()),
-                        ("TTL", ttl_val.to_string()),
-                        ("Line", record_line),
-                    ],
-                )
-                .await?;
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 
@@ -303,5 +332,33 @@ mod tests {
         assert_eq!(records[0].record_type, "A");
         assert_eq!(records[0].value, "1.2.3.4");
         assert_eq!(records[0].line.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn test_resolve_line_custom_params() {
+        use std::collections::HashMap;
+
+        let mut domain = ParsedDomain {
+            raw: "home.example.com".to_string(),
+            root_domain: "example.com".to_string(),
+            sub_domain: "home".to_string(),
+            custom_params: HashMap::new(),
+        };
+
+        // 默认情况回退为 default
+        assert_eq!(AliDnsProvider::resolve_line(&domain), "default");
+
+        // 大写 Line 参数识别
+        domain
+            .custom_params
+            .insert("Line".to_string(), "telecom".to_string());
+        assert_eq!(AliDnsProvider::resolve_line(&domain), "telecom");
+
+        // 小写 line 参数识别
+        domain.custom_params.remove("Line");
+        domain
+            .custom_params
+            .insert("line".to_string(), "unicom".to_string());
+        assert_eq!(AliDnsProvider::resolve_line(&domain), "unicom");
     }
 }

@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -35,6 +36,160 @@ impl NameSiloProvider {
             .map(|c| c == "300")
             .unwrap_or(false)
     }
+
+    /// 解析 NameSilo 所需的主机记录名 (@ 映射为空字符串)
+    fn resolve_sub_host(domain: &ParsedDomain) -> &str {
+        if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+            ""
+        } else {
+            &domain.sub_domain
+        }
+    }
+}
+
+#[async_trait]
+impl RecordOps for NameSiloProvider {
+    fn provider_name(&self) -> &'static str {
+        "NameSilo"
+    }
+
+    /// 查询现有解析记录列表
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let list_url = format!("{}/dnsListRecords", NAMESILO_API_BASE);
+        let list_resp = self
+            .client
+            .get(&list_url)
+            .query(&[
+                ("version", "1"),
+                ("type", "xml"),
+                ("key", &self.api_key),
+                ("domain", zone),
+            ])
+            .send()
+            .await?;
+        let list_xml = list_resp.text().await?;
+
+        if !Self::is_success_code(&list_xml) {
+            let detail = Self::extract_xml_tag(&list_xml, "detail")
+                .unwrap_or_else(|| "查询 NameSilo 解析记录失败".to_string());
+            return Err(DnsProviderError::ApiError {
+                code: "NameSiloQueryError".to_string(),
+                message: detail,
+            });
+        }
+
+        let mut matched = Vec::new();
+        let items: Vec<&str> = list_xml.split("<resource_record>").skip(1).collect();
+        for item in items {
+            let block = item.split("</resource_record>").next().unwrap_or("");
+            let rec_host = Self::extract_xml_tag(block, "host").unwrap_or_default();
+            let rec_type = Self::extract_xml_tag(block, "type").unwrap_or_default();
+            let rec_val = Self::extract_xml_tag(block, "value").unwrap_or_default();
+            let rec_id = Self::extract_xml_tag(block, "record_id").unwrap_or_default();
+
+            if rec_host.eq_ignore_ascii_case(&full_domain)
+                && rec_type.eq_ignore_ascii_case(&record_type.to_string())
+            {
+                matched.push(RemoteRecord::new(rec_id, rec_val));
+            }
+        }
+
+        Ok(matched)
+    }
+
+    /// 新增解析记录
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub_host = Self::resolve_sub_host(domain);
+        let ttl_val = ttl.unwrap_or(3600).max(3600).to_string();
+        let rec_type_str = record_type.to_string();
+        let target_ip_str = ip.to_string();
+
+        let add_url = format!("{}/dnsAddRecord", NAMESILO_API_BASE);
+        let add_resp = self
+            .client
+            .get(&add_url)
+            .query(&[
+                ("version", "1"),
+                ("type", "xml"),
+                ("key", &self.api_key),
+                ("domain", zone),
+                ("rrhost", sub_host),
+                ("rrtype", &rec_type_str),
+                ("rrvalue", &target_ip_str),
+                ("rrttl", &ttl_val),
+            ])
+            .send()
+            .await?;
+        let add_xml = add_resp.text().await?;
+
+        if Self::is_success_code(&add_xml) {
+            Ok(())
+        } else {
+            let detail = Self::extract_xml_tag(&add_xml, "detail")
+                .unwrap_or_else(|| "新增 NameSilo 记录失败".to_string());
+            Err(DnsProviderError::ApiError {
+                code: "NameSiloAddError".to_string(),
+                message: detail,
+            })
+        }
+    }
+
+    /// 更新既有解析记录
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        _record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub_host = Self::resolve_sub_host(domain);
+        let ttl_val = ttl.unwrap_or(3600).max(3600).to_string();
+        let target_ip_str = ip.to_string();
+
+        let update_url = format!("{}/dnsUpdateRecord", NAMESILO_API_BASE);
+        let update_resp = self
+            .client
+            .get(&update_url)
+            .query(&[
+                ("version", "1"),
+                ("type", "xml"),
+                ("key", &self.api_key),
+                ("domain", zone),
+                ("rrid", record_id),
+                ("rrhost", sub_host),
+                ("rrvalue", &target_ip_str),
+                ("rrttl", &ttl_val),
+            ])
+            .send()
+            .await?;
+        let update_xml = update_resp.text().await?;
+
+        if Self::is_success_code(&update_xml) {
+            Ok(())
+        } else {
+            let detail = Self::extract_xml_tag(&update_xml, "detail")
+                .unwrap_or_else(|| "更新 NameSilo 记录失败".to_string());
+            Err(DnsProviderError::ApiError {
+                code: "NameSiloUpdateError".to_string(),
+                message: detail,
+            })
+        }
+    }
 }
 
 #[async_trait]
@@ -50,141 +205,43 @@ impl DnsProvider for NameSiloProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(3600).max(3600).to_string(); // NameSilo 最低 TTL 常见为 3600
+        sync_record_via(self, domain, record_type, ip, ttl).await
+    }
+}
 
-        let sub_host = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
-            ""
-        } else {
-            &domain.sub_domain
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_xml_tag() {
+        let xml = "<namesilo><code>300</code><detail>success</detail></namesilo>";
+        assert_eq!(
+            NameSiloProvider::extract_xml_tag(xml, "code"),
+            Some("300".to_string())
+        );
+        assert_eq!(
+            NameSiloProvider::extract_xml_tag(xml, "detail"),
+            Some("success".to_string())
+        );
+        assert_eq!(NameSiloProvider::extract_xml_tag(xml, "notfound"), None);
+        assert!(NameSiloProvider::is_success_code(xml));
+    }
+
+    #[test]
+    fn test_resolve_sub_host() {
+        let mut domain = ParsedDomain {
+            raw: "sub.example.com".to_string(),
+            root_domain: "example.com".to_string(),
+            sub_domain: "sub".to_string(),
+            custom_params: std::collections::HashMap::new(),
         };
+        assert_eq!(NameSiloProvider::resolve_sub_host(&domain), "sub");
 
-        // 1. 查询现有解析记录
-        let list_url = format!("{}/dnsListRecords", NAMESILO_API_BASE);
-        let list_resp = self
-            .client
-            .get(&list_url)
-            .query(&[
-                ("version", "1"),
-                ("type", "xml"),
-                ("key", &self.api_key),
-                ("domain", &domain.root_domain),
-            ])
-            .send()
-            .await?;
-        let list_xml = list_resp.text().await?;
+        domain.sub_domain = "@".to_string();
+        assert_eq!(NameSiloProvider::resolve_sub_host(&domain), "");
 
-        if !Self::is_success_code(&list_xml) {
-            let detail = Self::extract_xml_tag(&list_xml, "detail")
-                .unwrap_or_else(|| "查询 NameSilo 解析记录失败".to_string());
-            return Err(DnsProviderError::ApiError {
-                code: "NameSiloQueryError".to_string(),
-                message: detail,
-            });
-        }
-
-        // 解析 <resource_record> 列表
-        let mut matched_record_id: Option<String> = None;
-        let mut current_value: Option<String> = None;
-
-        let items: Vec<&str> = list_xml.split("<resource_record>").skip(1).collect();
-        for item in items {
-            let block = item.split("</resource_record>").next().unwrap_or("");
-            let rec_host = Self::extract_xml_tag(block, "host").unwrap_or_default();
-            let rec_type = Self::extract_xml_tag(block, "type").unwrap_or_default();
-            let rec_val = Self::extract_xml_tag(block, "value").unwrap_or_default();
-            let rec_id = Self::extract_xml_tag(block, "record_id").unwrap_or_default();
-
-            if rec_host.eq_ignore_ascii_case(&full_domain)
-                && rec_type.eq_ignore_ascii_case(&record_type.to_string())
-            {
-                matched_record_id = Some(rec_id);
-                current_value = Some(rec_val);
-                break;
-            }
-        }
-
-        if let Some(record_id) = matched_record_id {
-            if current_value.as_deref() == Some(&target_ip_str) {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录
-            let update_url = format!("{}/dnsUpdateRecord", NAMESILO_API_BASE);
-            let update_resp = self
-                .client
-                .get(&update_url)
-                .query(&[
-                    ("version", "1"),
-                    ("type", "xml"),
-                    ("key", &self.api_key),
-                    ("domain", &domain.root_domain),
-                    ("rrid", &record_id),
-                    ("rrhost", sub_host),
-                    ("rrvalue", &target_ip_str),
-                    ("rrttl", &ttl_val),
-                ])
-                .send()
-                .await?;
-            let update_xml = update_resp.text().await?;
-
-            if Self::is_success_code(&update_xml) {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let detail = Self::extract_xml_tag(&update_xml, "detail")
-                    .unwrap_or_else(|| "更新 NameSilo 记录失败".to_string());
-                Err(DnsProviderError::ApiError {
-                    code: "NameSiloUpdateError".to_string(),
-                    message: detail,
-                })
-            }
-        } else {
-            // 创建记录
-            let add_url = format!("{}/dnsAddRecord", NAMESILO_API_BASE);
-            let rec_type_str = record_type.to_string();
-            let add_resp = self
-                .client
-                .get(&add_url)
-                .query(&[
-                    ("version", "1"),
-                    ("type", "xml"),
-                    ("key", &self.api_key),
-                    ("domain", &domain.root_domain),
-                    ("rrhost", sub_host),
-                    ("rrtype", &rec_type_str),
-                    ("rrvalue", &target_ip_str),
-                    ("rrttl", &ttl_val),
-                ])
-                .send()
-                .await?;
-            let add_xml = add_resp.text().await?;
-
-            if Self::is_success_code(&add_xml) {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let detail = Self::extract_xml_tag(&add_xml, "detail")
-                    .unwrap_or_else(|| "新增 NameSilo 记录失败".to_string());
-                Err(DnsProviderError::ApiError {
-                    code: "NameSiloAddError".to_string(),
-                    message: detail,
-                })
-            }
-        }
+        domain.sub_domain = "".to_string();
+        assert_eq!(NameSiloProvider::resolve_sub_host(&domain), "");
     }
 }

@@ -1,13 +1,12 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
-use crate::util::http::create_task_http_client;
+use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
 use log::info;
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
-use std::time::Duration;
 
 const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
     host: "teo.tencentcloudapi.com",
@@ -132,7 +131,7 @@ impl TencentEoProvider {
     ///
     /// # Errors
     ///
-    /// 当 SecretId 或 SecretKey 为空，或构建底层 HTTP 客户端失败时返回 [`DnsProviderError`]。
+    /// 当 SecretId 或 SecretKey 为空时返回 [`DnsProviderError::MissingCredentials`]。
     pub fn new(
         secret_id: String,
         secret_key: String,
@@ -144,7 +143,8 @@ impl TencentEoProvider {
             ));
         }
 
-        let client = create_task_http_client(http_interface, Duration::from_secs(15))?;
+        // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
+        let client = create_default_dns_client(http_interface);
 
         Ok(Self {
             tc3: Tc3Client::new(client, secret_id, secret_key, TEO_ENDPOINT),

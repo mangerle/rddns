@@ -6,13 +6,14 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::IpAddr;
-use std::time::Duration;
 
 pub const DEFAULT_HIPM_ENDPOINT: &str = "https://dnsmgr.example.com";
 
 /// HiPM DNSMgr 驱动提供商
 pub struct HipmDnsMgrProvider {
     client: Client,
+    /// 逐请求携带的鉴权头（含敏感凭据，禁止写入日志）
+    headers: HeaderMap,
     endpoint: String,
 }
 
@@ -68,15 +69,19 @@ impl HipmDnsMgrProvider {
         auth_val.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_val);
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .default_headers(headers)
-            .build()?;
+        // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             client,
+            headers,
             endpoint: trimmed_base,
         })
+    }
+
+    /// 构造携带鉴权头的请求
+    fn build_headers(&self) -> HeaderMap {
+        self.headers.clone()
     }
 
     /// 发送请求并校验 code == 0
@@ -93,7 +98,10 @@ impl HipmDnsMgrProvider {
         };
         let url = format!("{}/api{}", self.endpoint, clean_path);
 
-        let mut req = self.client.request(method, &url);
+        let mut req = self
+            .client
+            .request(method, &url)
+            .headers(self.build_headers());
         if let Some(b) = body {
             req = req.json(&b);
         }

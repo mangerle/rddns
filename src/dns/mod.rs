@@ -17,6 +17,7 @@ mod namecheap;
 mod namesilo;
 mod nowcn;
 mod nsone;
+pub mod ops;
 mod porkbun;
 mod rainyun;
 mod spaceship;

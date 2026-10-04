@@ -5,13 +5,14 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
-use std::time::Duration;
 
 const NSONE_API_ENDPOINT: &str = "https://api.nsone.net/v1/zones";
 
 /// IBM NS1 Connect DNS 提供商
 pub struct NsOneProvider {
     client: Client,
+    /// 逐请求携带的鉴权头（含敏感凭据，禁止写入日志）
+    headers: HeaderMap,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,26 +49,37 @@ impl NsOneProvider {
             ));
         }
 
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        // 凭据不固化进 Client，而是逐请求通过请求头携带，
+        // 以便 HTTP Client 可安全地放入全局连接池缓存跨任务复用
         let mut auth_val = HeaderValue::from_str(api_key.trim()).map_err(|e| {
             DnsProviderError::MissingCredentials(format!("无效的 NS1 API Key: {}", e))
         })?;
         auth_val.set_sensitive(true);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert("X-NSONE-Key", auth_val);
 
-        let client = crate::util::http::create_task_http_client_builder(http_interface)
-            .timeout(Duration::from_secs(15))
-            .default_headers(headers)
-            .build()?;
+        // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
-        Ok(Self { client })
+        Ok(Self { client, headers })
+    }
+
+    /// 构造携带鉴权头的请求
+    fn build_headers(&self) -> HeaderMap {
+        self.headers.clone()
     }
 
     /// 检查 Zone 是否存在
     async fn check_zone(&self, root_domain: &str) -> Result<(), DnsProviderError> {
         let url = format!("{}/{}?records=false", NSONE_API_ENDPOINT, root_domain);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.build_headers())
+            .send()
+            .await?;
 
         if resp.status() == StatusCode::NOT_FOUND {
             return Err(DnsProviderError::ZoneNotFound(format!(
@@ -99,7 +111,12 @@ impl NsOneProvider {
             "{}/{}/{}/{}?records=false",
             NSONE_API_ENDPOINT, root_domain, full_domain, record_type
         );
-        let resp = self.client.get(&url).send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.build_headers())
+            .send()
+            .await?;
 
         let status = resp.status();
         if status == StatusCode::NOT_FOUND {
@@ -178,7 +195,13 @@ impl DnsProvider for NsOneProvider {
                 NSONE_API_ENDPOINT, domain.root_domain, full_domain, record_type
             );
 
-            let resp = self.client.post(&url).json(&req_payload).send().await?;
+            let resp = self
+                .client
+                .post(&url)
+                .headers(self.build_headers())
+                .json(&req_payload)
+                .send()
+                .await?;
             let status = resp.status();
             let body = resp.text().await?;
 
@@ -202,7 +225,13 @@ impl DnsProvider for NsOneProvider {
                 NSONE_API_ENDPOINT, domain.root_domain, full_domain, record_type
             );
 
-            let resp = self.client.put(&url).json(&req_payload).send().await?;
+            let resp = self
+                .client
+                .put(&url)
+                .headers(self.build_headers())
+                .json(&req_payload)
+                .send()
+                .await?;
             let status = resp.status();
             let body = resp.text().await?;
 

@@ -1,6 +1,8 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
+use log::{info, warn};
 use parking_lot::RwLock;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
@@ -9,9 +11,11 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
+
+/// Cloudflare 以TTL=1 表示「自动 TTL」，与用户未指定时的语义一致
+const CF_AUTO_TTL: u32 = 1;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 struct ZoneCacheKey {
@@ -63,8 +67,8 @@ impl CloudflareProvider {
             )
         };
 
-        let client =
-            crate::util::http::create_task_http_client(http_interface, Duration::from_secs(15))?;
+        // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
+        let client = crate::util::http::create_default_dns_client(http_interface);
 
         Ok(Self {
             client,
@@ -95,6 +99,29 @@ impl CloudflareProvider {
         }
 
         headers
+    }
+
+    /// 归一化 TTL 取值
+    ///
+    /// # 设计原理
+    /// Cloudflare API 以 `1` 表示「自动 TTL」。用户在配置中未显式指定时
+    /// 同样应落到该语义，故此处把 `None` 映射为 `1`。
+    fn normalize_ttl(ttl: Option<u32>) -> u32 {
+        ttl.unwrap_or(CF_AUTO_TTL)
+    }
+
+    /// 解析该域名是否应开启 CDN 代理加速
+    ///
+    /// # 设计原理
+    /// 依据域名自定义参数 `?proxied=true`（或 `proxy`）判定。
+    /// 保持与迁移前完全一致的宽松布尔解析：接受 true/1/yes 且忽略大小写。
+    fn resolve_proxied_flag(domain: &ParsedDomain) -> bool {
+        domain
+            .custom_params
+            .get("proxied")
+            .or_else(|| domain.custom_params.get("proxy"))
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes"))
+            .unwrap_or(false)
     }
 
     /// 查询根域名对应的 Zone ID (优先从带账号隔离的内存缓存读取)
@@ -191,6 +218,119 @@ async fn parse_cf_response<T: for<'de> Deserialize<'de>>(
         .ok_or_else(|| DnsProviderError::Other("Cloudflare 响应缺少 result 数据实体".to_string()))
 }
 
+/// Cloudflare 的记录操作适配层
+///
+/// # 设计原理
+/// 将「Zone 解析 / 列出 / 创建 / 更新」四类厂商差异封装于此，
+/// 上层「查 - 比 - 改」骨架复用 [`sync_record_via`] 模板，
+/// 避免逐家重复实现同一套编排逻辑。
+#[async_trait]
+impl RecordOps for CloudflareProvider {
+    fn provider_name(&self) -> &'static str {
+        "Cloudflare"
+    }
+
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        self.get_zone_id(root_domain).await
+    }
+
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let records = self
+            .get_records(zone, &domain.full_domain(), record_type)
+            .await?;
+        Ok(records
+            .into_iter()
+            .map(|r| RemoteRecord::new(r.id, r.content))
+            .collect())
+    }
+
+    /// 清理同名同类型的历史冗余记录
+    ///
+    /// # 设计原理
+    /// Cloudflare 允许存在多条同名同类型记录，若只更新首条会遗留冲突项，
+    /// 导致 DNS 轮询返回非预期结果。
+    async fn before_sync(&self, zone: &str, records: &[RemoteRecord]) {
+        for redundant in records.iter().skip(1) {
+            let del_url = format!(
+                "{}/zones/{}/dns_records/{}",
+                CF_API_BASE, zone, redundant.id
+            );
+            if let Err(e) = self
+                .client
+                .delete(&del_url)
+                .headers(self.build_headers())
+                .send()
+                .await
+            {
+                warn!("清理 Cloudflare 冗余记录 {} 失败: {}", redundant.id, e);
+            }
+        }
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let create_url = format!("{}/zones/{}/dns_records", CF_API_BASE, zone);
+        let body = json!({
+            "type": record_type.to_string(),
+            "name": domain.full_domain(),
+            "content": ip.to_string(),
+            "ttl": Self::normalize_ttl(ttl),
+            // 读取自定义参数 ?proxied=true 决定是否开启 CDN 代理加速
+            "proxied": Self::resolve_proxied_flag(domain),
+        });
+
+        let resp = self
+            .client
+            .post(&create_url)
+            .headers(self.build_headers())
+            .json(&body)
+            .send()
+            .await?;
+
+        let _: CfRecord = parse_cf_response(resp, "CloudflareCreateFailed").await?;
+        Ok(())
+    }
+
+    /// 更新既有记录 (使用 PATCH 以保持用户既有的 proxied 代理加速状态)
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        _domain: &ParsedDomain,
+        _record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let update_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone, record_id);
+        let body = json!({
+            "content": ip.to_string(),
+            "ttl": Self::normalize_ttl(ttl),
+        });
+
+        let resp = self
+            .client
+            .patch(&update_url)
+            .headers(self.build_headers())
+            .json(&body)
+            .send()
+            .await?;
+
+        let _: CfRecord = parse_cf_response(resp, "CloudflareUpdateFailed").await?;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl DnsProvider for CloudflareProvider {
     fn provider_name(&self) -> &'static str {
@@ -204,105 +344,15 @@ impl DnsProvider for CloudflareProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(1); // 1 代表 Cloudflare 的 Auto TTL
-
-        // 1. 获取 Zone ID
-        let zone_id = self.get_zone_id(&domain.root_domain).await?;
-
-        // 2. 查询现有记录
-        let records = self
-            .get_records(&zone_id, &full_domain, record_type)
-            .await?;
-
-        // 3. 若存在多条同名同类型历史记录，清理除第一条以外的冗余冲突项
-        if records.len() > 1 {
-            for redundant in &records[1..] {
-                let del_url = format!(
-                    "{}/zones/{}/dns_records/{}",
-                    CF_API_BASE, zone_id, redundant.id
-                );
-                let _ = self
-                    .client
-                    .delete(&del_url)
-                    .headers(self.build_headers())
-                    .send()
-                    .await;
-            }
-        }
-
-        if let Some(existing) = records.first() {
-            if existing.content == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录 (使用 PATCH 保持用户既有的 proxied 代理加速状态)
-            let update_url = format!(
-                "{}/zones/{}/dns_records/{}",
-                CF_API_BASE, zone_id, existing.id
-            );
-            let body = json!({
-                "content": target_ip_str,
-                "ttl": ttl_val,
-            });
-
-            let resp = self
-                .client
-                .patch(&update_url)
-                .headers(self.build_headers())
-                .json(&body)
-                .send()
-                .await?;
-
-            let _: CfRecord = parse_cf_response(resp, "CloudflareUpdateFailed").await?;
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 新增记录 (读取自定义参数 ?proxied=true 决定是否开启 CDN 代理)
-            let is_proxied = domain
-                .custom_params
-                .get("proxied")
-                .or_else(|| domain.custom_params.get("proxy"))
-                .map(|v| {
-                    v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
-                })
-                .unwrap_or(false);
-
-            let create_url = format!("{}/zones/{}/dns_records", CF_API_BASE, zone_id);
-            let body = json!({
-                "type": record_type.to_string(),
-                "name": full_domain,
-                "content": target_ip_str,
-                "ttl": ttl_val,
-                "proxied": is_proxied
-            });
-
-            let resp = self
-                .client
-                .post(&create_url)
-                .headers(self.build_headers())
-                .json(&body)
-                .send()
-                .await?;
-
-            let _: CfRecord = parse_cf_response(resp, "CloudflareCreateFailed").await?;
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        let result = sync_record_via(self, domain, record_type, ip, ttl).await?;
+        info!(
+            "[{}] 域名 {} ({}) 同步完成: {}",
+            DnsProvider::provider_name(self),
+            result.domain,
+            record_type,
+            result.status
+        );
+        Ok(result)
     }
 }
 

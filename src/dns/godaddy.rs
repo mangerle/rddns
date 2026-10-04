@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -39,6 +40,123 @@ impl GoDaddyProvider {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers
     }
+
+    /// 幂等写入/更新域名记录 (PUT /domains/{domain}/records/{type}/{name})
+    async fn put_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let path = format!(
+            "{}/domains/{}/records/{}/{}",
+            GODADDY_API_BASE, zone, record_type, sub
+        );
+
+        let body = json!([
+            {
+                "data": ip.to_string(),
+                "ttl": ttl_val
+            }
+        ]);
+
+        let put_resp = self
+            .client
+            .put(&path)
+            .headers(self.build_headers())
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = put_resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let body_text = put_resp.text().await.unwrap_or_default();
+            Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("GoDaddy 响应错误: {}", body_text),
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl RecordOps for GoDaddyProvider {
+    fn provider_name(&self) -> &'static str {
+        "GoDaddy"
+    }
+
+    /// 查询现有解析记录列表
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let path = format!(
+            "{}/domains/{}/records/{}/{}",
+            GODADDY_API_BASE, zone, record_type, sub
+        );
+
+        let query_resp = self
+            .client
+            .get(&path)
+            .headers(self.build_headers())
+            .send()
+            .await?;
+
+        if query_resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+
+        if !query_resp.status().is_success() {
+            let status = query_resp.status();
+            let body = query_resp.text().await.unwrap_or_default();
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("GoDaddy 查询记录失败: {}", body),
+            });
+        }
+
+        let records = query_resp.json::<Vec<GoDaddyRecord>>().await?;
+        let matched = records
+            .into_iter()
+            .filter_map(|r| r.data.map(|d| RemoteRecord::new(sub, d)))
+            .collect();
+
+        Ok(matched)
+    }
+
+    /// 新增解析记录
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        self.put_record(zone, domain, record_type, ip, ttl).await
+    }
+
+    /// 更新既有解析记录
+    async fn update_record(
+        &self,
+        zone: &str,
+        _record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        self.put_record(zone, domain, record_type, ip, ttl).await
+    }
 }
 
 #[async_trait]
@@ -54,67 +172,28 @@ impl DnsProvider for GoDaddyProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        sync_record_via(self, domain, record_type, ip, ttl).await
+    }
+}
 
-        let path = format!(
-            "{}/domains/{}/records/{}/{}",
-            GODADDY_API_BASE, domain.root_domain, record_type, sub
-        );
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // 1. 查询当前记录
-        let query_resp = self
-            .client
-            .get(&path)
-            .headers(self.build_headers())
-            .send()
-            .await?;
-
-        if query_resp.status().is_success()
-            && let Ok(records) = query_resp.json::<Vec<GoDaddyRecord>>().await
-            && let Some(existing) = records.first()
-            && existing.data.as_deref() == Some(&target_ip_str)
-        {
-            return Ok(SyncRecordResult::unchanged_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ));
-        }
-
-        // 2. 幂等更新/创建记录 (PUT /domains/{domain}/records/{type}/{name})
-        let body = json!([
+    #[test]
+    fn test_godaddy_record_deserialization() {
+        let sample = r#"[
             {
-                "data": target_ip_str,
-                "ttl": ttl_val
+                "data": "1.2.3.4",
+                "name": "sub",
+                "ttl": 600,
+                "type": "A"
             }
-        ]);
+        ]"#;
 
-        let put_resp = self
-            .client
-            .put(&path)
-            .headers(self.build_headers())
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = put_resp.status();
-        if status.is_success() {
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            let body_text = put_resp.text().await.unwrap_or_default();
-            Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("GoDaddy 响应错误: {}", body_text),
-            })
-        }
+        let parsed: Vec<GoDaddyRecord> =
+            serde_json::from_str(sample).expect("反序列化 GoDaddy 记录失败");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].data.as_deref(), Some("1.2.3.4"));
     }
 }

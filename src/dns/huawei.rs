@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::crypto::{
     append_ntp_hint_if_expired, build_canonical_query_string, hmac_sha256_hex, sha256_hex,
@@ -36,7 +37,6 @@ struct HwZonesResponse {
 struct HwRecordsetItem {
     id: String,
     name: String,
-    zone_id: Option<String>,
     #[serde(rename = "type")]
     record_type: String,
     records: Option<Vec<String>>,
@@ -186,6 +186,126 @@ impl HuaweiDnsProvider {
 }
 
 #[async_trait]
+impl RecordOps for HuaweiDnsProvider {
+    fn provider_name(&self) -> &'static str {
+        "华为云 (Huawei Cloud)"
+    }
+
+    /// 解析公网根域名对应的 Zone ID
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let hw_root_name = format!("{}.", root_domain);
+        let zones_resp: HwZonesResponse = self
+            .request_hw_api(
+                Method::GET,
+                "/v2.1/zones",
+                vec![("name", hw_root_name.clone())],
+                None,
+            )
+            .await?;
+
+        let zones = zones_resp.zones.unwrap_or_default();
+        let zone = zones
+            .into_iter()
+            .find(|z| z.name.eq_ignore_ascii_case(&hw_root_name))
+            .ok_or_else(|| {
+                DnsProviderError::ZoneNotFound(format!(
+                    "在华为云 DNS 中未找到根域名 [{root_domain}] 对应的公网 Zone"
+                ))
+            })?;
+
+        Ok(zone.id)
+    }
+
+    /// 查询现有解析记录列表
+    async fn list_records(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let hw_domain_name = format!("{}.", domain.full_domain());
+        let query_params = vec![
+            ("name", hw_domain_name.clone()),
+            ("type", record_type.to_string()),
+        ];
+
+        let list_resp: HwRecordsetsResponse = self
+            .request_hw_api(Method::GET, "/v2.1/recordsets", query_params, None)
+            .await?;
+
+        let recordsets = list_resp.recordsets.unwrap_or_default();
+        let matched = recordsets
+            .into_iter()
+            .filter(|r| {
+                r.name.eq_ignore_ascii_case(&hw_domain_name)
+                    && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+            })
+            .map(|r| {
+                let val = r
+                    .records
+                    .and_then(|mut recs| recs.pop())
+                    .unwrap_or_default();
+                RemoteRecord::new(r.id, val)
+            })
+            .collect();
+
+        Ok(matched)
+    }
+
+    /// 新增解析记录
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let hw_domain_name = format!("{}.", domain.full_domain());
+        let ttl_val = ttl.unwrap_or(300).max(1);
+        let path = format!("/v2.1/zones/{zone}/recordsets");
+        let body = json!({
+            "name": hw_domain_name,
+            "type": record_type.to_string(),
+            "records": [ip.to_string()],
+            "ttl": ttl_val,
+        })
+        .to_string();
+
+        let _: serde_json::Value = self
+            .request_hw_api(Method::POST, &path, vec![], Some(body))
+            .await?;
+
+        Ok(())
+    }
+
+    /// 更新既有解析记录
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        _domain: &ParsedDomain,
+        _record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(300).max(1);
+        let path = format!("/v2.1/zones/{zone}/recordsets/{record_id}");
+        let body = json!({
+            "records": [ip.to_string()],
+            "ttl": ttl_val,
+        })
+        .to_string();
+
+        let _: serde_json::Value = self
+            .request_hw_api(Method::PUT, &path, vec![], Some(body))
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl DnsProvider for HuaweiDnsProvider {
     fn provider_name(&self) -> &'static str {
         "华为云 (Huawei Cloud)"
@@ -198,103 +318,56 @@ impl DnsProvider for HuaweiDnsProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(300).max(1);
+        sync_record_via(self, domain, record_type, ip, ttl).await
+    }
+}
 
-        // 华为云要求域名末尾必须带点号 "."
-        let hw_domain_name = format!("{}.", full_domain);
-        let hw_root_name = format!("{}.", domain.root_domain);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // 1. 查询现有解析记录集
-        let query_params = vec![
-            ("name", hw_domain_name.clone()),
-            ("type", record_type.to_string()),
-        ];
+    #[test]
+    fn test_hw_zones_response_deserialization() {
+        let sample = r#"{
+            "zones": [
+                {
+                    "id": "zone_12345",
+                    "name": "example.com."
+                }
+            ]
+        }"#;
 
-        let list_resp: HwRecordsetsResponse = self
-            .request_hw_api(Method::GET, "/v2.1/recordsets", query_params, None)
-            .await?;
+        let parsed: HwZonesResponse =
+            serde_json::from_str(sample).expect("反序列化华为云 Zone 响应失败");
+        let zones = parsed.zones.expect("缺失 zones 列表");
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].id, "zone_12345");
+        assert_eq!(zones[0].name, "example.com.");
+    }
 
-        let recordsets = list_resp.recordsets.unwrap_or_default();
-        let matched = recordsets.into_iter().find(|r| {
-            r.name.eq_ignore_ascii_case(&hw_domain_name)
-                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-        });
+    #[test]
+    fn test_hw_recordsets_response_deserialization() {
+        let sample = r#"{
+            "recordsets": [
+                {
+                    "id": "rec_67890",
+                    "name": "www.example.com.",
+                    "type": "A",
+                    "records": ["1.2.3.4"]
+                }
+            ]
+        }"#;
 
-        if let Some(existing) = matched {
-            let cur_records = existing.records.unwrap_or_default();
-            if cur_records.as_slice() == [target_ip_str.as_str()] {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录 (PUT /v2.1/zones/{zone_id}/recordsets/{recordset_id})
-            let zone_id = existing.zone_id.ok_or_else(|| {
-                DnsProviderError::Other("华为云记录未返回关联的 zone_id".to_string())
-            })?;
-            let path = format!("/v2.1/zones/{}/recordsets/{}", zone_id, existing.id);
-            let body = json!({
-                "records": [target_ip_str],
-                "ttl": ttl_val,
-            })
-            .to_string();
-
-            let _: serde_json::Value = self
-                .request_hw_api(Method::PUT, &path, vec![], Some(body))
-                .await?;
-
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 2. 不存在时，查询 Zone ID 并创建
-            let zones_resp: HwZonesResponse = self
-                .request_hw_api(
-                    Method::GET,
-                    "/v2.1/zones",
-                    vec![("name", hw_root_name.clone())],
-                    None,
-                )
-                .await?;
-
-            let zones = zones_resp.zones.unwrap_or_default();
-            let zone = zones
-                .into_iter()
-                .find(|z| z.name.eq_ignore_ascii_case(&hw_root_name))
-                .ok_or_else(|| {
-                    DnsProviderError::ZoneNotFound(format!(
-                        "在华为云 DNS 中未找到根域名 [{}] 对应的公网 Zone",
-                        domain.root_domain
-                    ))
-                })?;
-
-            let path = format!("/v2.1/zones/{}/recordsets", zone.id);
-            let body = json!({
-                "name": hw_domain_name,
-                "type": record_type.to_string(),
-                "records": [target_ip_str],
-                "ttl": ttl_val,
-            })
-            .to_string();
-
-            let _: serde_json::Value = self
-                .request_hw_api(Method::POST, &path, vec![], Some(body))
-                .await?;
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        let parsed: HwRecordsetsResponse =
+            serde_json::from_str(sample).expect("反序列化华为云 Recordsets 响应失败");
+        let sets = parsed.recordsets.expect("缺失 recordsets 列表");
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].id, "rec_67890");
+        assert_eq!(sets[0].name, "www.example.com.");
+        assert_eq!(sets[0].record_type, "A");
+        assert_eq!(
+            sets[0].records.as_deref(),
+            Some(&["1.2.3.4".to_string()][..])
+        );
     }
 }
