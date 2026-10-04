@@ -1,14 +1,19 @@
 use anyhow::{Context, Result, bail};
-use log::{info, warn};
+use log::info;
+#[cfg(windows)]
+use log::warn;
 use std::env;
 use std::path::Path;
 use std::process::Command;
+#[cfg(windows)]
 use std::thread::sleep;
+#[cfg(windows)]
 use std::time::Duration;
 
 #[cfg(unix)]
 use std::fs;
 
+#[cfg(windows)]
 use crate::util::daemon::configure_daemon_command;
 
 const SERVICE_NAME: &str = "rddns";

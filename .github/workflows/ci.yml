@@ -55,20 +55,27 @@ jobs:
         run: cargo test --locked --all-targets
 
   build-check:
-    name: 多目标构建检查
+    name: 多目标构建检查 (${{ matrix.target }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装 Rust 工具链
+      - name: 配置 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: 添加 arm 架构编译目标
-        run: rustup target add aarch64-unknown-linux-musl
+      - name: 配置交叉编译工具链
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
 
-      - name: 构建 x86_64 musl 静态版本
-        run: cargo build --locked --release --target x86_64-unknown-linux-musl
-
-      - name: 构建 arm64 musl 静态版本
-        run: cargo build --locked --release --target aarch64-unknown-linux-musl
+      - name: 构建静态发布版本
+        run: cargo build --locked --release --target ${{ matrix.target }}
