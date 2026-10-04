@@ -1,5 +1,5 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
-use crate::util::net::{extract_ipv4, extract_ipv6, is_public_ipv4};
+use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4};
 use async_trait::async_trait;
 use log::warn;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -81,7 +81,7 @@ impl IpFetcher for CommandIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         let text = self.execute().await?;
         let Some(ip) = extract_ipv4(&text, self.regex.as_deref()) else {
-            return Err(FetchError::NoValidIp(text));
+            return Err(FetchError::NoValidIpv4(text));
         };
         // 与 URL / STUN 探测器保持一致：拒绝私网与 CGNAT 地址，避免提交到公网 DNS
         if is_public_ipv4(&ip) {
@@ -97,10 +97,18 @@ impl IpFetcher for CommandIpFetcher {
 
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
         let text = self.execute().await?;
-        if let Some(ip) = extract_ipv6(&text, self.regex.as_deref()) {
+        let Some(ip) = extract_ipv6(&text, self.regex.as_deref()) else {
+            return Err(FetchError::NoValidIpv6(text));
+        };
+        // 与 URL / STUN 探测器保持一致：拒绝链路本地、ULA 私网等非全球单播 IPv6
+        if is_global_unicast_ipv6(&ip) {
             Ok(Some(ip))
         } else {
-            Err(FetchError::NoValidIp(text))
+            warn!("命令返回的 IPv6 非全球单播地址，已拒绝采纳: {}", ip);
+            Err(FetchError::NoValidIpv6(format!(
+                "命令返回的 IPv6 非全球单播地址: {}",
+                ip
+            )))
         }
     }
 }
@@ -114,6 +122,23 @@ mod tests {
         let fetcher = CommandIpFetcher::new("echo 1.2.3.4".to_string(), None, 5);
         let ip = fetcher.fetch_ipv4().await.unwrap();
         assert_eq!(ip, Some(Ipv4Addr::new(1, 2, 3, 4)));
+    }
+
+    #[tokio::test]
+    async fn test_command_ip_fetcher_ipv6_success() {
+        let fetcher = CommandIpFetcher::new("echo 2408:8207:78cd:1234::1".to_string(), None, 5);
+        let ip = fetcher.fetch_ipv6().await.unwrap();
+        assert_eq!(
+            ip,
+            Some("2408:8207:78cd:1234::1".parse::<Ipv6Addr>().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_command_ip_fetcher_ipv6_rejects_link_local() {
+        let fetcher = CommandIpFetcher::new("echo fe80::1".to_string(), None, 5);
+        let res = fetcher.fetch_ipv6().await;
+        assert!(matches!(res, Err(FetchError::NoValidIpv6(_))));
     }
 
     #[tokio::test]
