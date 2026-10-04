@@ -2,6 +2,7 @@ pub mod command;
 pub mod linux_inet6;
 pub mod net_interface;
 pub mod stun;
+pub mod stun_proto;
 pub mod trait_def;
 pub mod url;
 
@@ -9,6 +10,7 @@ pub use command::*;
 pub use linux_inet6::*;
 pub use net_interface::*;
 pub use stun::*;
+pub use stun_proto::*;
 pub use trait_def::*;
 pub use url::*;
 
