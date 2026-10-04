@@ -82,11 +82,10 @@ pub trait RecordOps: Send + Sync {
 
     /// 解析记录所属的 Zone
     ///
-    /// 默认实现直接返回根域名，适用于不引入 Zone 层级的服务商。
+    /// 默认实现直接返回根域名，适用于不引入额外 Zone ID 层级的服务商（如 AliDNS、DNSPod、GoDaddy、NameSilo 等）。
     /// Cloudflare 等需要先查询 Zone ID 的实现应覆写此方法。
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
-        let _ = root_domain;
-        Ok(String::new())
+        Ok(root_domain.to_string())
     }
 
     /// 列出指定名称与类型的现存记录
@@ -244,6 +243,7 @@ mod tests {
     #[derive(Debug, Default, PartialEq, Clone)]
     struct CallLog {
         resolved_zone: bool,
+        last_zone: Option<String>,
         listed: bool,
         before_sync: usize,
         created: usize,
@@ -255,7 +255,6 @@ mod tests {
         existing: Vec<RemoteRecord>,
         log: parking_lot::Mutex<CallLog>,
         zone: String,
-        use_default_zone: bool,
     }
 
     impl MockOps {
@@ -264,14 +263,7 @@ mod tests {
                 existing,
                 log: parking_lot::Mutex::new(CallLog::default()),
                 zone: "zone-1".to_string(),
-                use_default_zone: false,
             }
-        }
-
-        /// 使用默认的 Zone 解析（返回空串，模拟无Zone 层级的服务商）
-        fn with_default_zone(mut self) -> Self {
-            self.use_default_zone = true;
-            self
         }
 
         fn log(&self) -> CallLog {
@@ -284,49 +276,49 @@ mod tests {
             "MockProvider"
         }
 
-        async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
-            if self.use_default_zone {
-                // 直接复现默认实现语义（返回空串），避免经由 trait 默认方法
-                // 再次派发回本覆写方法造成无限递归
-                let _ = root_domain;
-                return Ok(String::new());
-            }
+        async fn resolve_zone(&self, _root_domain: &str) -> Result<String, DnsProviderError> {
             self.log.lock().resolved_zone = true;
             Ok(self.zone.clone())
         }
 
         async fn list_records(
             &self,
-            _zone: &str,
+            zone: &str,
             _domain: &ParsedDomain,
             _record_type: DnsRecordType,
         ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
-            self.log.lock().listed = true;
+            let mut log = self.log.lock();
+            log.listed = true;
+            log.last_zone = Some(zone.to_string());
             Ok(self.existing.clone())
         }
 
         async fn create_record(
             &self,
-            _zone: &str,
+            zone: &str,
             _domain: &ParsedDomain,
             _record_type: DnsRecordType,
             _ip: &IpAddr,
             _ttl: Option<u32>,
         ) -> Result<(), DnsProviderError> {
-            self.log.lock().created += 1;
+            let mut log = self.log.lock();
+            log.created += 1;
+            log.last_zone = Some(zone.to_string());
             Ok(())
         }
 
         async fn update_record(
             &self,
-            _zone: &str,
+            zone: &str,
             _record_id: &str,
             _domain: &ParsedDomain,
             _record_type: DnsRecordType,
             _ip: &IpAddr,
             _ttl: Option<u32>,
         ) -> Result<(), DnsProviderError> {
-            self.log.lock().updated += 1;
+            let mut log = self.log.lock();
+            log.updated += 1;
+            log.last_zone = Some(zone.to_string());
             Ok(())
         }
 
@@ -421,11 +413,60 @@ mod tests {
 
     #[tokio::test]
     async fn test_template_uses_default_zone_resolution() {
-        // 无 Zone 层级的服务商应走默认实现（返回空串）
-        let ops = MockOps::with_records(Vec::new()).with_default_zone();
+        // 无额外 Zone ID 层级的服务商走 trait 默认实现，应直接返回 root_domain 作为 zone
+        struct PureDefaultOps {
+            captured_zone: parking_lot::Mutex<Option<String>>,
+        }
+
+        #[async_trait]
+        impl RecordOps for PureDefaultOps {
+            fn provider_name(&self) -> &'static str {
+                "PureDefaultProvider"
+            }
+
+            async fn list_records(
+                &self,
+                zone: &str,
+                _domain: &ParsedDomain,
+                _record_type: DnsRecordType,
+            ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+                *self.captured_zone.lock() = Some(zone.to_string());
+                Ok(Vec::new())
+            }
+
+            async fn create_record(
+                &self,
+                zone: &str,
+                _domain: &ParsedDomain,
+                _record_type: DnsRecordType,
+                _ip: &IpAddr,
+                _ttl: Option<u32>,
+            ) -> Result<(), DnsProviderError> {
+                *self.captured_zone.lock() = Some(zone.to_string());
+                Ok(())
+            }
+
+            async fn update_record(
+                &self,
+                zone: &str,
+                _record_id: &str,
+                _domain: &ParsedDomain,
+                _record_type: DnsRecordType,
+                _ip: &IpAddr,
+                _ttl: Option<u32>,
+            ) -> Result<(), DnsProviderError> {
+                *self.captured_zone.lock() = Some(zone.to_string());
+                Ok(())
+            }
+        }
+
+        let ops = PureDefaultOps {
+            captured_zone: parking_lot::Mutex::new(None),
+        };
+        let domain = test_domain();
         let result = sync_record_via(
             &ops,
-            &test_domain(),
+            &domain,
             DnsRecordType::A,
             &IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
             None,
@@ -434,9 +475,10 @@ mod tests {
         .expect("应成功返回");
 
         assert_eq!(result.status, crate::dns::trait_def::SyncStatus::Created);
-        assert!(
-            !ops.log().resolved_zone,
-            "默认实现不应进入自定义 Zone 解析分支"
+        assert_eq!(
+            ops.captured_zone.lock().as_deref(),
+            Some("example.com"),
+            "默认 resolve_zone 必须返回 root_domain"
         );
     }
 
