@@ -3,6 +3,7 @@ pub mod daemon;
 pub mod dns_packet;
 pub mod dns_resolver;
 pub mod http;
+pub mod interface;
 pub mod logging;
 pub mod net;
 pub mod service;
