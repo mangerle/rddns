@@ -598,8 +598,8 @@ mod tests {
         let _guard = TEST_CACHE_LOCK.lock();
         clear_http_client_cache();
         let timeout = Duration::from_secs(5);
-        // 与 UrlIpFetcher::USER_AGENT 保持一致的字面量，避免测试依赖上层模块私有常量
-        let ua = "rddns/0.7.0 (Rust DDNS Client)";
+        // 与 UrlIpFetcher::USER_AGENT 保持一致，避免测试依赖上层模块私有常量
+        let ua = concat!("rddns/", env!("CARGO_PKG_VERSION"), " (Rust DDNS Client)");
 
         // 协议族不同的客户端不得复用同一条目，否则源地址绑定会失效
         let _v4 = get_family_http_client(None, false, timeout, ua);

@@ -20,7 +20,8 @@ impl UrlIpFetcher {
     /// 单个 IP 查询接口的请求超时
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
     /// 探测请求的 User-Agent，纳入客户端缓存键维度
-    const USER_AGENT: &'static str = "rddns/0.7.0 (Rust DDNS Client)";
+    const USER_AGENT: &'static str =
+        concat!("rddns/", env!("CARGO_PKG_VERSION"), " (Rust DDNS Client)");
 
     /// 创建基于 HTTP(S) URL 接口的公网 IP 探测器
     ///
