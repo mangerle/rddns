@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::LazyLock;
-use thiserror::Error;
 
 /// DNS 记录类型
 #[allow(clippy::upper_case_acronyms)]
@@ -182,38 +181,124 @@ static SENSITIVE_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         .expect("静态敏感参数正则表达式语法必定合法")
 });
 
+/// 匹配 JSON 文本中敏感字段的正则表达式
+///
+/// # 设计原理
+/// 部分服务商在响应体中回显请求内容（如回显 token 或完整请求 JSON），
+/// 仅脱敏 URL 查询参数无法覆盖 JSON 形态，需单独匹配。
+/// 同时兼容双引号包裹的值与 JSON 常见的 `null` 值。
+///
+/// # 逻辑不变性保证
+/// 正则表达式模式串为静态硬编码常量，符合标准正则语法，编译绝对安全且不会失败。
+static SENSITIVE_JSON_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)"(key|password|passwd|secret|signature|token|accesskeyid|auth|api_key|apiToken)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\s]+)"#,
+    )
+    .expect("静态敏感 JSON 正则表达式语法必定合法")
+});
+
+/// 脱敏掩码占位符
+const MASK_PLACEHOLDER: &str = "******";
+
 /// 对包含敏感信息（如 API Key、密码、签名等）的 URL 或错误文本进行脱敏
 ///
 /// # 设计原理
-/// - **实现初衷**: 部分 DNS 服务商（如 NameSilo, Namecheap 等）使用 GET 请求传递鉴权密钥，当网络异常抛错时会将带凭据的完整 URL 输出到错误上下文。
-/// - **核心优势**: 通过静态预编译正则对敏感键值对进行统一脱敏掩码（替换为 `******`），彻底防范日志与通知中的凭证泄漏。
-/// - **代价与局限**: 采用全局正则替换产生轻微字符串复制开销，仅在网络错误或脱敏日志输出时触发。
+/// - **实现初衷**: 部分 DNS 服务商（如 NameSilo, Namecheap 等）使用 GET 请求传递鉴权密钥，
+///   当网络异常抛错或服务端返回非预期响应时，会将带凭据的完整 URL 或响应体
+///   输出到错误上下文，并最终流向日志、状态面板与第三方通知渠道。
+/// - **核心优势**: 统一覆盖 URL 查询串与 JSON body 两种主要凭据载体，
+///   彻底防范日志与通知中的凭证泄漏。
+/// - **代价与局限**: 采用全局正则替换产生字符串复制开销，仅在错误构造与
+///   脱敏日志输出时触发，不在高频同步热路径上。
 pub fn sanitize_sensitive_url_params(input: &str) -> String {
-    SENSITIVE_PARAM_REGEX
-        .replace_all(input, "$1=******")
+    let url_masked = SENSITIVE_PARAM_REGEX.replace_all(input, "$1=******");
+    SENSITIVE_JSON_REGEX
+        .replace_all(&url_masked, &format!("\"$1\":\"{}\"", MASK_PLACEHOLDER))
         .to_string()
 }
 
 /// DNS 提供商同步与通信过程中可能发生的领域错误类型
-#[derive(Debug, Error)]
+///
+/// # 设计原理
+/// 刻意**不使用** `thiserror` 派生，而是手写 [`fmt::Display`]：
+/// 目的是把敏感信息脱敏收敛到错误文本的唯一出口（详见该实现注释），
+/// 使 27 个 provider 无需逐个改造调用点即自动受保护。
+///代价是需手工维护 `From` 转换，已在下方显式列出。
+#[derive(Debug)]
 pub enum DnsProviderError {
-    #[error("HTTP 通信错误: {0}")]
+    /// HTTP 通信层错误，文本可能包含带凭据的请求 URL
     Http(String),
-    #[error("JSON 序列化/反序列化错误: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("DNS 服务商未找到根域名对应的 Zone: {0}")]
+    /// JSON 序列化或反序列化错误
+    Json(serde_json::Error),
+    /// 未找到根域名对应的 Zone，载荷为根域名本身（不含凭据）
     ZoneNotFound(String),
-    #[error("服务商 API 错误 [{code}]: {message}")]
+    /// 服务商返回的业务错误，文本可能包含完整响应体
     ApiError { code: String, message: String },
-    #[error("缺少认证凭据: {0}")]
+    /// 缺少认证凭据
     MissingCredentials(String),
-    #[error("其他服务商错误: {0}")]
+    /// 其他服务商错误
     Other(String),
 }
 
+impl fmt::Display for DnsProviderError {
+    /// 统一在错误文本出口处执行脱敏
+    ///
+    /// # 设计原理
+    /// 各服务商在返回非预期响应时，往往把**完整响应体**塞入错误上下文，
+    /// 而调用点分散在 27 个 provider 中逐个改造既易漏、也难评审。
+    /// 本实现将脱敏收敛到 `Display` 这一唯一出口：无论错误由何处构造、
+    /// 经由何种路径传播（`e.to_string()` -> `SyncRecordResult.message` ->
+    /// 日志 / Web 状态面板 / 第三方通知渠道），呈现给外部的文本都必然
+    /// 已脱敏，从根本上消除凭据外泄路径。
+    ///
+    /// 代价是每次格式化多一次正则扫描，但该路径仅在错误发生时触发，
+    /// 不在同步热路径上。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http(msg) => write!(f, "HTTP 通信错误: {}", sanitize_sensitive_url_params(msg)),
+            Self::Json(err) => write!(f, "JSON 序列化/反序列化错误: {}", err),
+            Self::ZoneNotFound(domain) => {
+                write!(f, "DNS 服务商未找到根域名对应的 Zone: {}", domain)
+            }
+            Self::ApiError { code, message } => write!(
+                f,
+                "服务商 API 错误 [{}]: {}",
+                code,
+                sanitize_sensitive_url_params(message)
+            ),
+            Self::MissingCredentials(msg) => {
+                write!(f, "缺少认证凭据: {}", sanitize_sensitive_url_params(msg))
+            }
+            Self::Other(msg) => write!(f, "其他服务商错误: {}", sanitize_sensitive_url_params(msg)),
+        }
+    }
+}
+
+impl std::error::Error for DnsProviderError {}
+
 impl From<reqwest::Error> for DnsProviderError {
     fn from(err: reqwest::Error) -> Self {
-        Self::Http(sanitize_sensitive_url_params(&err.to_string()))
+        Self::Http(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for DnsProviderError {
+    fn from(err: serde_json::Error) -> Self {
+        Self::Json(err)
+    }
+}
+
+impl DnsProviderError {
+    /// 构造服务商 API 错误
+    ///
+    /// # 设计原理
+    /// 错误文本的脱敏已由 [`fmt::Display`] 实现统一兜底，本构造器仅负责
+    /// 结构化组装，保留调用点原有的可读构造方式。
+    pub fn api(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::ApiError {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -299,5 +384,85 @@ mod tests {
             SyncRecordResult::failed("example.com", DnsRecordType::A, "1.1.1.1", "网络超时");
         assert_eq!(res_failed.status, SyncStatus::Failed);
         assert_eq!(res_failed.message, "网络超时");
+    }
+
+    #[test]
+    fn test_sanitize_covers_json_body_credentials() {
+        // 服务商在响应体中回显凭据是常见形态，此前完全未被脱敏覆盖
+        let json_body = r#"{"code":"InvalidToken","token":"json_secret_abc","expires":3600}"#;
+        let sanitized = sanitize_sensitive_url_params(json_body);
+        assert!(
+            !sanitized.contains("json_secret_abc"),
+            "JSON body 中的 token 必须被脱敏: {}",
+            sanitized
+        );
+        assert!(sanitized.contains("\"token\":\"******\""));
+
+        // 驼峰与下划线命名形式同样需覆盖
+        let camel = r#"{"api_key":"k_12345","apiToken":"t_67890"}"#;
+        let sanitized_camel = sanitize_sensitive_url_params(camel);
+        assert!(!sanitized_camel.contains("k_12345"));
+        assert!(!sanitized_camel.contains("t_67890"));
+    }
+
+    #[test]
+    fn test_sanitize_preserves_non_sensitive_fields() {
+        // 脱敏不得误伤非敏感字段，否则会丢失排障所需信息
+        let body = r#"{"code":"AuthenticationFailed","message":"Invalid credentials","region":"ap-southeast-1"}"#;
+        let sanitized = sanitize_sensitive_url_params(body);
+        assert!(sanitized.contains("AuthenticationFailed"));
+        assert!(sanitized.contains("Invalid credentials"));
+        assert!(sanitized.contains("ap-southeast-1"));
+    }
+
+    #[test]
+    fn test_error_display_masks_api_error_message() {
+        // 这是核心保障：无论 provider 如何构造错误，经 Display 输出时必然已脱敏。
+        // 该文本会继续流向 SyncRecordResult.message、日志、Web 面板与第三方通知渠道。
+        let err = DnsProviderError::api(
+            "401",
+            r#"{"error":"invalid","api_key":"leaked_secret_value"}"#,
+        );
+        let text = err.to_string();
+        assert!(
+            !text.contains("leaked_secret_value"),
+            "错误输出中绝不可包含原始凭据: {}",
+            text
+        );
+        assert!(text.contains("401"));
+    }
+
+    #[test]
+    fn test_error_display_masks_all_variants() {
+        // 各变体均应脱敏，防止遗漏某条路径
+        let leaked = "secret=should_be_masked";
+
+        let http = DnsProviderError::Http(leaked.to_string()).to_string();
+        assert!(!http.contains("should_be_masked"), "Http 变体未脱敏");
+
+        let other = DnsProviderError::Other(leaked.to_string()).to_string();
+        assert!(!other.contains("should_be_masked"), "Other 变体未脱敏");
+
+        let missing = DnsProviderError::MissingCredentials(leaked.to_string()).to_string();
+        assert!(
+            !missing.contains("should_be_masked"),
+            "MissingCredentials 变体未脱敏"
+        );
+
+        // ZoneNotFound 承载的是根域名，不含凭据，无需脱敏
+        let zone = DnsProviderError::ZoneNotFound("example.com".to_string()).to_string();
+        assert!(zone.contains("example.com"));
+    }
+
+    #[test]
+    fn test_error_still_conforms_to_std_error_trait() {
+        // 改为手写 Display 后，必须继续满足 std::error::Error 契约，
+        // 否则 anyhow 上下文包装与 ? 传播会失效
+        fn assert_error<E: std::error::Error + Send + Sync + 'static>(_: &E) {}
+        let err = DnsProviderError::api("500", "内部错误");
+        assert_error(&err);
+        // 仍可作为 Box<dyn Error> 使用
+        let boxed: Box<dyn std::error::Error> = Box::new(err);
+        assert!(boxed.to_string().contains("500"));
     }
 }

@@ -1,5 +1,5 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
-use crate::util::net::{extract_ipv4, extract_ipv6};
+use crate::util::net::{extract_ipv4, extract_ipv6, is_public_ipv4};
 use async_trait::async_trait;
 use log::warn;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -80,10 +80,18 @@ impl CommandIpFetcher {
 impl IpFetcher for CommandIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         let text = self.execute().await?;
-        if let Some(ip) = extract_ipv4(&text, self.regex.as_deref()) {
+        let Some(ip) = extract_ipv4(&text, self.regex.as_deref()) else {
+            return Err(FetchError::NoValidIp(text));
+        };
+        // 与 URL / STUN 探测器保持一致：拒绝私网与 CGNAT 地址，避免提交到公网 DNS
+        if is_public_ipv4(&ip) {
             Ok(Some(ip))
         } else {
-            Err(FetchError::NoValidIp(text))
+            warn!("命令返回的 IPv4 非公网单播地址，已拒绝采纳: {}", ip);
+            Err(FetchError::NoValidIpv4(format!(
+                "命令返回的 IPv4 非公网单播地址: {}",
+                ip
+            )))
         }
     }
 
