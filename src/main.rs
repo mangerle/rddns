@@ -1,25 +1,25 @@
-mod config;
-mod core;
-mod dns;
-mod ip_fetcher;
-mod notifier;
-mod util;
-mod web;
+//! rddns 可执行程序入口
+//!
+//! # 职责边界
+//! 本文件仅负责「解析命令行参数 → 装配各组件 → 监听退出信号」，
+//! 不承载任何业务逻辑。全部模块声明已下沉至 `lib.rs`，使 crate 同时
+//! 具备可执行程序与可被集成测试引用的库两种能力。
 
-use crate::config::model::UserAuthConfig;
-use crate::config::storage::ConfigManager;
-use crate::core::engine::DdnsEngine;
-use crate::util::daemon::{is_daemon_child, run_as_daemon};
-use crate::util::dns_resolver::set_custom_dns_server;
-use crate::util::http::set_skip_verify;
-use crate::util::logging::init_logger;
-use crate::util::service::handle_service_command;
-use crate::util::update::upgrade_self;
-use crate::web::server::WebServer;
 use anyhow::{Context, Result};
 use bcrypt::{DEFAULT_COST, hash};
 use clap::Parser;
 use log::{error, info, warn};
+use rddns::config::model::UserAuthConfig;
+use rddns::config::storage::ConfigManager;
+use rddns::core::engine::DdnsEngine;
+use rddns::core::state::StateManager;
+use rddns::util::daemon::{is_daemon_child, run_as_daemon};
+use rddns::util::dns_resolver::set_custom_dns_server;
+use rddns::util::http::set_skip_verify;
+use rddns::util::logging::init_logger;
+use rddns::util::service::handle_service_command;
+use rddns::util::update::upgrade_self;
+use rddns::web::server::WebServer;
 use shipup::{check_and_recover_current, confirm_update_success};
 use std::env::{current_dir, current_exe};
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 #[command(name = "rddns", author, version, about = "基于 Rust 的高性能动态域名解析 (DDNS) 服务端工具", long_about = None)]
 struct CliArgs {
     /// 自定义配置文件路径
-    #[arg(short = 'c', long = "config", default_value = ".rddns_config.yaml")]
+    #[arg(short = 'c', long = "config", default_value = ".rddns.toml")]
     config: PathBuf,
 
     /// 覆盖 Web 服务监听地址或端口 (支持 -l / -p / --listen / --port，例如 127.0.0.1:9876 或 :9876 或 9876)
@@ -131,7 +131,10 @@ fn handle_reset_password(config_manager: &ConfigManager, new_pwd: &str) -> Resul
 }
 
 /// 启动后台系统退出信号监听器 (支持 Ctrl+C 与 Unix SIGTERM)
-fn spawn_signal_listener(cancel_token: CancellationToken) {
+///
+/// # 返回值
+/// 返回任务句柄交由调用方持有，确保信号监听任务的生命周期可追踪。
+fn spawn_signal_listener(cancel_token: CancellationToken) -> tokio::task::JoinHandle<()> {
     spawn(async move {
         #[cfg(unix)]
         {
@@ -175,7 +178,7 @@ fn spawn_signal_listener(cancel_token: CancellationToken) {
         }
 
         cancel_token.cancel();
-    });
+    })
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -251,7 +254,9 @@ async fn main() -> Result<()> {
     let cancel_token = CancellationToken::new();
 
     // 2. 初始化 DDNS 调度引擎
-    let (engine, trigger_tx) = DdnsEngine::new(config_manager.clone());
+    // 运行时状态管理器由外部创建并与引擎、Web 层共享，使前端可读取结构化状态
+    let state_manager = StateManager::new();
+    let (engine, trigger_tx) = DdnsEngine::new(config_manager.clone(), state_manager.clone());
     let engine_token = cancel_token.clone();
     let engine_handle = spawn(async move {
         engine.run_loop(engine_token).await;
@@ -259,8 +264,13 @@ async fn main() -> Result<()> {
 
     // 3. 初始化 Web 管理服务器
     let web_handle = if !args.no_web {
-        let web_server =
-            WebServer::new(config_manager.clone(), trigger_tx, log_buffer, args.listen);
+        let web_server = WebServer::new(
+            config_manager.clone(),
+            trigger_tx,
+            log_buffer,
+            state_manager,
+            args.listen,
+        );
         let web_token = cancel_token.clone();
         Some(spawn(async move {
             if let Err(e) = web_server.run(web_token).await {
@@ -273,13 +283,32 @@ async fn main() -> Result<()> {
     };
 
     // 4. 监听系统退出信号
-    spawn_signal_listener(cancel_token.clone());
+    let signal_handle = spawn_signal_listener(cancel_token.clone());
 
-    let _ = engine_handle.await;
+    // 收割引擎与 Web 任务：显式识别 panic，避免核心常驻任务崩溃时静默退出
+    report_task_exit("DDNS 调度引擎", engine_handle.await).await;
     if let Some(wh) = web_handle {
-        let _ = wh.await;
+        report_task_exit("Web 管理服务", wh.await).await;
     }
+    drop(signal_handle);
 
     info!("rddns 已完全停止运行");
     Ok(())
+}
+
+/// 等待常驻任务结束并输出其退出状态
+///
+/// # 设计原理
+/// 核心常驻任务若因 panic 而终止，必须显式告警：否则进程会静默退出版本
+/// 更新的健康确认流程，甚至让自更新回滚机制失去判断依据。
+async fn report_task_exit(task_name: &str, result: Result<(), tokio::task::JoinError>) {
+    match result {
+        Ok(()) => info!("{} 任务已正常结束", task_name),
+        Err(join_err) if join_err.is_panic() => {
+            error!("{} 任务发生 panic，服务已异常终止: {}", task_name, join_err);
+        }
+        Err(join_err) => {
+            error!("{} 任务异常结束: {}", task_name, join_err);
+        }
+    }
 }
