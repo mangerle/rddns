@@ -155,7 +155,7 @@ impl DdnsEngine {
             Vec::new()
         };
 
-        current_state.check_counter += 1;
+        current_state.check_counter = current_state.check_counter.saturating_add(1);
         let reach_cache_limit = current_state.check_counter >= cache_times;
         let should_sync = decision::evaluate_sync_necessity(&SyncEvaluationParams {
             task,
@@ -191,7 +191,8 @@ impl DdnsEngine {
             Ok(p) => p,
             Err(e) => {
                 error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
-                current_state.consecutive_failures += 1;
+                current_state.consecutive_failures =
+                    current_state.consecutive_failures.saturating_add(1);
                 current_state.last_error = Some(format!("创建 DNS 服务商驱动失败: {}", e));
                 current_state.last_sync_time =
                     Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());

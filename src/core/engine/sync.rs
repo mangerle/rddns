@@ -201,7 +201,8 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
         params.current_state.consecutive_failures = 0;
         params.current_state.last_error = None;
     } else {
-        params.current_state.consecutive_failures += 1;
+        params.current_state.consecutive_failures =
+            params.current_state.consecutive_failures.saturating_add(1);
         let failed_msgs: Vec<String> = params
             .sync_results
             .iter()

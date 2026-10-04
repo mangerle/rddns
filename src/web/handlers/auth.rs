@@ -104,7 +104,7 @@ fn record_login_failure(key: &str, is_success: bool) {
         locked_until: None,
     });
 
-    rec.fail_count += 1;
+    rec.fail_count = rec.fail_count.saturating_add(1);
     rec.last_fail_at = now;
 
     // 首次达到阈值时写入锁定截止时间，后续失败不再刷新

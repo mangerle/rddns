@@ -157,7 +157,7 @@ impl NotificationDispatcher {
             if tracker.last_error_summary == error_summary
                 && tracker.last_notified_at.elapsed() < Duration::from_secs(1800)
             {
-                tracker.suppressed_count += 1;
+                tracker.suppressed_count = tracker.suppressed_count.saturating_add(1);
                 warn!(
                     "任务 [{}] 出现相同错误，处于冷却抑制中 (已抑制 {} 次)，暂不重复报警",
                     task_name, tracker.suppressed_count
