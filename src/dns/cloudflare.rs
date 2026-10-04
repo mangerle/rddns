@@ -2,7 +2,7 @@ use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
-use log::{info, warn};
+use log::warn;
 use parking_lot::RwLock;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
@@ -344,15 +344,7 @@ impl DnsProvider for CloudflareProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let result = sync_record_via(self, domain, record_type, ip, ttl).await?;
-        info!(
-            "[{}] 域名 {} ({}) 同步完成: {}",
-            DnsProvider::provider_name(self),
-            result.domain,
-            record_type,
-            result.status
-        );
-        Ok(result)
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

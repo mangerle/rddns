@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use async_trait::async_trait;
-use log::info;
+use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -89,7 +89,7 @@ impl SyncRecordResult {
     ) -> Self {
         let domain_str = domain.into();
         let ip_str = ip.into();
-        info!(
+        debug!(
             "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
             provider, domain_str, ip_str
         );

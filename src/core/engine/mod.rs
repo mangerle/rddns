@@ -169,7 +169,7 @@ impl DdnsEngine {
         });
 
         if !should_sync {
-            info!(
+            debug!(
                 "[{}] 本地 IP 未发生变动 (IPv4: {:?}, IPv6: {:?})，未达服务商校对周期 ({}/{})，跳过云端请求",
                 task.name, ipv4_opt, ipv6_opt, current_state.check_counter, cache_times
             );
