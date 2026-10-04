@@ -1,4 +1,4 @@
-use parking_lot::RwLock;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -33,29 +33,53 @@ pub struct TaskRuntimeState {
     pub synced_domains: HashMap<String, String>,
 }
 
+/// 错误摘要的最大保留字符数
+///
+/// # 设计原理
+/// `last_error` 可能承载服务商返回的原始报文，其中夹杂账号、密钥等敏感内容。
+/// 对外输出时统一截断，缩小暴露面并防止超长文本撑爆前端展示。
+const MAX_ERROR_SUMMARY_CHARS: usize = 500;
+
+impl TaskRuntimeState {
+    /// 生成对外安全的副本，截断过长的错误摘要
+    ///
+    /// # 设计原理
+    /// 引擎内部持有的原始状态需保留完整排障信息，但经 Web API 输出到浏览器前
+    /// 必须收敛敏感内容与长度，避免服务商原始报文中的账号信息外泄。
+    pub fn sanitized(&self) -> Self {
+        let mut cloned = self.clone();
+        if let Some(err) = cloned.last_error.as_mut()
+            && err.chars().count() > MAX_ERROR_SUMMARY_CHARS
+        {
+            let truncated: String = err.chars().take(MAX_ERROR_SUMMARY_CHARS).collect();
+            *err = format!("{}...(已截断)", truncated);
+        }
+        cloned
+    }
+}
+
 /// 全局任务运行时状态管理器
 ///
 /// # 设计原理
 /// - **实现初衷**: 为整个 DDNS 异步调度引擎及 Web 控制台提供中心化、线程安全的任务生命周期与运行指标状态存储。
-/// - **核心优势**: 采用细粒度 `parking_lot::RwLock`，读多写少场景下性能极佳；支持根据活动任务列表自动淘汰已删除任务状态，杜绝内存泄漏。
+/// - **核心优势**: 采用分段并发映射容器 `Arc<DashMap>`，跨组件（调度引擎与 Web 服务）克隆时共享底层同一个并发表；各任务独立分片加锁，支持高并发独立读写，并可自动淘汰已删除任务状态，杜绝内存泄漏与读写锁竞争。
 /// - **代价与局限**: 采用基于名称的字典映射，任务更名时需通过清理机制释放旧状态。
 #[derive(Clone, Default)]
 pub struct StateManager {
-    tasks: Arc<RwLock<HashMap<String, TaskRuntimeState>>>,
+    tasks: Arc<DashMap<String, TaskRuntimeState>>,
 }
 
 impl StateManager {
     /// 创建状态管理器实例
     pub fn new() -> Self {
         Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
+            tasks: Arc::new(DashMap::new()),
         }
     }
 
     /// 获取指定任务的状态克隆快照，若不存在则初始化为默认值
     pub fn get_task_state(&self, task_name: &str) -> TaskRuntimeState {
-        let mut tasks = self.tasks.write();
-        tasks.entry(task_name.to_string()).or_default().clone()
+        self.tasks.entry(task_name.to_string()).or_default().clone()
     }
 
     /// 通过闭包安全原子修改指定任务的状态
@@ -63,15 +87,30 @@ impl StateManager {
     where
         F: FnOnce(&mut TaskRuntimeState),
     {
-        let mut tasks = self.tasks.write();
-        let state = tasks.entry(task_name.to_string()).or_default();
-        f(state);
+        let mut state = self.tasks.entry(task_name.to_string()).or_default();
+        f(&mut state);
     }
 
     /// 清理已删除任务的历史运行时状态，防止内存长期驻留与泄漏
     pub fn retain_active_tasks(&self, active_task_names: &[String]) {
-        let mut tasks = self.tasks.write();
-        tasks.retain(|name, _| active_task_names.contains(name));
+        self.tasks
+            .retain(|name, _| active_task_names.contains(name));
+    }
+
+    /// 获取全部任务运行时状态的只读快照 (键为任务名称)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 供 Web 控制台展示各任务的同步时间、连续失败次数与域名级
+    ///   解析结果，使前端无需解析日志文本反推状态。
+    /// - **核心优势**: 在只读分段锁遍历中生成脱敏副本并一次性收集为独立映射，各分片独立查放，
+    ///   避免持有全局互斥锁导致读写阻塞与长临界区。
+    /// - **代价与局限**: 数据量与任务数、域名数成正比；调用方应按需使用，
+    ///   避免高频轮询造成无谓的深拷贝。
+    pub fn snapshot_all(&self) -> HashMap<String, TaskRuntimeState> {
+        self.tasks
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().sanitized()))
+            .collect()
     }
 }
 
@@ -104,10 +143,10 @@ mod tests {
 
         // 测试清理已废弃任务状态
         mgr.get_task_state("obsolete_task");
-        assert_eq!(mgr.tasks.read().len(), 2);
+        assert_eq!(mgr.tasks.len(), 2);
         mgr.retain_active_tasks(&["task1".to_string()]);
-        assert_eq!(mgr.tasks.read().len(), 1);
-        assert!(mgr.tasks.read().contains_key("task1"));
-        assert!(!mgr.tasks.read().contains_key("obsolete_task"));
+        assert_eq!(mgr.tasks.len(), 1);
+        assert!(mgr.tasks.contains_key("task1"));
+        assert!(!mgr.tasks.contains_key("obsolete_task"));
     }
 }

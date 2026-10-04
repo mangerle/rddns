@@ -1,19 +1,67 @@
+use dashmap::DashMap;
 use log::{info, warn};
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use parking_lot::RwLock;
 use reqwest::dns::{Name, Resolve, Resolving};
 use reqwest::{Client, ClientBuilder, Error as ReqwestError};
-use std::collections::HashMap;
 use std::iter::once;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::lookup_host;
 use url::form_urlencoded::byte_serialize;
 
 use crate::util::dns_resolver::{QueryRecordType, get_custom_dns_server, query_dns_server};
 use crate::util::net::{is_global_unicast_ipv6, is_public_ipv4, select_best_ipv6};
+
+/// 网卡列表缓存条目 TTL 设定 (默认 3 秒，既保证网络变更及时感知，又杜绝并发系统调用风暴)
+const IFACE_CACHE_TTL: Duration = Duration::from_secs(3);
+
+#[derive(Clone)]
+struct InterfacesCacheEntry {
+    last_updated: Instant,
+    interfaces: Vec<NetworkInterface>,
+}
+
+static SYSTEM_INTERFACES_CACHE: LazyLock<RwLock<Option<InterfacesCacheEntry>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// 获取系统网卡列表 (带 3 秒 TTL 内存缓存以减轻内核系统调用与驱动负载)
+///
+/// # 设计原理
+/// - **实现初衷**：`NetworkInterface::show()` 涉及底层系统调用（Windows `GetAdaptersAddresses`、Linux `/proc/net/dev` 与 `getifaddrs`），耗时可达数毫秒至数十毫秒。在多任务并发启动或高频探测时频繁裸调会导致 Tokio 工作线程延迟尖刺。
+/// - **核心优势**：通过短期 TTL 缓存，在突发密集查询时实现纳秒级内存读取；TTL 过期后自动刷新，且网络状态变化能在 3 秒内平滑同步。
+/// - **代价与局限**：物理网卡拔插或 IP 变更在最长 3 秒的 TTL 窗口内存在微小感知延迟，对 DDNS 周期（通常 >= 10 秒）完全无负面影响。
+pub fn get_cached_system_interfaces() -> Vec<NetworkInterface> {
+    {
+        let read_guard = SYSTEM_INTERFACES_CACHE.read();
+        if let Some(ref entry) = *read_guard
+            && entry.last_updated.elapsed() < IFACE_CACHE_TTL
+        {
+            return entry.interfaces.clone();
+        }
+    }
+
+    let mut write_guard = SYSTEM_INTERFACES_CACHE.write();
+    if let Some(ref entry) = *write_guard
+        && entry.last_updated.elapsed() < IFACE_CACHE_TTL
+    {
+        return entry.interfaces.clone();
+    }
+
+    let interfaces = NetworkInterface::show().unwrap_or_default();
+    *write_guard = Some(InterfacesCacheEntry {
+        last_updated: Instant::now(),
+        interfaces: interfaces.clone(),
+    });
+    interfaces
+}
+
+/// 清理系统网卡列表缓存 (在网络重置或测试断言时调用)
+pub fn clear_system_interfaces_cache() {
+    *SYSTEM_INTERFACES_CACHE.write() = None;
+}
 
 /// 全局跳过 TLS 证书验证开关
 static SKIP_VERIFY: AtomicBool = AtomicBool::new(false);
@@ -129,26 +177,25 @@ pub fn create_http_client_builder() -> ClientBuilder {
 /// - **实现初衷**：在多网卡/软路由多 WAN 环境下，精确获取用户指定的出口网卡当前绑定的 IPv4 地址。
 /// - **核心优势**：优先选取公网 IPv4，在无公网时安全降级为局域网首个有效地址。
 pub fn find_interface_ipv4(iface_name: &str) -> Option<Ipv4Addr> {
-    if let Ok(interfaces) = NetworkInterface::show() {
-        for iface in interfaces {
-            if iface.name.eq_ignore_ascii_case(iface_name) {
-                let mut fallback = None;
-                for addr in iface.addr {
-                    if let Addr::V4(v4) = addr
-                        && !v4.ip.is_loopback()
-                        && !v4.ip.is_unspecified()
-                    {
-                        if is_public_ipv4(&v4.ip) {
-                            return Some(v4.ip);
-                        }
-                        if fallback.is_none() {
-                            fallback = Some(v4.ip);
-                        }
+    let interfaces = get_cached_system_interfaces();
+    for iface in interfaces {
+        if iface.name.eq_ignore_ascii_case(iface_name) {
+            let mut fallback = None;
+            for addr in iface.addr {
+                if let Addr::V4(v4) = addr
+                    && !v4.ip.is_loopback()
+                    && !v4.ip.is_unspecified()
+                {
+                    if is_public_ipv4(&v4.ip) {
+                        return Some(v4.ip);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(v4.ip);
                     }
                 }
-                if fallback.is_some() {
-                    return fallback;
-                }
+            }
+            if fallback.is_some() {
+                return fallback;
             }
         }
     }
@@ -160,20 +207,19 @@ pub fn find_interface_ipv4(iface_name: &str) -> Option<Ipv4Addr> {
 /// # 设计原理
 /// - **实现初衷**：针对双栈或纯 IPv6 宽带环境，挑选出该网卡绑定的最稳定全球单播 IPv6（避开临时隐私地址）。
 pub fn find_interface_ipv6(iface_name: &str) -> Option<Ipv6Addr> {
-    if let Ok(interfaces) = NetworkInterface::show() {
-        for iface in interfaces {
-            if iface.name.eq_ignore_ascii_case(iface_name) {
-                let mut v6_candidates = Vec::new();
-                for addr in iface.addr {
-                    if let Addr::V6(v6) = addr
-                        && is_global_unicast_ipv6(&v6.ip)
-                    {
-                        v6_candidates.push(v6.ip);
-                    }
+    let interfaces = get_cached_system_interfaces();
+    for iface in interfaces {
+        if iface.name.eq_ignore_ascii_case(iface_name) {
+            let mut v6_candidates = Vec::new();
+            for addr in iface.addr {
+                if let Addr::V6(v6) = addr
+                    && is_global_unicast_ipv6(&v6.ip)
+                {
+                    v6_candidates.push(v6.ip);
                 }
-                if let Some(best) = select_best_ipv6(&v6_candidates) {
-                    return Some(best);
-                }
+            }
+            if let Some(best) = select_best_ipv6(&v6_candidates) {
+                return Some(best);
             }
         }
     }
@@ -185,48 +231,47 @@ pub fn find_interface_ipv6(iface_name: &str) -> Option<Ipv6Addr> {
 /// # 设计原理
 /// - **实现初衷**：为多 WAN 出口绑定提供通用的本地 IP 探测机制，无需外部配置即可自动选用最优出口协议。
 pub fn find_interface_ip(iface_name: &str) -> Option<IpAddr> {
-    if let Ok(interfaces) = NetworkInterface::show() {
-        for iface in interfaces {
-            if iface.name.eq_ignore_ascii_case(iface_name) {
-                let mut public_v4 = None;
-                let mut private_v4 = None;
-                let mut v6_candidates = Vec::new();
+    let interfaces = get_cached_system_interfaces();
+    for iface in interfaces {
+        if iface.name.eq_ignore_ascii_case(iface_name) {
+            let mut public_v4 = None;
+            let mut private_v4 = None;
+            let mut v6_candidates = Vec::new();
 
-                for addr in iface.addr {
-                    match addr {
-                        Addr::V4(v4) => {
-                            if !v4.ip.is_loopback() && !v4.ip.is_unspecified() {
-                                if is_public_ipv4(&v4.ip) {
-                                    if public_v4.is_none() {
-                                        public_v4 = Some(v4.ip);
-                                    }
-                                } else if private_v4.is_none() {
-                                    private_v4 = Some(v4.ip);
+            for addr in iface.addr {
+                match addr {
+                    Addr::V4(v4) => {
+                        if !v4.ip.is_loopback() && !v4.ip.is_unspecified() {
+                            if is_public_ipv4(&v4.ip) {
+                                if public_v4.is_none() {
+                                    public_v4 = Some(v4.ip);
                                 }
-                            }
-                        }
-                        Addr::V6(v6) => {
-                            if is_global_unicast_ipv6(&v6.ip) {
-                                v6_candidates.push(v6.ip);
+                            } else if private_v4.is_none() {
+                                private_v4 = Some(v4.ip);
                             }
                         }
                     }
+                    Addr::V6(v6) => {
+                        if is_global_unicast_ipv6(&v6.ip) {
+                            v6_candidates.push(v6.ip);
+                        }
+                    }
                 }
+            }
 
-                // 1. 优先使用公网 IPv4
-                if let Some(pub_v4) = public_v4 {
-                    return Some(IpAddr::V4(pub_v4));
-                }
+            // 1. 优先使用公网 IPv4
+            if let Some(pub_v4) = public_v4 {
+                return Some(IpAddr::V4(pub_v4));
+            }
 
-                // 2. 其次使用优选的全球单播 IPv6 (智能避开临时隐私地址)
-                if let Some(best_v6) = select_best_ipv6(&v6_candidates) {
-                    return Some(IpAddr::V6(best_v6));
-                }
+            // 2. 其次使用优选的全球单播 IPv6 (智能避开临时隐私地址)
+            if let Some(best_v6) = select_best_ipv6(&v6_candidates) {
+                return Some(IpAddr::V6(best_v6));
+            }
 
-                // 3. 兜底使用局域网/私网 IPv4
-                if let Some(priv_v4) = private_v4 {
-                    return Some(IpAddr::V4(priv_v4));
-                }
+            // 3. 兜底使用局域网/私网 IPv4
+            if let Some(priv_v4) = private_v4 {
+                return Some(IpAddr::V4(priv_v4));
             }
         }
     }
@@ -321,38 +366,104 @@ struct ClientKey {
     interface_name: Option<String>,
     timeout_ms: u64,
     skip_verify: bool,
+    /// 绑定的地址族：`None` 表示不限族，`Some(true)` 为强制 IPv6 出站
+    ///
+    /// # 设计原理
+    /// 双栈环境常需按协议族绑定不同的本机源地址出包，故纳入缓存键维度，
+    /// 避免误复用另一地址族的客户端导致源地址绑定失效。
+    ipv6_only: Option<bool>,
+    /// 自定义 User-Agent，不同取值须视为不同缓存条目
+    user_agent: Option<String>,
 }
 
-static CLIENT_CACHE: LazyLock<RwLock<HashMap<ClientKey, Client>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+impl ClientKey {
+    /// 构造通用 DNS / 通知场景的缓存键
+    fn general(interface_name: Option<&str>, timeout: Duration) -> Self {
+        Self {
+            interface_name: normalize_interface(interface_name),
+            timeout_ms: timeout.as_millis() as u64,
+            skip_verify: is_skip_verify(),
+            ipv6_only: None,
+            user_agent: None,
+        }
+    }
+}
+
+/// 归一化网卡名：去除首尾空白，空白串视为未指定
+fn normalize_interface(interface_name: Option<&str>) -> Option<String> {
+    interface_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+static CLIENT_CACHE: LazyLock<DashMap<ClientKey, Client>> = LazyLock::new(DashMap::new);
 
 /// 清理全局 HTTP 客户端连接池缓存
 pub fn clear_http_client_cache() {
-    CLIENT_CACHE.write().clear();
+    CLIENT_CACHE.clear();
 }
 
 /// 获取或创建绑定了指定出站物理网卡并带指定超时的 Reqwest Client (复用全局连接池)
 ///
 /// # 设计原理
 /// - **实现初衷**：Reqwest Client 内部维持高昂的 TCP 连接池与 TLS 会话缓存，避免每次轮询重复创建与握手。
-/// - **核心优势**：基于网卡名、超时时间与 TLS 选项多维键缓存，零重复建连。
+/// - **核心优势**：基于网卡名、超时时间与 TLS 选项多维键缓存，依托分段锁容器 `DashMap` 实现高并发零锁竞争读取与零重复建连。
 pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> Client {
+    get_or_create_client(
+        ClientKey::general(interface_name, timeout),
+        || create_task_http_client(interface_name, timeout),
+        interface_name,
+    )
+}
+
+/// 获取或创建绑定指定地址族源IP 与自定义 User-Agent 的 HTTP 客户端 (复用全局连接池)
+///
+/// # 设计原理
+/// IP 探测器需按协议族绑定不同的本机源地址出包，且携带固定 User-Agent，
+/// 故与通用客户端分开缓存，依托 `DashMap` 避免每轮探测重复进行 TCP/TLS 握手。
+pub fn get_family_http_client(
+    interface_name: Option<&str>,
+    is_ipv6: bool,
+    timeout: Duration,
+    user_agent: &str,
+) -> Client {
     let key = ClientKey {
-        interface_name: interface_name
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
+        interface_name: normalize_interface(interface_name),
         timeout_ms: timeout.as_millis() as u64,
         skip_verify: is_skip_verify(),
+        ipv6_only: Some(is_ipv6),
+        user_agent: Some(user_agent.to_string()),
     };
 
-    {
-        let read_guard = CLIENT_CACHE.read();
-        if let Some(client) = read_guard.get(&key) {
-            return client.clone();
-        }
+    get_or_create_client(
+        key,
+        || {
+            create_task_http_client_builder_for_family(interface_name, is_ipv6)
+                .timeout(timeout)
+                .user_agent(user_agent)
+                .build()
+        },
+        interface_name,
+    )
+}
+
+/// 统一的缓存查找与降级构建流程
+///
+/// # 设计原理
+/// 抽离以保证「通用客户端」与「协议族客户端」共享完全一致的降级策略：
+/// 构建失败时依次回退到通用构建器与 reqwest 默认实例，绝不向上抛出，
+/// 依托 `DashMap` 的分段锁守卫即查即放，确保缓存层永远安全返回可用客户端。
+fn get_or_create_client<F>(key: ClientKey, build: F, interface_name: Option<&str>) -> Client
+where
+    F: FnOnce() -> Result<Client, ReqwestError>,
+{
+    if let Some(client) = CLIENT_CACHE.get(&key) {
+        return client.clone();
     }
 
-    let client = match create_task_http_client(interface_name, timeout) {
+    let timeout = Duration::from_millis(key.timeout_ms);
+    let client = match build() {
         Ok(c) => c,
         Err(e) => {
             warn!(
@@ -371,8 +482,7 @@ pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> 
             }
         }
     };
-    let mut write_guard = CLIENT_CACHE.write();
-    write_guard
+    CLIENT_CACHE
         .entry(key)
         .or_insert_with(|| client.clone())
         .clone()
@@ -383,21 +493,13 @@ pub fn create_default_dns_client(interface_name: Option<&str>) -> Client {
     get_task_http_client(interface_name, Duration::from_secs(15))
 }
 
-/// 创建通知渠道专属的 HTTP 客户端 (标准 10 秒超时，带构建失败告警与优雅降级)
+/// 创建通知渠道专属的 HTTP 客户端 (标准 10 秒超时，跨周期复用全局连接池)
+///
+/// # 设计原理
+/// 通知分发在每轮同步后可能对多个渠道并发调用，若每次都新建 Client 会
+/// 造成连接池反复创建销毁，故统一纳入缓存治理。
 pub fn create_notifier_client() -> Client {
-    match create_http_client(Duration::from_secs(10)) {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(
-                "构建通知渠道专属 HTTP 客户端失败: {}，将使用带超时的基础实例兜底",
-                e
-            );
-            Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_default()
-        }
-    }
+    get_task_http_client(None, Duration::from_secs(10))
 }
 
 /// 对字符串执行 URL 百分比编码 (application/x-www-form-urlencoded)
@@ -441,5 +543,95 @@ mod tests {
         let raw = "测试 abc 123";
         assert_eq!(url_encode_if(raw, false), raw);
         assert_eq!(url_encode_if(raw, true), "%E6%B5%8B%E8%AF%95+abc+123");
+    }
+
+    /// 缓存测试专用的全局互斥锁
+    ///
+    /// # 并发说明
+    /// Rust 测试默认多线程并行执行，而 `CLIENT_CACHE` 是进程级全局状态，
+    /// 多个用例并行断言其条目数会相互干扰。故用一把测试级互斥锁将
+    /// 涉及缓存的用例强制串行执行。此处刻意复用项目既有的 `parking_lot`，
+    /// 以避免测试锁在 panic 场景下中毒。
+    static TEST_CACHE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    #[test]
+    fn test_client_cache_reuses_same_entry() {
+        let _guard = TEST_CACHE_LOCK.lock();
+        clear_http_client_cache();
+        let timeout = Duration::from_secs(15);
+
+        // 相同键重复请求，缓存条目数不应增长（证明复用了既有条目而非新建）
+        let first = get_task_http_client(Some("eth0"), timeout);
+        let count_after_first = CLIENT_CACHE.len();
+        let second = get_task_http_client(Some("eth0"), timeout);
+        let count_after_second = CLIENT_CACHE.len();
+
+        assert_eq!(count_after_first, 1, "首次请求后应恰好写入一个缓存条目");
+        assert_eq!(
+            count_after_first, count_after_second,
+            "相同参数的请求必须复用缓存条目，不得重复写入"
+        );
+        drop(first);
+        drop(second);
+
+        // 不同超时时间应产生新条目
+        let _other = get_task_http_client(Some("eth0"), Duration::from_secs(30));
+        assert_eq!(CLIENT_CACHE.len(), 2, "不同超时应作为独立缓存条目");
+        clear_http_client_cache();
+    }
+
+    #[test]
+    fn test_client_cache_key_normalizes_blank_interface() {
+        let _guard = TEST_CACHE_LOCK.lock();
+        clear_http_client_cache();
+        let timeout = Duration::from_secs(15);
+
+        // 空白网卡名应被归一化为 None，与完全不传参视为同一条目
+        let _blank = get_task_http_client(Some("   "), timeout);
+        let _none = get_task_http_client(None, timeout);
+        assert_eq!(CLIENT_CACHE.len(), 1, "空白网卡名应归一化后参与缓存键计算");
+        clear_http_client_cache();
+    }
+
+    #[test]
+    fn test_family_client_cache_separates_address_families() {
+        let _guard = TEST_CACHE_LOCK.lock();
+        clear_http_client_cache();
+        let timeout = Duration::from_secs(5);
+        // 与 UrlIpFetcher::USER_AGENT 保持一致的字面量，避免测试依赖上层模块私有常量
+        let ua = "rddns/0.7.0 (Rust DDNS Client)";
+
+        // 协议族不同的客户端不得复用同一条目，否则源地址绑定会失效
+        let _v4 = get_family_http_client(None, false, timeout, ua);
+        let _v6 = get_family_http_client(None, true, timeout, ua);
+        assert_eq!(
+            CLIENT_CACHE.len(),
+            2,
+            "IPv4 与 IPv6 客户端必须是独立缓存条目"
+        );
+
+        // 同族重复请求应复用
+        let _v4_again = get_family_http_client(None, false, timeout, ua);
+        assert_eq!(CLIENT_CACHE.len(), 2, "同协议族重复请求应复用缓存");
+        clear_http_client_cache();
+    }
+
+    #[test]
+    fn test_cached_system_interfaces_reuses_within_ttl() {
+        let _guard = TEST_CACHE_LOCK.lock();
+        clear_system_interfaces_cache();
+
+        let ifaces1 = get_cached_system_interfaces();
+        let ifaces2 = get_cached_system_interfaces();
+        assert_eq!(ifaces1.len(), ifaces2.len(), "缓存命中时网卡数量应完全一致");
+
+        // 主动清理缓存后依然能正常获取
+        clear_system_interfaces_cache();
+        let ifaces3 = get_cached_system_interfaces();
+        assert_eq!(
+            ifaces1.len(),
+            ifaces3.len(),
+            "主动清理后重新查询仍能正常返回"
+        );
     }
 }
