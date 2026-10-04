@@ -121,7 +121,7 @@ fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -
     let mut spawn_cmd = Command::new(exe_path);
     spawn_cmd.args(["-c", &config_path.to_string_lossy(), "-d"]);
     configure_daemon_command(&mut spawn_cmd);
-    let _ = spawn_cmd.spawn();
+    spawn_cmd.spawn().context("启动后台守护进程失败")?;
 
     info!("==========================================");
     info!("RDDNS 已成功安装并设置为 Windows 开机自启！");
