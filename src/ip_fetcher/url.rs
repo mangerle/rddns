@@ -1,8 +1,8 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
-use crate::util::http::{create_http_client, create_task_http_client_builder_for_family};
-use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6};
+use crate::util::http::get_family_http_client;
+use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4};
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::debug;
 use reqwest::{Client, Response};
 use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -17,54 +17,29 @@ pub struct UrlIpFetcher {
 }
 
 impl UrlIpFetcher {
-    /// 针对指定地址族构建具备超时与 User-Agent 的 HTTP 客户端
-    fn build_client(
-        http_interface: Option<&str>,
-        is_ipv6: bool,
-        timeout: Duration,
-        user_agent: &'static str,
-    ) -> Client {
-        match create_task_http_client_builder_for_family(http_interface, is_ipv6)
-            .timeout(timeout)
-            .user_agent(user_agent)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                if let Some(iface) = http_interface {
-                    warn!(
-                        "为任务网卡 [{}] 构建 {} 专有客户端失败: {}，降级为通用客户端",
-                        iface,
-                        if is_ipv6 { "IPv6" } else { "IPv4" },
-                        e
-                    );
-                }
-                create_http_client(timeout).unwrap_or_else(|_| {
-                    Client::builder()
-                        .timeout(timeout)
-                        .build()
-                        .unwrap_or_default()
-                })
-            }
-        }
-    }
+    /// 单个 IP 查询接口的请求超时
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+    /// 探测请求的 User-Agent，纳入客户端缓存键维度
+    const USER_AGENT: &'static str = "rddns/0.7.0 (Rust DDNS Client)";
 
     /// 创建基于 HTTP(S) URL 接口的公网 IP 探测器
     ///
     /// # 设计原理
     /// - **实现初衷**: 适用于绝大多数普通家用或云端服务器环境，通过请求公共的 IP 反射 API（如 ipify, icanhazip, cip.cc 等）直接获取对外公网 IP。
     /// - **核心优势**: 穿透能力最强，能穿越绝大多数 NAT、代理与安全网关；天然支持通过多端点列表进行多源主备容灾切换。
-    /// - **代价与局限**: 依赖第三方公共 HTTP 服务的可用性与稳定性；每次探测伴随完整的 TLS 握手与 HTTP 报文解析开销。
+    /// - **代价与局限**: 依赖第三方公共 HTTP 服务的可用性与稳定性。
     pub fn new(
         endpoints: Vec<String>,
         regex: Option<String>,
         http_interface: Option<&str>,
     ) -> Self {
-        let timeout = Duration::from_secs(5);
-        let user_agent = "rddns/0.7.0 (Rust DDNS Client)";
+        let timeout = Self::REQUEST_TIMEOUT;
+        let user_agent = Self::USER_AGENT;
 
-        let ipv4_client = Self::build_client(http_interface, false, timeout, user_agent);
-        let ipv6_client = Self::build_client(http_interface, true, timeout, user_agent);
+        // 客户端按「网卡 + 协议族 + 超时 + UA」维度纳入全局缓存，
+        // 避免每轮探测都重建连接池并重复进行 TCP/TLS 握手。
+        let ipv4_client = get_family_http_client(http_interface, false, timeout, user_agent);
+        let ipv6_client = get_family_http_client(http_interface, true, timeout, user_agent);
 
         Self {
             endpoints,
@@ -155,8 +130,18 @@ impl UrlIpFetcher {
 impl IpFetcher for UrlIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         self.fetch_ip_generic(&self.ipv4_client, "IPv4", |body| {
-            extract_ipv4(body, self.regex.as_deref())
-                .ok_or_else(|| FetchError::NoValidIpv4(body.to_string()))
+            let ip = extract_ipv4(body, self.regex.as_deref())
+                .ok_or_else(|| FetchError::NoValidIpv4(body.to_string()))?;
+            // 必须校验为公网单播地址：若查询接口被劫持或遭 DNS 污染返回了
+            // RFC1918 私网 / 运营商 CGNAT 地址，直接提交到公网 DNS 会使域名对外不可达。
+            if is_public_ipv4(&ip) {
+                Ok(ip)
+            } else {
+                Err(FetchError::NoValidIpv4(format!(
+                    "接口返回的 IPv4 非公网单播地址: {}",
+                    ip
+                )))
+            }
         })
         .await
     }
@@ -172,5 +157,57 @@ impl IpFetcher for UrlIpFetcher {
             }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    /// 构造仅执行提取与校验逻辑的提取器，验证公网判定行为（不发起真实网络请求）
+    fn build_ipv4_extractor(regex: Option<&str>) -> impl Fn(&str) -> Result<Ipv4Addr, FetchError> {
+        move |body: &str| {
+            let ip = extract_ipv4(body, regex)
+                .ok_or_else(|| FetchError::NoValidIpv4(body.to_string()))?;
+            if is_public_ipv4(&ip) {
+                Ok(ip)
+            } else {
+                Err(FetchError::NoValidIpv4(format!(
+                    "接口返回的 IPv4 非公网单播地址: {}",
+                    ip
+                )))
+            }
+        }
+    }
+
+    #[test]
+    fn test_fetch_ipv4_accepts_public_addresses() {
+        let extract = build_ipv4_extractor(None);
+        // 普通公网 IPv4 应当被接受
+        assert_eq!(extract("1.2.3.4").unwrap(), Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(
+            extract("当前 IP: 114.114.114.114").unwrap(),
+            Ipv4Addr::new(114, 114, 114, 114)
+        );
+    }
+
+    #[test]
+    fn test_fetch_ipv4_rejects_private_and_cgnat_addresses() {
+        let extract = build_ipv4_extractor(None);
+        // RFC1918 私网地址必须被拒绝，避免内网地址被提交到公网 DNS
+        for private in ["192.168.1.1", "10.0.0.5", "172.16.0.1"] {
+            let res = extract(private);
+            assert!(res.is_err(), "私网地址 {} 本应被拒绝", private);
+            assert!(res.unwrap_err().to_string().contains("非公网单播"));
+        }
+        // 运营商 CGNAT(100.64.0.0/10) 同样必须被拒绝
+        for cgnat in ["100.64.0.1", "100.127.255.254"] {
+            assert!(extract(cgnat).is_err(), "CGNAT 地址 {} 本应被拒绝", cgnat);
+        }
+        // 回环与未指定地址
+        for special in ["127.0.0.1", "0.0.0.0"] {
+            assert!(extract(special).is_err(), "特殊地址 {} 本应被拒绝", special);
+        }
     }
 }

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::spawn;
+use tokio::task::JoinSet;
 
 /// 错误告警状态跟踪（用于防风暴抑制）
 #[derive(Debug, Clone)]
@@ -180,6 +181,12 @@ impl NotificationDispatcher {
     }
 
     /// 内部通知分发执行
+    ///
+    /// # 设计原理
+    /// 各渠道推送相互独立，单个渠道失败不应影响其他渠道。为避免通知网络
+    /// 延迟阻塞 DDNS 主同步循环，本函数保持「即发即忘」语义；但裸 spawn
+    /// 会丢弃 JoinHandle，使 panic 彻底静默。故派生一个**监管任务**持有
+    /// JoinSet 并收割全部结果——既保持非阻塞，又不丢失 panic 感知能力。
     fn dispatch_internal(&self, event: NotificationEvent, force: bool) {
         if self.notifiers.is_empty() {
             return;
@@ -189,14 +196,26 @@ impl NotificationDispatcher {
             return;
         }
 
+        let mut join_set = JoinSet::new();
         for notifier in &self.notifiers {
             let n = notifier.clone();
             let ev = event.clone();
-            spawn(async move {
+            join_set.spawn(async move {
                 if let Err(e) = n.send(&ev).await {
                     error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
                 }
             });
         }
+
+        // 监管任务：收割各渠道句柄，确保 panic 可被识别并记录
+        spawn(async move {
+            while let Some(res) = join_set.join_next().await {
+                if let Err(join_err) = res
+                    && join_err.is_panic()
+                {
+                    error!("通知渠道任务发生 panic，该渠道推送已中断: {}", join_err);
+                }
+            }
+        });
     }
 }

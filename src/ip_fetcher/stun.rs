@@ -2,7 +2,7 @@ use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
 use crate::util::crypto::fill_random_bytes;
 use crate::util::dns_resolver::{QueryRecordType, query_dns_server};
 use crate::util::http::{find_interface_ipv4, find_interface_ipv6};
-use crate::util::net::is_global_unicast_ipv6;
+use crate::util::net::{is_global_unicast_ipv6, is_public_ipv4};
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -448,11 +448,13 @@ impl IpFetcher for StunIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         match self.fetch_ip_with_fallback(false).await {
             Ok(IpAddr::V4(v4)) => {
-                if !v4.is_unspecified() && !v4.is_loopback() {
+                // 必须校验为公网单播地址：STUN 服务器返回的映射地址若为 RFC1918 私网
+                // 或运营商 CGNAT(100.64.0.0/10)，提交到公网 DNS 后会导致域名对外不可达。
+                if is_public_ipv4(&v4) {
                     Ok(Some(v4))
                 } else {
                     Err(FetchError::NoValidIpv4(format!(
-                        "STUN 返回了非法的 IPv4: {}",
+                        "STUN 返回的 IPv4 非公网单播地址: {}",
                         v4
                     )))
                 }

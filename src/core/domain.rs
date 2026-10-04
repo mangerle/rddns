@@ -128,9 +128,13 @@ fn split_sub_and_root_by_psl(domain_ascii: &str) -> (String, String) {
         }
     } else {
         let parts: Vec<&str> = domain_ascii.split('.').collect();
-        let sub = parts[..parts.len() - 2].join(".");
-        let root = parts[parts.len() - 2..].join(".");
-        (if sub.is_empty() { "@".to_string() } else { sub }, root)
+        if parts.len() < 2 {
+            ("@".to_string(), domain_ascii.to_string())
+        } else {
+            let sub = parts[..parts.len() - 2].join(".");
+            let root = parts[parts.len() - 2..].join(".");
+            (if sub.is_empty() { "@".to_string() } else { sub }, root)
+        }
     }
 }
 
@@ -356,5 +360,17 @@ mod tests {
         let d7 = parse_domain("test.eu.org").unwrap();
         assert_eq!(d7.sub_domain, "@");
         assert_eq!(d7.root_domain, "test.eu.org");
+    }
+
+    #[test]
+    fn test_parse_domain_single_label_no_panic() {
+        // 单标签域名（如 localhost、myrouter）无点号，parse_domain 应安全返回 None，严禁 panic
+        assert!(parse_domain("localhost").is_none());
+        assert!(parse_domain("myhost?line=default").is_none());
+
+        // 直接测试底层拆分函数，即便独立调用也绝不发生算术下溢 panic
+        let (sub, root) = split_sub_and_root_by_psl("localhost");
+        assert_eq!(sub, "@");
+        assert_eq!(root, "localhost");
     }
 }
