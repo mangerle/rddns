@@ -202,6 +202,15 @@ impl ConfigManager {
 
         temp_file.write_all(toml_str.as_bytes())?;
         temp_file.flush()?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = temp_file
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600));
+        }
+
         temp_file.as_file().sync_all()?;
 
         temp_file
@@ -330,5 +339,22 @@ mod tests {
         let parsed_conf: AppConfig =
             toml::from_str(&toml_str).expect("从生成的 TOML 反序列化必须成功");
         assert_eq!(default_conf, parsed_conf);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unix_config_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("secure_config.toml");
+
+        let _ = ConfigManager::load_or_create(config_file.clone()).unwrap();
+        let metadata = fs::metadata(&config_file).unwrap();
+        let mode = metadata.permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "Unix 环境下配置文件应具备 0600 (仅所有者可读写) 访问权限"
+        );
     }
 }
