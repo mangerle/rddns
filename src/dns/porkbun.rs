@@ -19,6 +19,7 @@ pub struct PorkbunProvider {
 
 #[derive(Debug, Deserialize)]
 struct PorkbunRecord {
+    id: Option<String>,
     content: Option<String>,
 }
 
@@ -131,7 +132,8 @@ impl RecordOps for PorkbunProvider {
         let mut remotes = Vec::with_capacity(existing_records.len());
         for rec in existing_records {
             if let Some(content) = rec.content {
-                remotes.push(RemoteRecord::new("porkbun_record", content));
+                let rec_id = rec.id.as_deref().unwrap_or("porkbun_record");
+                remotes.push(RemoteRecord::new(rec_id, content));
             }
         }
         Ok(remotes)

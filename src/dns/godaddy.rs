@@ -151,6 +151,8 @@ impl RecordOps for GoDaddyProvider {
         }
 
         let records = serde_json::from_str::<Vec<GoDaddyRecord>>(&body)?;
+        // GoDaddy DNS REST API 原生未提供独立记录 ID，
+        // 其资源端点按 /{type}/{name} 组织，子域名即为记录集逻辑主键 (P2-19)。
         let matched = records
             .into_iter()
             .filter_map(|r| r.data.map(|d| RemoteRecord::new(sub, d)))

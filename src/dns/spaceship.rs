@@ -114,6 +114,9 @@ impl RecordOps for SpaceshipProvider {
                 && (item.name.eq_ignore_ascii_case(sub_name)
                     || (sub_name.is_empty() && item.name == "@"))
             {
+                // Spaceship REST API 原生未为单条记录分配数字 ID，
+                // 其删除接口强制以 (type, name, address) 作为记录唯一标识。
+                // 此处以 address 作为 RemoteRecord.id，确保后续能够精准定位并清理旧记录 (P2-19)。
                 remotes.push(RemoteRecord::new(item.address.clone(), item.address));
             }
         }

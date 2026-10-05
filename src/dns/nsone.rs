@@ -188,6 +188,8 @@ impl RecordOps for NsOneProvider {
                 .and_then(|ans| ans.first())
                 .and_then(|a| a.answer.first());
             if let Some(ip_str) = current_ip {
+                // NS1 API 以完整的 FQDN (/{zone}/{domain}/{type}) 作为记录唯一主键，
+                // 不存在独立分配的数字 record_id，因此传递 full_domain 作为定位标识 (P2-19)。
                 remotes.push(RemoteRecord::new(full_domain, ip_str));
             }
         }
