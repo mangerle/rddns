@@ -10,14 +10,15 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Local;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, Instant};
 
-/// 测试通知触发的最小时间间隔（毫秒），杜绝短时间内滥用中继发送通知 (P1-9)
-const TEST_NOTIFY_MIN_INTERVAL_MS: i64 = 3000;
+/// 测试通知触发的最小时间间隔，杜绝短时间内滥用中继发送通知 (P1-9)
+const TEST_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(3000);
 
-/// 上一次触发测试通知的时间戳（毫秒）
-static LAST_NOTIFY_TEST_TIMESTAMP_MS: AtomicI64 = AtomicI64::new(0);
+/// 上一次触发测试通知的单调时钟时刻
+static LAST_NOTIFY_TEST_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// 测试 IP 提取器配置请求体
 #[derive(Debug, Deserialize)]
@@ -148,30 +149,25 @@ pub async fn test_notify_handler(
     }
 
     // 3. 频控校验：防止短时间内高频调用通知测试造成垃圾消息轰炸或放大反射攻击 (P1-9)
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let last = LAST_NOTIFY_TEST_TIMESTAMP_MS.load(Ordering::Acquire);
-    if now_ms.saturating_sub(last) < TEST_NOTIFY_MIN_INTERVAL_MS {
-        let remaining_secs = (TEST_NOTIFY_MIN_INTERVAL_MS - (now_ms - last) + 999) / 1000;
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiResponse::<()>::err(format!(
-                "测试通知发送过于频繁，请等待 {} 秒后重试",
-                remaining_secs
-            ))),
-        )
-            .into_response();
-    }
-    if LAST_NOTIFY_TEST_TIMESTAMP_MS
-        .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Relaxed)
-        .is_err()
     {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ApiResponse::<()>::err(
-                "正在处理先前的测试通知请求，请勿并发发起".to_string(),
-            )),
-        )
-            .into_response();
+        let mut last_time = LAST_NOTIFY_TEST_TIME.lock();
+        let now = Instant::now();
+        if let Some(prev) = *last_time {
+            let elapsed = now.saturating_duration_since(prev);
+            if elapsed < TEST_NOTIFY_MIN_INTERVAL {
+                let remaining_millis = (TEST_NOTIFY_MIN_INTERVAL - elapsed).as_millis();
+                let remaining_secs = remaining_millis.div_ceil(1000);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(ApiResponse::<()>::err(format!(
+                        "测试通知发送过于频繁，请等待 {} 秒后重试",
+                        remaining_secs
+                    ))),
+                )
+                    .into_response();
+            }
+        }
+        *last_time = Some(now);
     }
 
     let app_config = state.config_manager.get_config();
