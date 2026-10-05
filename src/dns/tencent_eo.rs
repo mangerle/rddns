@@ -1,10 +1,10 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::tencent_eo_types::*;
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
 use log::{debug, info};
-use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
 
@@ -17,108 +17,6 @@ const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
 /// 腾讯云 EdgeOne (TEO) 全球边缘加速与 DNS 同步驱动
 pub struct TencentEoProvider {
     tc3: Tc3Client,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoError {
-    #[serde(rename = "Code")]
-    code: String,
-    #[serde(rename = "Message")]
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoZoneItem {
-    #[serde(rename = "ZoneId")]
-    zone_id: String,
-    #[serde(rename = "ZoneName")]
-    zone_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoZoneRespData {
-    #[serde(rename = "Zones")]
-    zones: Option<Vec<TeoZoneItem>>,
-    #[serde(rename = "Error")]
-    error: Option<TeoError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoZoneResp {
-    #[serde(rename = "Response")]
-    response: TeoZoneRespData,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoRecordItem {
-    #[serde(rename = "RecordId")]
-    record_id: Option<String>,
-    #[serde(rename = "Name")]
-    name: String,
-    #[serde(rename = "Type")]
-    record_type: String,
-    #[serde(rename = "Content")]
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoRecordRespData {
-    #[serde(rename = "DnsRecords")]
-    dns_records: Option<Vec<TeoRecordItem>>,
-    #[serde(rename = "Error")]
-    error: Option<TeoError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoRecordResp {
-    #[serde(rename = "Response")]
-    response: TeoRecordRespData,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoActionRespData {
-    #[serde(rename = "Error")]
-    error: Option<TeoError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoActionResp {
-    #[serde(rename = "Response")]
-    response: TeoActionRespData,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoOriginRecord {
-    #[serde(rename = "Record")]
-    record: String,
-    #[serde(rename = "Type")]
-    record_type: String,
-    #[serde(rename = "Weight")]
-    weight: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoOriginGroup {
-    #[serde(rename = "GroupId")]
-    group_id: String,
-    #[serde(rename = "Name")]
-    name: String,
-    #[serde(rename = "Records")]
-    records: Option<Vec<TeoOriginRecord>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoOriginGroupRespData {
-    #[serde(rename = "OriginGroups")]
-    origin_groups: Option<Vec<TeoOriginGroup>>,
-    #[serde(rename = "Error")]
-    error: Option<TeoError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeoOriginGroupResp {
-    #[serde(rename = "Response")]
-    response: TeoOriginGroupRespData,
 }
 
 impl TencentEoProvider {
@@ -496,5 +394,77 @@ impl DnsProvider for TencentEoProvider {
             self.sync_standard_dns_record(&zone_id, domain, record_type, &target_ip_str, ttl_val)
                 .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_teo_zone_resp_deserialization() {
+        let json_str = r#"{
+            "Response": {
+                "Zones": [
+                    {
+                        "ZoneId": "zone-2a3b4c5d",
+                        "ZoneName": "example.com"
+                    }
+                ],
+                "Error": null
+            }
+        }"#;
+
+        let resp: TeoZoneResp = serde_json::from_str(json_str).unwrap();
+        let zones = resp.response.zones.expect("应包含 zones 列表");
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].zone_id, "zone-2a3b4c5d");
+        assert_eq!(zones[0].zone_name, "example.com");
+    }
+
+    #[test]
+    fn test_teo_record_resp_deserialization() {
+        let json_str = r#"{
+            "Response": {
+                "DnsRecords": [
+                    {
+                        "RecordId": "rec-123456",
+                        "Name": "sub.example.com",
+                        "Type": "A",
+                        "Content": "1.2.3.4"
+                    }
+                ],
+                "Error": null
+            }
+        }"#;
+
+        let resp: TeoRecordResp = serde_json::from_str(json_str).unwrap();
+        let records = resp.response.dns_records.expect("应包含 dns_records 列表");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].record_id.as_deref(), Some("rec-123456"));
+        assert_eq!(records[0].content, "1.2.3.4");
+    }
+
+    #[test]
+    fn test_origin_group_param_detection() {
+        let mut domain = ParsedDomain {
+            raw: "cdn.example.com".to_string(),
+            sub_domain: "cdn".to_string(),
+            root_domain: "example.com".to_string(),
+            custom_params: std::collections::HashMap::new(),
+        };
+
+        // 未配置源站组参数时为标准 DNS
+        let is_og = domain.custom_params.contains_key("GroupId")
+            || domain.custom_params.contains_key("group_id");
+        assert!(!is_og);
+
+        // 配置 group_id 后识别为源站组
+        domain
+            .custom_params
+            .insert("group_id".to_string(), "og-123".to_string());
+        let is_og = domain.custom_params.contains_key("GroupId")
+            || domain.custom_params.contains_key("group_id");
+        assert!(is_og);
     }
 }

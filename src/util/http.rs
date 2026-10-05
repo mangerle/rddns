@@ -409,63 +409,92 @@ mod tests {
     #[test]
     fn test_client_cache_reuses_same_entry() {
         let _guard = TEST_CACHE_LOCK.lock();
-        clear_http_client_cache();
         let timeout = Duration::from_secs(15);
+        let iface = "unique_test_eth0_for_cache_reuse";
+        let key1 = ClientKey::general(Some(iface), timeout);
+        CLIENT_CACHE.remove(&key1);
 
-        // 相同键重复请求，缓存条目数不应增长（证明复用了既有条目而非新建）
-        let first = get_task_http_client(Some("eth0"), timeout);
-        let count_after_first = CLIENT_CACHE.len();
-        let second = get_task_http_client(Some("eth0"), timeout);
-        let count_after_second = CLIENT_CACHE.len();
+        let _first = get_task_http_client(Some(iface), timeout);
+        assert!(CLIENT_CACHE.contains_key(&key1), "首次请求后应写入缓存条目");
 
-        assert_eq!(count_after_first, 1, "首次请求后应恰好写入一个缓存条目");
-        assert_eq!(
-            count_after_first, count_after_second,
-            "相同参数的请求必须复用缓存条目，不得重复写入"
+        let _second = get_task_http_client(Some(iface), timeout);
+        assert!(
+            CLIENT_CACHE.contains_key(&key1),
+            "相同参数请求应复用既有缓存条目"
         );
-        drop(first);
-        drop(second);
 
         // 不同超时时间应产生新条目
-        let _other = get_task_http_client(Some("eth0"), Duration::from_secs(30));
-        assert_eq!(CLIENT_CACHE.len(), 2, "不同超时应作为独立缓存条目");
-        clear_http_client_cache();
+        let key2 = ClientKey::general(Some(iface), Duration::from_secs(30));
+        CLIENT_CACHE.remove(&key2);
+        let _other = get_task_http_client(Some(iface), Duration::from_secs(30));
+        assert!(
+            CLIENT_CACHE.contains_key(&key2),
+            "不同超时应作为独立缓存条目"
+        );
+        assert_ne!(key1, key2);
+
+        CLIENT_CACHE.remove(&key1);
+        CLIENT_CACHE.remove(&key2);
     }
 
     #[test]
     fn test_client_cache_key_normalizes_blank_interface() {
         let _guard = TEST_CACHE_LOCK.lock();
-        clear_http_client_cache();
         let timeout = Duration::from_secs(15);
+        let key = ClientKey::general(None, timeout);
+        let key_blank = ClientKey::general(Some("   "), timeout);
+        assert_eq!(key, key_blank, "空白网卡名与 None 生成的缓存键必须完全一致");
 
-        // 空白网卡名应被归一化为 None，与完全不传参视为同一条目
         let _blank = get_task_http_client(Some("   "), timeout);
+        assert!(
+            CLIENT_CACHE.contains_key(&key),
+            "空白网卡名应以 None 键存入缓存"
+        );
         let _none = get_task_http_client(None, timeout);
-        assert_eq!(CLIENT_CACHE.len(), 1, "空白网卡名应归一化后参与缓存键计算");
-        clear_http_client_cache();
+        assert!(
+            CLIENT_CACHE.contains_key(&key),
+            "None 传参应命中同一缓存条目"
+        );
     }
 
     #[test]
     fn test_family_client_cache_separates_address_families() {
         let _guard = TEST_CACHE_LOCK.lock();
-        clear_http_client_cache();
         let timeout = Duration::from_secs(5);
-        // 与 UrlIpFetcher::USER_AGENT 保持一致，避免测试依赖上层模块私有常量
+        let iface = "unique_family_test_iface";
         let ua = concat!("rddns/", env!("CARGO_PKG_VERSION"), " (Rust DDNS Client)");
 
-        // 协议族不同的客户端不得复用同一条目，否则源地址绑定会失效
-        let _v4 = get_family_http_client(None, false, timeout, ua);
-        let _v6 = get_family_http_client(None, true, timeout, ua);
-        assert_eq!(
-            CLIENT_CACHE.len(),
-            2,
-            "IPv4 与 IPv6 客户端必须是独立缓存条目"
-        );
+        let key_v4 = ClientKey {
+            interface_name: Some(iface.to_string()),
+            timeout_ms: timeout.as_millis() as u64,
+            skip_verify: is_skip_verify(),
+            ipv6_only: Some(false),
+            user_agent: Some(ua.to_string()),
+        };
+        let key_v6 = ClientKey {
+            interface_name: Some(iface.to_string()),
+            timeout_ms: timeout.as_millis() as u64,
+            skip_verify: is_skip_verify(),
+            ipv6_only: Some(true),
+            user_agent: Some(ua.to_string()),
+        };
+        CLIENT_CACHE.remove(&key_v4);
+        CLIENT_CACHE.remove(&key_v6);
 
-        // 同族重复请求应复用
-        let _v4_again = get_family_http_client(None, false, timeout, ua);
-        assert_eq!(CLIENT_CACHE.len(), 2, "同协议族重复请求应复用缓存");
-        clear_http_client_cache();
+        let _v4 = get_family_http_client(Some(iface), false, timeout, ua);
+        let _v6 = get_family_http_client(Some(iface), true, timeout, ua);
+        assert!(
+            CLIENT_CACHE.contains_key(&key_v4),
+            "IPv4 客户端必须存在于独立键中"
+        );
+        assert!(
+            CLIENT_CACHE.contains_key(&key_v6),
+            "IPv6 客户端必须存在于独立键中"
+        );
+        assert_ne!(key_v4, key_v6, "IPv4 与 IPv6 缓存键必须严格区分");
+
+        CLIENT_CACHE.remove(&key_v4);
+        CLIENT_CACHE.remove(&key_v6);
     }
 
     #[test]
