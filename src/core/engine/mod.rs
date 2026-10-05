@@ -220,7 +220,8 @@ impl DdnsEngine {
             state_manager.update_task_state(&task.name, |s| *s = current_state);
             return;
         }
-        let reach_cache_limit = current_state.check_counter >= cache_times;
+        let reach_cache_limit =
+            decision::is_reach_cache_limit(current_state.check_counter, cache_times);
         let should_sync = has_invalid_domains
             || decision::evaluate_sync_necessity(&SyncEvaluationParams {
                 task,

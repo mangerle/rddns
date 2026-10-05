@@ -30,6 +30,12 @@ pub(crate) fn validate_task_preconditions(task: &DnsTaskConfig) -> bool {
     true
 }
 
+/// 判断当前检查计数是否达到服务商校对周期上限 (P3-17)
+#[inline]
+pub(crate) fn is_reach_cache_limit(check_counter: u32, cache_times: u32) -> bool {
+    check_counter >= cache_times
+}
+
 /// 评估是否需要向云端发起 DNS 记录同步与比对
 ///
 /// # 设计原理
@@ -43,7 +49,8 @@ pub(crate) fn evaluate_sync_necessity(params: &SyncEvaluationParams<'_>) -> bool
         params.ipv6_opt.is_some() && params.ipv6_opt != params.current_state.last_ipv6;
     let ip_changed = ipv4_changed || ipv6_changed;
 
-    let reach_cache_limit = params.current_state.check_counter >= params.cache_times;
+    let reach_cache_limit =
+        is_reach_cache_limit(params.current_state.check_counter, params.cache_times);
 
     let has_unsynced_v4 = params.task.ipv4.enabled
         && params.ipv4_opt.is_some()
@@ -186,5 +193,13 @@ mod tests {
         task.ipv4.enabled = true;
         task.ipv4.domains.push("example.com".to_string());
         assert!(validate_task_preconditions(&task));
+    }
+
+    #[test]
+    fn test_is_reach_cache_limit() {
+        assert!(!is_reach_cache_limit(0, 5));
+        assert!(!is_reach_cache_limit(4, 5));
+        assert!(is_reach_cache_limit(5, 5));
+        assert!(is_reach_cache_limit(6, 5));
     }
 }
