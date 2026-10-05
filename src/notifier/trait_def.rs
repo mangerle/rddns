@@ -39,6 +39,53 @@ impl fmt::Display for NotifyError {
     }
 }
 
+impl NotifyError {
+    /// 判定该错误是否可重试 (P2-8)
+    ///
+    /// 区分瞬时错误（网络超时、连接抖动、服务不可用）与永久错误（4xx 客户端认证或语法错误、JSON解析失败等）。
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Json(_) => false,
+            Self::Http(msg) => {
+                let lower = msg.to_lowercase();
+                if lower.contains("400 bad request")
+                    || lower.contains("401 unauthorized")
+                    || lower.contains("403 forbidden")
+                    || lower.contains("404 not found")
+                {
+                    return false;
+                }
+                true
+            }
+            Self::Email(msg) => {
+                let lower = msg.to_lowercase();
+                if lower.contains("authentication failed")
+                    || lower.contains("invalid credentials")
+                    || lower.contains("535")
+                {
+                    return false;
+                }
+                true
+            }
+            Self::Provider(msg) => {
+                let lower = msg.to_lowercase();
+                if lower.contains("invalid")
+                    || lower.contains("unauthorized")
+                    || lower.contains("forbidden")
+                    || lower.contains("not found")
+                    || lower.contains("errcode\":400")
+                    || lower.contains("errcode\":40001")
+                    || lower.contains("errcode\":48001")
+                    || lower.contains("errcode\":40014")
+                {
+                    return false;
+                }
+                true
+            }
+        }
+    }
+}
+
 impl std::error::Error for NotifyError {}
 
 impl From<reqwest::Error> for NotifyError {

@@ -245,6 +245,9 @@ impl NotificationDispatcher {
     }
 
     /// 尝试发送通知并在网络异常时进行有限重试 (最多重试 2 次，共 3 次尝试)
+    ///
+    /// 区分瞬时网络抖动与 4xx/认证配置错误等永久性错误，永久错误立即中止重试并输出日志；
+    /// 重试退避引入轻量 Jitter，防范并发渠道重试风暴 (P2-8)。
     async fn send_with_retry(notifier: Arc<dyn Notifier>, ev: Arc<NotificationEvent>) {
         const MAX_RETRIES: usize = 2;
         let mut attempt = 0;
@@ -252,6 +255,16 @@ impl NotificationDispatcher {
             match notifier.send(&ev).await {
                 Ok(()) => return,
                 Err(e) => {
+                    // 若属于 4xx 客户端认证或语法配置等永久错误，直接中止，无需重试
+                    if !e.is_retryable() {
+                        error!(
+                            "[{}] 渠道发送通知遇到永久性错误，放弃重试: {}",
+                            notifier.channel_name(),
+                            e
+                        );
+                        return;
+                    }
+
                     if attempt >= MAX_RETRIES {
                         error!(
                             "[{}] 渠道发送通知最终失败（已重试 {} 次）: {}",
@@ -262,7 +275,14 @@ impl NotificationDispatcher {
                         return;
                     }
                     attempt += 1;
-                    let backoff = Duration::from_millis(500 * (1 << attempt)); // 1s, 2s
+                    // 指数退避叠加轻量 Jitter (0~200ms)
+                    let jitter_ms = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos()
+                        % 200) as u64;
+                    let base_ms = 500 * (1 << attempt);
+                    let backoff = Duration::from_millis(base_ms + jitter_ms);
                     warn!(
                         "[{}] 渠道发送通知失败: {}，将在 {} 秒后进行第 {}/{} 次重试",
                         notifier.channel_name(),
@@ -326,6 +346,43 @@ mod tests {
         NotificationDispatcher::send_with_retry(mock_notifier, event).await;
         // 初始 1 次 + 重试 2 次 = 3 次调用后成功
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_aborts_on_permanent_error() {
+        struct PermanentFailNotifier {
+            call_count: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Notifier for PermanentFailNotifier {
+            fn channel_name(&self) -> &'static str {
+                "永久失败Mock"
+            }
+
+            async fn send(&self, _event: &NotificationEvent) -> Result<(), NotifyError> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Err(NotifyError::Http("401 Unauthorized".to_string()))
+            }
+        }
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let mock = Arc::new(PermanentFailNotifier {
+            call_count: call_count.clone(),
+        });
+        let event = Arc::new(NotificationEvent {
+            overall_status: NotificationOverallStatus::Failed,
+            task_name: "测试任务".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: false,
+            results: vec![],
+            timestamp: chrono::Local::now(),
+        });
+
+        NotificationDispatcher::send_with_retry(mock, event).await;
+        // 遇到 401 永久性错误，立刻返回不重试，调用次数仅为 1
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     #[test]
