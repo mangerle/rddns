@@ -156,10 +156,12 @@ impl WechatOfficialNotifier {
             "未探测到有效IP".to_string()
         };
 
+        let task_name_20: String = event.task_name.chars().take(20).collect();
+
         json!({
             // 经典模板变量
             "first": { "value": format!("【rddns 动态解析通知】{}", status_str), "color": "#173177" },
-            "keyword1": { "value": &event.task_name, "color": "#173177" },
+            "keyword1": { "value": &task_name_20, "color": "#173177" },
             "keyword2": { "value": &ip_combined, "color": "#173177" },
             "keyword3": { "value": &domains_str, "color": "#173177" },
             "keyword4": { "value": &time_str, "color": "#173177" },
@@ -185,7 +187,7 @@ impl WechatOfficialNotifier {
             "content": { "value": &details_str, "color": "#173177" },
 
             // 微信类目新规范模板变量 (thing / time / phrase)
-            "thing1": { "value": event.task_name.chars().take(20).collect::<String>(), "color": "#173177" },
+            "thing1": { "value": &task_name_20, "color": "#173177" },
             "thing2": { "value": domains_str.chars().take(20).collect::<String>(), "color": "#173177" },
             "thing3": { "value": ip_combined.chars().take(20).collect::<String>(), "color": "#173177" },
             "character_string1": { "value": &ipv4_str, "color": "#173177" },
@@ -226,6 +228,9 @@ impl Notifier for WechatOfficialNotifier {
             ));
         }
 
+        let mut success_count = 0;
+        let mut last_error = None;
+
         for user_openid in users {
             let mut payload = json!({
                 "touser": user_openid,
@@ -239,26 +244,59 @@ impl Notifier for WechatOfficialNotifier {
                 payload["url"] = json!(jump_url.trim());
             }
 
-            let resp = self.client.post(&send_url).json(&payload).send().await?;
-            let send_result: WechatSendResponse = resp.json().await?;
-
-            if send_result.errcode != 0 {
-                warn!(
-                    "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
-                    self.channel_name(),
-                    user_openid,
-                    send_result.errcode,
-                    send_result.errmsg
-                );
-                return Err(NotifyError::Provider(format!(
-                    "微信公众号推送失败 [{}]: {}",
-                    send_result.errcode, send_result.errmsg
-                )));
+            match self.client.post(&send_url).json(&payload).send().await {
+                Ok(resp) => match resp.json::<WechatSendResponse>().await {
+                    Ok(send_result) => {
+                        if send_result.errcode == 0 {
+                            success_count += 1;
+                        } else {
+                            warn!(
+                                "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
+                                self.channel_name(),
+                                user_openid,
+                                send_result.errcode,
+                                send_result.errmsg
+                            );
+                            last_error = Some(format!(
+                                "微信推送失败 [{}]: {}",
+                                send_result.errcode, send_result.errmsg
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[{}] 解析向用户 {} 推送响应失败: {}",
+                            self.channel_name(),
+                            user_openid,
+                            e
+                        );
+                        last_error = Some(e.to_string());
+                    }
+                },
+                Err(e) => {
+                    warn!(
+                        "[{}] 向用户 {} 发送网络请求失败: {}",
+                        self.channel_name(),
+                        user_openid,
+                        e
+                    );
+                    last_error = Some(e.to_string());
+                }
             }
         }
 
-        info!("[{}] 模板消息推送成功", self.channel_name());
-        Ok(())
+        if success_count > 0 {
+            info!(
+                "[{}] 模板消息推送完成 (成功: {} 位用户)",
+                self.channel_name(),
+                success_count
+            );
+            Ok(())
+        } else {
+            Err(NotifyError::Provider(
+                last_error.unwrap_or_else(|| "全部接收者推送均失败".to_string()),
+            ))
+        }
     }
 }
 
@@ -301,10 +339,12 @@ mod tests {
 
         let data = notifier.build_template_data(&event);
         let thing1 = data["thing1"]["value"].as_str().unwrap();
+        let keyword1 = data["keyword1"]["value"].as_str().unwrap();
         let thing2 = data["thing2"]["value"].as_str().unwrap();
         let thing3 = data["thing3"]["value"].as_str().unwrap();
 
         assert_eq!(thing1.chars().count(), 20);
+        assert_eq!(keyword1.chars().count(), 20);
         assert!(thing2.chars().count() <= 20);
         assert!(thing3.chars().count() <= 20);
     }
