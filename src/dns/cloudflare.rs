@@ -263,14 +263,26 @@ impl RecordOps for CloudflareProvider {
                 "{}/zones/{}/dns_records/{}",
                 CF_API_BASE, zone, redundant.id
             );
-            if let Err(e) = self
+            match self
                 .client
                 .delete(&del_url)
                 .headers(self.build_headers())
                 .send()
                 .await
             {
-                warn!("清理 Cloudflare 冗余记录 {} 失败: {}", redundant.id, e);
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        warn!(
+                            "清理 Cloudflare 冗余记录 {} 失败，HTTP 状态码: {}，详情: {}",
+                            redundant.id, status, text
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("清理 Cloudflare 冗余记录 {} 失败: {}", redundant.id, e);
+                }
             }
         }
     }

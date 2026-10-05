@@ -191,17 +191,27 @@ impl RecordOps for SpaceshipProvider {
                 "name": sub_name
             }]);
 
-            if let Ok(resp) = self
+            match self
                 .client
                 .delete(&domain_url)
                 .headers(self.build_headers())
                 .json(&del_payload)
                 .send()
                 .await
-                && !resp.status().is_success()
             {
-                let text = resp.text().await.unwrap_or_default();
-                warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        warn!(
+                            "Spaceship 删除旧解析记录响应非成功状态，HTTP 状态码: {}，详情: {}",
+                            status, text
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("Spaceship 删除旧解析记录网络请求失败: {}", e);
+                }
             }
         }
 
