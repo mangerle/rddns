@@ -19,11 +19,14 @@ trim = true
 conventional_commits = true
 # 不过滤非标准提交，统一收纳
 filter_unconventional = false
-# 提交排序
-sort_commits = "oldest"
+# 提交排序（最新提交排在最前）
+sort_commits = "newest"
 
-# 提交分组规则
+# 提交分组规则（优先捕获安全类提交）
 commit_parsers = [
+    { message = "^.*\\(security\\):", group = "安全修复 (Security)" },
+    { message = "^security", group = "安全修复 (Security)" },
+    { body = ".*security", group = "安全修复 (Security)" },
     { message = "^feat", group = "新增功能 (Features)" },
     { message = "^fix", group = "缺陷修复 (Bug Fixes)" },
     { message = "^perf", group = "性能优化 (Performance)" },
@@ -35,6 +38,5 @@ commit_parsers = [
     { message = "^ci", group = "流水线配置 (CI/CD)" },
     { message = "^chore\\(release\\):", skip = true },
     { message = "^chore", group = "日常维护 (Maintenance)" },
-    { body = ".*security", group = "安全修复 (Security)" },
     { message = ".*", group = "其他变动 (Other Changes)" },
 ]
