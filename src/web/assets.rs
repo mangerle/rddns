@@ -12,6 +12,9 @@ pub struct WebAssets;
 #[folder = "assets/"]
 pub struct RootAssets;
 
+/// 内容安全策略 (CSP)：禁用内联脚本执行，杜绝跨站脚本攻击 (P2-23)
+const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
+
 /// 根据文件扩展名匹配常用 Web 静态资源 MIME 类型 (零第三方依赖，纯静态分发)
 fn get_mime_type(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -85,9 +88,7 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
             );
             headers.insert(
                 "Content-Security-Policy",
-                HeaderValue::from_static(
-                    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
-                ),
+                HeaderValue::from_static(CONTENT_SECURITY_POLICY_VALUE),
             );
 
             if path.ends_with(".html") || path == "index.html" {
@@ -117,6 +118,7 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                     .header("X-Content-Type-Options", "nosniff")
                     .header("X-Frame-Options", "SAMEORIGIN")
                     .header("Referrer-Policy", "strict-origin-when-cross-origin")
+                    .header("Content-Security-Policy", CONTENT_SECURITY_POLICY_VALUE)
                     .body(Body::from(index.data))
                     .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response())
             } else {
@@ -156,5 +158,11 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("strict-origin-when-cross-origin")
         );
+        let csp = resp_headers
+            .get("Content-Security-Policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(csp.contains("script-src 'self'"));
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
     }
 }
