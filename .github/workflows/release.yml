@@ -27,9 +27,10 @@ jobs:
         env:
           OUTPUT: RELEASE_CHANGELOG.md
 
-      - name: 创建 Release 并发布 Changelog
+      - name: 创建 Release 草稿并发布 Changelog
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           body_path: RELEASE_CHANGELOG.md
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -180,12 +181,16 @@ jobs:
 
           signer = ed25519.Ed25519PrivateKey.from_private_bytes(priv_key_bytes)
 
+          # 草稿模式下无法通过 releases/tags/{tag} 直接查询，需遍历 releases 列表按 tag_name 匹配
           req = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+              f"https://api.github.com/repos/{repo}/releases",
               headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "User-Agent": "shipup-manifest"}
           )
           with urllib.request.urlopen(req) as resp:
-              data = json.loads(resp.read().decode("utf-8"))
+              releases = json.loads(resp.read().decode("utf-8"))
+          data = next((r for r in releases if r.get("tag_name") == tag), None)
+          if not data:
+              raise RuntimeError(f"未找到标签为 {tag} 的 Release 草稿")
 
           asset_map = {a["name"]: a for a in data.get("assets", [])}
           packages = {}
@@ -235,3 +240,5 @@ jobs:
           EOF
 
           gh release upload "${{ github.ref_name }}" latest.json --clobber --repo "${{ github.repository }}"
+          # 待 16 平台二进制与清单全部就位后，将草稿正式发布为公开 Release (P1-26)
+          gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
