@@ -108,12 +108,16 @@ impl Resolve for AppDnsResolver {
     }
 }
 
+/// 全局统一的应用客户端 User-Agent (P2-22)
+pub const APP_USER_AGENT: &str = concat!("rddns/", env!("CARGO_PKG_VERSION"));
+
 /// 创建预置安全/跳过证书策略与自定义 DNS 的 Reqwest ClientBuilder
 ///
 /// # 设计原理
 /// - **实现初衷**：统一整个应用的 HTTP 客户端构建基础，确保 TLS 策略与纯净 DNS 规则统一生效。
+/// - **核心优势**：默认携带规范的 User-Agent，防止云服务商或 WAF 因空客户端标识误拒 (403)。
 pub fn create_http_client_builder() -> ClientBuilder {
-    let mut builder = Client::builder();
+    let mut builder = Client::builder().user_agent(APP_USER_AGENT);
     if is_skip_verify() {
         builder = builder.danger_accept_invalid_certs(true);
     }
@@ -321,6 +325,7 @@ where
                         err
                     );
                     Client::builder()
+                        .user_agent(APP_USER_AGENT)
                         .timeout(timeout)
                         .connect_timeout(Duration::from_secs(5).min(timeout))
                         .build()
@@ -461,5 +466,11 @@ mod tests {
         let _v4_again = get_family_http_client(None, false, timeout, ua);
         assert_eq!(CLIENT_CACHE.len(), 2, "同协议族重复请求应复用缓存");
         clear_http_client_cache();
+    }
+
+    #[test]
+    fn test_default_user_agent_format() {
+        assert!(APP_USER_AGENT.starts_with("rddns/"));
+        assert!(APP_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 }
