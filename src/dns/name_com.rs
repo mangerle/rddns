@@ -45,7 +45,8 @@ impl NameComProvider {
         let mut headers = HeaderMap::new();
         let auth_raw = format!("{}:{}", self.username, self.api_token);
         let auth_b64 = BASE64.encode(auth_raw.as_bytes());
-        if let Ok(hv) = HeaderValue::from_str(&format!("Basic {}", auth_b64)) {
+        if let Ok(mut hv) = HeaderValue::from_str(&format!("Basic {}", auth_b64)) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

@@ -59,7 +59,8 @@ impl DnsLaProvider {
         let mut headers = HeaderMap::new();
         let raw = format!("{}:{}", self.api_id, self.api_secret);
         let encoded = BASE64.encode(raw.as_bytes());
-        if let Ok(hv) = HeaderValue::from_str(&format!("Basic {}", encoded)) {
+        if let Ok(mut hv) = HeaderValue::from_str(&format!("Basic {}", encoded)) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
         headers.insert(

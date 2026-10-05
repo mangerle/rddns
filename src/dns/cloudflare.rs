@@ -83,17 +83,20 @@ impl CloudflareProvider {
         let mut headers = HeaderMap::new();
         if let Some(ref token) = self.api_token
             && !token.trim().is_empty()
-            && let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", token.trim()))
+            && let Ok(mut val) = HeaderValue::from_str(&format!("Bearer {}", token.trim()))
         {
+            val.set_sensitive(true);
             headers.insert(AUTHORIZATION, val);
             return headers;
         }
 
         if let (Some(key), Some(email)) = (&self.api_key, &self.email) {
-            if let Ok(k_val) = HeaderValue::from_str(key.trim()) {
+            if let Ok(mut k_val) = HeaderValue::from_str(key.trim()) {
+                k_val.set_sensitive(true);
                 headers.insert("X-Auth-Key", k_val);
             }
-            if let Ok(e_val) = HeaderValue::from_str(email.trim()) {
+            if let Ok(mut e_val) = HeaderValue::from_str(email.trim()) {
+                e_val.set_sensitive(true);
                 headers.insert("X-Auth-Email", e_val);
             }
         }

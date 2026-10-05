@@ -34,7 +34,8 @@ impl GoDaddyProvider {
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let auth_val = format!("sso-key {}:{}", self.api_key, self.api_secret);
-        if let Ok(hv) = HeaderValue::from_str(&auth_val) {
+        if let Ok(mut hv) = HeaderValue::from_str(&auth_val) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

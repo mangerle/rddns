@@ -70,7 +70,8 @@ impl RainYunProvider {
 
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        if let Ok(hv) = HeaderValue::from_str(&self.api_key) {
+        if let Ok(mut hv) = HeaderValue::from_str(&self.api_key) {
+            hv.set_sensitive(true);
             headers.insert(HeaderName::from_static("x-api-key"), hv);
         }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

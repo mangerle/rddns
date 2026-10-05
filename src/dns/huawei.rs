@@ -150,7 +150,8 @@ impl HuaweiDnsProvider {
         if let Ok(hv) = HeaderValue::from_str(&body_hash) {
             header_map.insert(HeaderName::from_static("x-sdk-content-sha256"), hv);
         }
-        if let Ok(hv) = HeaderValue::from_str(&auth_header_val) {
+        if let Ok(mut hv) = HeaderValue::from_str(&auth_header_val) {
+            hv.set_sensitive(true);
             header_map.insert(HeaderName::from_static("authorization"), hv);
         }
         header_map.insert(

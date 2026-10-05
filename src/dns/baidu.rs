@@ -70,7 +70,8 @@ impl BaiduCloudProvider {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static(BAIDU_HOST));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        if let Ok(hv) = HeaderValue::from_str(&auth_header) {
+        if let Ok(mut hv) = HeaderValue::from_str(&auth_header) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
 

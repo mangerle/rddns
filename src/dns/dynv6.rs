@@ -45,7 +45,8 @@ impl Dynv6Provider {
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let auth_val = format!("Bearer {}", self.token);
-        if let Ok(hv) = HeaderValue::from_str(&auth_val) {
+        if let Ok(mut hv) = HeaderValue::from_str(&auth_val) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

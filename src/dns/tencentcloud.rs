@@ -142,7 +142,8 @@ pub async fn request_tc3_api<T: for<'de> Deserialize<'de>>(
     if let Ok(ts_val) = HeaderValue::from_str(&timestamp.to_string()) {
         headers.insert("X-TC-Timestamp", ts_val);
     }
-    if let Ok(auth_val) = HeaderValue::from_str(&authorization) {
+    if let Ok(mut auth_val) = HeaderValue::from_str(&authorization) {
+        auth_val.set_sensitive(true);
         headers.insert("Authorization", auth_val);
     }
 

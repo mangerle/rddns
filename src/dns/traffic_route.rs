@@ -145,7 +145,8 @@ impl TrafficRouteProvider {
         if let Ok(hv) = HeaderValue::from_str(&x_content_sha256) {
             headers.insert(HeaderName::from_static("x-content-sha256"), hv);
         }
-        if let Ok(hv) = HeaderValue::from_str(&auth_header) {
+        if let Ok(mut hv) = HeaderValue::from_str(&auth_header) {
+            hv.set_sensitive(true);
             headers.insert(HeaderName::from_static("authorization"), hv);
         }
 
