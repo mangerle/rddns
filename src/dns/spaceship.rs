@@ -1,6 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::http::url_encode;
 use async_trait::async_trait;
 use log::warn;
 use reqwest::Client;
@@ -78,7 +79,7 @@ impl RecordOps for SpaceshipProvider {
             &domain.sub_domain
         };
 
-        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
+        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, url_encode(&domain.root_domain));
 
         let list_resp = self
             .client
@@ -133,7 +134,7 @@ impl RecordOps for SpaceshipProvider {
         } else {
             &domain.sub_domain
         };
-        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
+        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, url_encode(&domain.root_domain));
 
         let put_payload = json!({
             "force": true,
@@ -181,7 +182,7 @@ impl RecordOps for SpaceshipProvider {
         } else {
             &domain.sub_domain
         };
-        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
+        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, url_encode(&domain.root_domain));
 
         // 先清理旧记录
         if !record_id.is_empty() && record_id != ip.to_string() {

@@ -89,6 +89,7 @@ impl HipmDnsMgrProvider {
         &self,
         method: reqwest::Method,
         path: &str,
+        query: &[(&str, &str)],
         body: Option<Value>,
     ) -> Result<Value, DnsProviderError> {
         let clean_path = if path.starts_with('/') {
@@ -102,6 +103,9 @@ impl HipmDnsMgrProvider {
             .client
             .request(method, &url)
             .headers(self.build_headers());
+        if !query.is_empty() {
+            req = req.query(query);
+        }
         if let Some(b) = body {
             req = req.json(&b);
         }
@@ -131,8 +135,10 @@ impl HipmDnsMgrProvider {
     /// 获取 Domain ID
     async fn get_domain_id(&self, root_domain: &str) -> Result<i64, DnsProviderError> {
         // 尝试关键字查询
-        let path = format!("/domains?page=1&pageSize=1&keyword={}", root_domain);
-        let data = self.request_api(reqwest::Method::GET, &path, None).await?;
+        let query = [("page", "1"), ("pageSize", "1"), ("keyword", root_domain)];
+        let data = self
+            .request_api(reqwest::Method::GET, "/domains", &query, None)
+            .await?;
 
         let domains: Vec<DnsMgrDomainItem> = extract_json_list(&data);
         if let Some(matched) = domains
@@ -144,9 +150,10 @@ impl HipmDnsMgrProvider {
 
         // 分页兜底查询
         for page in 1..=5 {
-            let p_path = format!("/domains?page={}&pageSize=50", page);
+            let p_str = page.to_string();
+            let p_query = [("page", p_str.as_str()), ("pageSize", "50")];
             let p_data = self
-                .request_api(reqwest::Method::GET, &p_path, None)
+                .request_api(reqwest::Method::GET, "/domains", &p_query, None)
                 .await?;
             let p_domains: Vec<DnsMgrDomainItem> = extract_json_list(&p_data);
             if p_domains.is_empty() {
@@ -173,11 +180,16 @@ impl HipmDnsMgrProvider {
         sub: &str,
         record_type: &str,
     ) -> Result<Option<DnsMgrRecordItem>, DnsProviderError> {
-        let path = format!(
-            "/domains/{}/records?page=1&pageSize=100&subdomain={}&type={}",
-            domain_id, sub, record_type
-        );
-        let data = self.request_api(reqwest::Method::GET, &path, None).await?;
+        let path = format!("/domains/{}/records", domain_id);
+        let query = [
+            ("page", "1"),
+            ("pageSize", "100"),
+            ("subdomain", sub),
+            ("type", record_type),
+        ];
+        let data = self
+            .request_api(reqwest::Method::GET, &path, &query, None)
+            .await?;
         let records: Vec<DnsMgrRecordItem> = extract_json_list(&data);
 
         let matched = records.into_iter().find(|r| {
@@ -240,7 +252,7 @@ impl DnsProvider for HipmDnsMgrProvider {
             });
 
             let path = format!("/domains/{}/records/{}", domain_id, record_id_str);
-            self.request_api(reqwest::Method::PUT, &path, Some(update_payload))
+            self.request_api(reqwest::Method::PUT, &path, &[], Some(update_payload))
                 .await?;
 
             Ok(SyncRecordResult::updated_log(
@@ -260,7 +272,7 @@ impl DnsProvider for HipmDnsMgrProvider {
             });
 
             let path = format!("/domains/{}/records", domain_id);
-            self.request_api(reqwest::Method::POST, &path, Some(create_payload))
+            self.request_api(reqwest::Method::POST, &path, &[], Some(create_payload))
                 .await?;
 
             Ok(SyncRecordResult::created_log(

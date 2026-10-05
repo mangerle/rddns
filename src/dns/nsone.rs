@@ -1,6 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, StatusCode};
@@ -197,7 +198,10 @@ impl RecordOps for NsOneProvider {
 
         let url = format!(
             "{}/{}/{}/{}",
-            NSONE_API_ENDPOINT, zone, full_domain, record_type
+            NSONE_API_ENDPOINT,
+            url_encode(zone),
+            url_encode(&full_domain),
+            record_type
         );
 
         let resp = self

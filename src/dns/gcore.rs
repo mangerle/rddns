@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -149,7 +150,10 @@ impl DnsProvider for GcoreProvider {
 
         let target_url = format!(
             "{}/zones/{}/{}/{}",
-            GCORE_API_BASE, zone.name, full_record_name, record_type
+            GCORE_API_BASE,
+            url_encode(&zone.name),
+            url_encode(&full_record_name),
+            record_type
         );
 
         let payload = json!({

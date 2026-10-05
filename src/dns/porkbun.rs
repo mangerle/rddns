@@ -1,6 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
@@ -88,12 +89,17 @@ impl RecordOps for PorkbunProvider {
         let query_url = if sub_domain_param.is_empty() {
             format!(
                 "{}/retrieveByNameType/{}/{}",
-                PORKBUN_ENDPOINT, domain.root_domain, record_type
+                PORKBUN_ENDPOINT,
+                url_encode(&domain.root_domain),
+                record_type
             )
         } else {
             format!(
                 "{}/retrieveByNameType/{}/{}/{}",
-                PORKBUN_ENDPOINT, domain.root_domain, record_type, sub_domain_param
+                PORKBUN_ENDPOINT,
+                url_encode(&domain.root_domain),
+                record_type,
+                url_encode(sub_domain_param)
             )
         };
 
@@ -143,7 +149,11 @@ impl RecordOps for PorkbunProvider {
         let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
         let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
 
-        let create_url = format!("{}/create/{}", PORKBUN_ENDPOINT, domain.root_domain);
+        let create_url = format!(
+            "{}/create/{}",
+            PORKBUN_ENDPOINT,
+            url_encode(&domain.root_domain)
+        );
         let mut create_payload = self.auth_payload();
         create_payload["name"] = json!(sub_domain_param);
         create_payload["type"] = json!(record_type.to_string());
@@ -192,12 +202,17 @@ impl RecordOps for PorkbunProvider {
         let edit_url = if sub_domain_param.is_empty() {
             format!(
                 "{}/editByNameType/{}/{}",
-                PORKBUN_ENDPOINT, domain.root_domain, record_type
+                PORKBUN_ENDPOINT,
+                url_encode(&domain.root_domain),
+                record_type
             )
         } else {
             format!(
                 "{}/editByNameType/{}/{}/{}",
-                PORKBUN_ENDPOINT, domain.root_domain, record_type, sub_domain_param
+                PORKBUN_ENDPOINT,
+                url_encode(&domain.root_domain),
+                record_type,
+                url_encode(sub_domain_param)
             )
         };
 

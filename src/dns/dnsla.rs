@@ -97,16 +97,19 @@ impl DnsProvider for DnsLaProvider {
         let sub = domain.sub_domain_or_at();
         let type_int = Self::record_type_to_int(record_type);
 
-        // 1. 查询现有解析记录
-        let list_url = format!(
-            "{}?domain={}&host={}&type={}&pageIndex=1&pageSize=100",
-            DNSLA_RECORD_LIST_URL, domain.root_domain, sub, type_int
-        );
-
+        // 1. 查询现有解析记录（采用结构化 query 参数，杜绝字符拼接参数注入）
+        let type_int_str = type_int.to_string();
         let list_resp = self
             .client
-            .get(&list_url)
+            .get(DNSLA_RECORD_LIST_URL)
             .headers(self.build_headers())
+            .query(&[
+                ("domain", domain.root_domain.as_str()),
+                ("host", sub),
+                ("type", type_int_str.as_str()),
+                ("pageIndex", "1"),
+                ("pageSize", "100"),
+            ])
             .send()
             .await?;
 

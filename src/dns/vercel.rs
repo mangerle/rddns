@@ -1,6 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -56,10 +57,11 @@ impl VercelProvider {
 
     fn append_team_id(&self, base_url: &str) -> String {
         if let Some(ref tid) = self.team_id {
+            let encoded_tid = url_encode(tid);
             if base_url.contains('?') {
-                format!("{}&teamId={}", base_url, tid)
+                format!("{}&teamId={}", base_url, encoded_tid)
             } else {
-                format!("{}?teamId={}", base_url, tid)
+                format!("{}?teamId={}", base_url, encoded_tid)
             }
         } else {
             base_url.to_string()
@@ -86,7 +88,7 @@ impl RecordOps for VercelProvider {
         for _ in 0..MAX_PAGES {
             let base_url = format!(
                 "https://api.vercel.com/v4/domains/{}/records?limit=100{}",
-                domain.root_domain,
+                url_encode(&domain.root_domain),
                 next_cursor
                     .map(|c| format!("&until={}", c))
                     .unwrap_or_default()
@@ -154,7 +156,7 @@ impl RecordOps for VercelProvider {
 
         let create_url = self.append_team_id(&format!(
             "https://api.vercel.com/v2/domains/{}/records",
-            domain.root_domain
+            url_encode(&domain.root_domain)
         ));
 
         let create_payload = json!({
@@ -197,7 +199,7 @@ impl RecordOps for VercelProvider {
         let ttl_val = ttl.unwrap_or(60).max(60);
         let update_url = self.append_team_id(&format!(
             "https://api.vercel.com/v1/domains/records/{}",
-            record_id
+            url_encode(record_id)
         ));
 
         let update_payload = json!({
