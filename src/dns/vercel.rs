@@ -25,8 +25,14 @@ struct VercelRecord {
 }
 
 #[derive(Debug, Deserialize)]
+struct VercelPagination {
+    next: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct VercelRecordsResp {
     records: Option<Vec<VercelRecord>>,
+    pagination: Option<VercelPagination>,
 }
 
 impl VercelProvider {
@@ -73,32 +79,53 @@ impl RecordOps for VercelProvider {
         domain: &ParsedDomain,
         record_type: DnsRecordType,
     ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
-        let list_url = self.append_team_id(&format!(
-            "https://api.vercel.com/v4/domains/{}/records?limit=100",
-            domain.root_domain
-        ));
+        let mut all_records = Vec::new();
+        let mut next_cursor: Option<u64> = None;
+        const MAX_PAGES: usize = 10;
 
-        let list_resp = self
-            .client
-            .get(&list_url)
-            .headers(self.build_headers())
-            .send()
-            .await?;
+        for _ in 0..MAX_PAGES {
+            let base_url = format!(
+                "https://api.vercel.com/v4/domains/{}/records?limit=100{}",
+                domain.root_domain,
+                next_cursor
+                    .map(|c| format!("&until={}", c))
+                    .unwrap_or_default()
+            );
+            let list_url = self.append_team_id(&base_url);
 
-        let status = list_resp.status();
-        let body_text = list_resp.text().await?;
+            let list_resp = self
+                .client
+                .get(&list_url)
+                .headers(self.build_headers())
+                .send()
+                .await?;
 
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("Vercel 查询记录失败: {}", body_text),
-            });
+            let status = list_resp.status();
+            let body_text = list_resp.text().await?;
+
+            if !status.is_success() {
+                return Err(DnsProviderError::ApiError {
+                    code: status.to_string(),
+                    message: format!("Vercel 查询记录失败: {}", body_text),
+                });
+            }
+
+            let parsed: VercelRecordsResp = serde_json::from_str(&body_text)?;
+            let records = parsed.records.unwrap_or_default();
+            let page_len = records.len();
+            all_records.extend(records);
+
+            if let Some(pagination) = parsed.pagination
+                && let Some(next) = pagination.next
+                && page_len >= 100
+            {
+                next_cursor = Some(next);
+            } else {
+                break;
+            }
         }
 
-        let parsed: VercelRecordsResp = serde_json::from_str(&body_text)?;
-        let records = parsed.records.unwrap_or_default();
-
-        let matched = records
+        let matched = all_records
             .into_iter()
             .filter(|r| {
                 r.record_type.eq_ignore_ascii_case(&record_type.to_string())

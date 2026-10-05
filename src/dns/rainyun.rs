@@ -88,41 +88,55 @@ impl RainYunProvider {
             return Ok(cached_id);
         }
 
-        // 自动查询域名列表
-        let url = format!("{}/product/domain/?limit=100&page_no=1", RAINYUN_ENDPOINT);
-        let resp = self
-            .client
-            .get(&url)
-            .headers(self.build_headers())
-            .send()
-            .await?;
+        // 自动查询域名列表 (支持最多 10 页分页检索)
+        let mut page_no = 1u32;
+        const MAX_PAGES: u32 = 10;
+        for _ in 0..MAX_PAGES {
+            let url = format!(
+                "{}/product/domain/?limit=100&page_no={}",
+                RAINYUN_ENDPOINT, page_no
+            );
+            let resp = self
+                .client
+                .get(&url)
+                .headers(self.build_headers())
+                .send()
+                .await?;
 
-        let body_text = resp.text().await?;
-        let res: RainyunResp = serde_json::from_str(&body_text)?;
+            let body_text = resp.text().await?;
+            let res: RainyunResp = serde_json::from_str(&body_text)?;
 
-        if res.code != 200 {
-            return Err(DnsProviderError::ApiError {
-                code: res.code.to_string(),
-                message: res
-                    .message
-                    .unwrap_or_else(|| "查询雨云域名列表失败".to_string()),
-            });
-        }
+            if res.code != 200 {
+                return Err(DnsProviderError::ApiError {
+                    code: res.code.to_string(),
+                    message: res
+                        .message
+                        .unwrap_or_else(|| "查询雨云域名列表失败".to_string()),
+                });
+            }
 
-        if let Some(data_val) = res.data {
-            let list = serde_json::from_value::<RainyunDomainList>(data_val).ok();
-            let matched = list
-                .and_then(|l| l.domain_list)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|d| d.domain.eq_ignore_ascii_case(root_domain));
+            if let Some(data_val) = res.data {
+                let list = serde_json::from_value::<RainyunDomainList>(data_val).ok();
+                let domain_items = list.and_then(|l| l.domain_list).unwrap_or_default();
+                let page_len = domain_items.len();
+                let matched = domain_items
+                    .into_iter()
+                    .find(|d| d.domain.eq_ignore_ascii_case(root_domain));
 
-            if let Some(m) = matched {
-                let did_str = m.id.to_string();
-                GLOBAL_RAINYUN_DOMAIN_CACHE
-                    .write()
-                    .insert(cache_key, did_str.clone());
-                return Ok(did_str);
+                if let Some(m) = matched {
+                    let did_str = m.id.to_string();
+                    GLOBAL_RAINYUN_DOMAIN_CACHE
+                        .write()
+                        .insert(cache_key, did_str.clone());
+                    return Ok(did_str);
+                }
+
+                if page_len < 100 {
+                    break;
+                }
+                page_no = page_no.saturating_add(1);
+            } else {
+                break;
             }
         }
 
@@ -150,43 +164,54 @@ impl RecordOps for RainYunProvider {
         record_type: DnsRecordType,
     ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
-        let list_url = format!(
-            "{}/product/domain/{}/dns/?limit=100&page_no=1",
-            RAINYUN_ENDPOINT, zone
-        );
-
-        let list_resp = self
-            .client
-            .get(&list_url)
-            .headers(self.build_headers())
-            .send()
-            .await?;
-
-        let body_text = list_resp.text().await?;
-        let res: RainyunResp = serde_json::from_str(&body_text)?;
-
-        if res.code != 200 {
-            return Err(DnsProviderError::ApiError {
-                code: res.code.to_string(),
-                message: res
-                    .message
-                    .unwrap_or_else(|| "查询雨云 DNS 记录失败".to_string()),
-            });
-        }
-
         let mut remotes = Vec::new();
-        if let Some(data_val) = res.data {
-            let rec_list = serde_json::from_value::<RainyunRecordList>(data_val).ok();
-            let matched = rec_list
-                .and_then(|r| r.records)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|r| {
-                    r.host.eq_ignore_ascii_case(sub)
-                        && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-                })
-                .map(|r| RemoteRecord::new(r.record_id.to_string(), r.value));
-            remotes.extend(matched);
+        let mut page_no = 1u32;
+        const MAX_PAGES: u32 = 10;
+
+        for _ in 0..MAX_PAGES {
+            let list_url = format!(
+                "{}/product/domain/{}/dns/?limit=100&page_no={}",
+                RAINYUN_ENDPOINT, zone, page_no
+            );
+
+            let list_resp = self
+                .client
+                .get(&list_url)
+                .headers(self.build_headers())
+                .send()
+                .await?;
+
+            let body_text = list_resp.text().await?;
+            let res: RainyunResp = serde_json::from_str(&body_text)?;
+
+            if res.code != 200 {
+                return Err(DnsProviderError::ApiError {
+                    code: res.code.to_string(),
+                    message: res
+                        .message
+                        .unwrap_or_else(|| "查询雨云 DNS 记录失败".to_string()),
+                });
+            }
+
+            let mut page_len = 0;
+            if let Some(data_val) = res.data {
+                let rec_list = serde_json::from_value::<RainyunRecordList>(data_val).ok();
+                let records = rec_list.and_then(|r| r.records).unwrap_or_default();
+                page_len = records.len();
+                let matched = records
+                    .into_iter()
+                    .filter(|r| {
+                        r.host.eq_ignore_ascii_case(sub)
+                            && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+                    })
+                    .map(|r| RemoteRecord::new(r.record_id.to_string(), r.value));
+                remotes.extend(matched);
+            }
+
+            if page_len < 100 {
+                break;
+            }
+            page_no = page_no.saturating_add(1);
         }
 
         Ok(remotes)

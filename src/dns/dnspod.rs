@@ -54,7 +54,7 @@ impl RecordOps for TencentCloudProvider {
         "腾讯云 (DNSPod)"
     }
 
-    /// 查询现有解析记录列表 (单页最大 100 条)
+    /// 查询现有解析记录列表 (支持分页拉取全部记录，防截断)
     async fn list_records(
         &self,
         zone: &str,
@@ -64,31 +64,46 @@ impl RecordOps for TencentCloudProvider {
         let sub_domain = domain.sub_domain_or_at();
         let record_line = Self::resolve_line(domain);
 
-        let list_payload = json!({
-            "Domain": zone,
-            "Subdomain": sub_domain,
-            "RecordType": record_type.to_string(),
-            "Limit": 100,
-        });
+        let mut all_records = Vec::new();
+        let mut offset = 0u32;
+        let limit = 100u32;
+        const MAX_PAGES: u32 = 10;
 
-        let list_res: Result<TcRecordListResponse, DnsProviderError> = self
-            .tc3
-            .request_api("DescribeRecordList", list_payload)
-            .await;
+        for _ in 0..MAX_PAGES {
+            let list_payload = json!({
+                "Domain": zone,
+                "Subdomain": sub_domain,
+                "RecordType": record_type.to_string(),
+                "Limit": limit,
+                "Offset": offset,
+            });
 
-        let records = match list_res {
-            Ok(data) => data.record_list.unwrap_or_default(),
-            Err(DnsProviderError::ApiError { ref code, .. })
-                if code == "ResourceNotFound.NoDataOfRecord"
-                    || code == "ResourceNotFound.NoDataOfDomain" =>
-            {
-                // 腾讯云 DNSPod 在没有查到记录时会返回 ResourceNotFound 错误码，此处应视为空记录列表
-                Vec::new()
+            let list_res: Result<TcRecordListResponse, DnsProviderError> = self
+                .tc3
+                .request_api("DescribeRecordList", list_payload)
+                .await;
+
+            let records = match list_res {
+                Ok(data) => data.record_list.unwrap_or_default(),
+                Err(DnsProviderError::ApiError { ref code, .. })
+                    if code == "ResourceNotFound.NoDataOfRecord"
+                        || code == "ResourceNotFound.NoDataOfDomain" =>
+                {
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
+
+            let page_len = records.len();
+            all_records.extend(records);
+
+            if (page_len as u32) < limit {
+                break;
             }
-            Err(e) => return Err(e),
-        };
+            offset = offset.saturating_add(limit);
+        }
 
-        let matched = records
+        let matched = all_records
             .into_iter()
             .filter(|r| {
                 let name_match = r.name.eq_ignore_ascii_case(sub_domain);
