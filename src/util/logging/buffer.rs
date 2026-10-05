@@ -46,9 +46,10 @@ impl LogBuffer {
         }
     }
 
-    /// 插入一条新日志
+    /// 插入一条新日志 (P-9: 统一脱敏敏感凭据)
     pub fn push(&self, level: Level, target: &str, message: String) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let sanitized_msg = crate::dns::trait_def::sanitize_sensitive_url_params(&message);
         let mut inner = self.inner.write();
         inner.counter = inner.counter.wrapping_add(1);
         let entry = LogEntry {
@@ -56,7 +57,7 @@ impl LogBuffer {
             timestamp,
             level: level.as_str().to_string(),
             target: target.to_string(),
-            message,
+            message: sanitized_msg,
         };
 
         while inner.entries.len() >= inner.capacity {

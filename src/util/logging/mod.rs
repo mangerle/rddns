@@ -31,8 +31,8 @@ pub struct LoggingHandle {
 /// # Errors
 /// 当本地日志目录无法创建或日志文件无法打开时返回错误。
 pub fn init_logger() -> Result<LoggingHandle> {
-    // 1. 初始化内存环形日志缓冲区 (最大 50 条)
-    let log_buffer = LogBuffer::new(50);
+    // 1. 初始化内存环形日志缓冲区 (最大 500 条)
+    let log_buffer = LogBuffer::new(500);
     let buffer_layer = BufferLogLayer::new(log_buffer.clone());
 
     // 2. 日志级别过滤器 (默认 info，可通过 RUST_LOG 环境变量动态覆盖)

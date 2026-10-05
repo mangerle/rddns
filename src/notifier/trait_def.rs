@@ -1,19 +1,60 @@
 use crate::dns::trait_def::SyncRecordResult;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
+use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum NotifyError {
-    #[error("HTTP 请求失败: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("邮件发送错误: {0}")]
+    Http(reqwest::Error),
     Email(String),
-    #[error("数据序列化错误: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("通知服务商返回错误: {0}")]
+    Json(serde_json::Error),
     Provider(String),
+}
+
+impl fmt::Display for NotifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http(e) => write!(
+                f,
+                "HTTP 请求失败: {}",
+                crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+            ),
+            Self::Email(m) => write!(
+                f,
+                "邮件发送错误: {}",
+                crate::dns::trait_def::sanitize_sensitive_url_params(m)
+            ),
+            Self::Json(e) => write!(f, "数据序列化错误: {}", e),
+            Self::Provider(m) => write!(
+                f,
+                "通知服务商返回错误: {}",
+                crate::dns::trait_def::sanitize_sensitive_url_params(m)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NotifyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Http(e) => Some(e),
+            Self::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<reqwest::Error> for NotifyError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e)
+    }
+}
+
+impl From<serde_json::Error> for NotifyError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
 }
 
 /// 同步总状态标识
@@ -149,5 +190,17 @@ mod tests {
             event.domains_comma_separated(),
             "a.example.com, b.example.com"
         );
+    }
+
+    #[test]
+    fn test_notify_error_masks_sensitive_info() {
+        let err = NotifyError::Provider("request failed: https://api.telegram.org/bot123456789:ABCdefGHIjklMNOpqrsTUVwxyz123456/sendMessage?pwd=secret_pass&token=secret_tok".to_string());
+        let formatted = err.to_string();
+        assert!(!formatted.contains("123456789:ABCdefGHIjklMNOpqrsTUVwxyz123456"));
+        assert!(!formatted.contains("secret_pass"));
+        assert!(!formatted.contains("secret_tok"));
+        assert!(formatted.contains("/bot******"));
+        assert!(formatted.contains("pwd=******"));
+        assert!(formatted.contains("token=******"));
     }
 }

@@ -196,10 +196,11 @@ impl NotificationDispatcher {
             return;
         }
 
+        let ev_arc = std::sync::Arc::new(event);
         let mut join_set = JoinSet::new();
         for notifier in &self.notifiers {
             let n = notifier.clone();
-            let ev = event.clone();
+            let ev = ev_arc.clone();
             join_set.spawn(async move {
                 if let Err(e) = n.send(&ev).await {
                     error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
