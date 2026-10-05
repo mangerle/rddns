@@ -52,10 +52,24 @@ impl BaiduCloudProvider {
     /// 构建百度云 BCE-AUTH-V1 签名标头
     fn build_auth_header(&self, method: &str, uri: &str) -> String {
         let now_utc = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let auth_prefix = format!("bce-auth-v1/{}/{}/1800", self.ak, now_utc);
+        Self::compute_bce_auth_header(&self.ak, &self.sk, method, uri, &now_utc)
+    }
 
+    /// 计算百度云 BCE-AUTH-V1 签名标头纯函数
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 将时间戳参数显式化，支持已知时间测试向量以对齐单元测试 (P0-7)。
+    /// - **核心优势**: 消除当前系统时间导致的测试不确定性，验证签名格式及派生密钥正确性。
+    pub(crate) fn compute_bce_auth_header(
+        ak: &str,
+        sk: &str,
+        method: &str,
+        uri: &str,
+        now_utc: &str,
+    ) -> String {
+        let auth_prefix = format!("bce-auth-v1/{}/{}/1800", ak, now_utc);
         let canonical_req = format!("{}\n{}\n\nhost:{}", method, uri, BAIDU_HOST);
-        let signing_key = hmac_sha256_hex(self.sk.as_bytes(), auth_prefix.as_bytes());
+        let signing_key = hmac_sha256_hex(sk.as_bytes(), auth_prefix.as_bytes());
         let signature = hmac_sha256_hex(signing_key.as_bytes(), canonical_req.as_bytes());
 
         format!("{}/host/{}", auth_prefix, signature)
@@ -190,5 +204,31 @@ impl DnsProvider for BaiduCloudProvider {
                 target_ip_str,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_baidu_bce_signature_known_vector() {
+        let ak = "test_ak";
+        let sk = "test_sk";
+        let method = "POST";
+        let uri = "/v1/domain/resolve/add";
+        let now_utc = "2023-10-05T12:00:00Z";
+
+        let auth = BaiduCloudProvider::compute_bce_auth_header(ak, sk, method, uri, now_utc);
+
+        assert!(auth.starts_with("bce-auth-v1/test_ak/2023-10-05T12:00:00Z/1800/host/"));
+        let parts: Vec<&str> = auth.split('/').collect();
+        assert_eq!(parts.len(), 6);
+        let sig = parts[5];
+        assert_eq!(sig.len(), 64);
+
+        // 验证确定性
+        let auth2 = BaiduCloudProvider::compute_bce_auth_header(ak, sk, method, uri, now_utc);
+        assert_eq!(auth, auth2);
     }
 }

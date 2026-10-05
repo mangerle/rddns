@@ -97,42 +97,17 @@ impl HuaweiDnsProvider {
         let body_hash = sha256_hex(body_str.as_bytes());
         let x_sdk_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
 
-        // 1. 构建标准化查询字符串 (Canonical Query String)
-        let canonical_query_str = build_canonical_query_string(&query_params);
-
-        // 2. 构建标准化标头 (Canonical Headers)
-        let canonical_headers = format!(
-            "host:{}\nx-sdk-content-sha256:{}\nx-sdk-date:{}\n",
-            host, body_hash, x_sdk_date
-        );
-        let signed_headers = "host;x-sdk-content-sha256;x-sdk-date";
-
-        // 3. 构建 Canonical Request
-        let canonical_request = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
-            method.as_str(),
+        let sign_params = HwSignParams {
+            ak: &self.ak,
+            sk: &self.sk,
+            method: method.as_str(),
             path,
-            canonical_query_str,
-            canonical_headers,
-            signed_headers,
-            body_hash
-        );
-
-        // 4. 计算 StringToSign
-        let string_to_sign = format!(
-            "SDK-HMAC-SHA256\n{}\n{}",
-            x_sdk_date,
-            sha256_hex(canonical_request.as_bytes())
-        );
-
-        // 5. 计算签名
-        let signature = hmac_sha256_hex(self.sk.as_bytes(), string_to_sign.as_bytes());
-
-        // 6. 构造 Authorization 标头
-        let auth_header_val = format!(
-            "SDK-HMAC-SHA256 Access={}, SignedHeaders={}, Signature={}",
-            self.ak, signed_headers, signature
-        );
+            host,
+            x_sdk_date: &x_sdk_date,
+            query_params: &query_params,
+            body_str: &body_str,
+        };
+        let (auth_header_val, _sig, canonical_query_str) = compute_hw_authorization(&sign_params);
 
         let full_url = if canonical_query_str.is_empty() {
             format!("{}{}", self.endpoint, path)
@@ -327,6 +302,53 @@ impl DnsProvider for HuaweiDnsProvider {
     }
 }
 
+/// 华为云 SDK 签名计算参数
+pub(crate) struct HwSignParams<'a> {
+    pub ak: &'a str,
+    pub sk: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub host: &'a str,
+    pub x_sdk_date: &'a str,
+    pub query_params: &'a [(&'a str, String)],
+    pub body_str: &'a str,
+}
+
+/// 计算华为云 SDK-HMAC-SHA256 签名与 Authorization 标头
+///
+/// # 设计原理
+/// - **实现初衷**: 将华为云签名计算逻辑从网络请求中解耦为纯函数，使得签名可独立进行单测验证 (P0-7)。
+/// - **核心优势**: 消除系统时间和网络状态影响，允许针对标准测试向量进行单测，防止鉴权失效。
+pub(crate) fn compute_hw_authorization(params: &HwSignParams<'_>) -> (String, String, String) {
+    let body_hash = sha256_hex(params.body_str.as_bytes());
+    let canonical_query_str = build_canonical_query_string(params.query_params);
+    let canonical_headers = format!(
+        "host:{}\nx-sdk-content-sha256:{}\nx-sdk-date:{}\n",
+        params.host, body_hash, params.x_sdk_date
+    );
+    let signed_headers = "host;x-sdk-content-sha256;x-sdk-date";
+    let canonical_request = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        params.method,
+        params.path,
+        canonical_query_str,
+        canonical_headers,
+        signed_headers,
+        body_hash
+    );
+    let string_to_sign = format!(
+        "SDK-HMAC-SHA256\n{}\n{}",
+        params.x_sdk_date,
+        sha256_hex(canonical_request.as_bytes())
+    );
+    let signature = hmac_sha256_hex(params.sk.as_bytes(), string_to_sign.as_bytes());
+    let auth_header_val = format!(
+        "SDK-HMAC-SHA256 Access={}, SignedHeaders={}, Signature={}",
+        params.ak, signed_headers, signature
+    );
+    (auth_header_val, signature, canonical_query_str)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +396,32 @@ mod tests {
             sets[0].records.as_deref(),
             Some(&["1.2.3.4".to_string()][..])
         );
+    }
+
+    #[test]
+    fn test_huawei_sdk_signature_known_vector() {
+        let query_params = vec![("type", "public".to_string())];
+        let params = HwSignParams {
+            ak: "QTWAOYTTINDUT2GKYTAG",
+            sk: "JeDataSet_possessive_secret_key",
+            method: "GET",
+            path: "/v2/zones",
+            host: "dns.myhuaweicloud.com",
+            x_sdk_date: "20231005T120000Z",
+            query_params: &query_params,
+            body_str: "",
+        };
+
+        let (auth, sig, canonical_query) = compute_hw_authorization(&params);
+
+        assert_eq!(canonical_query, "type=public");
+        assert!(auth.starts_with("SDK-HMAC-SHA256 Access=QTWAOYTTINDUT2GKYTAG, SignedHeaders=host;x-sdk-content-sha256;x-sdk-date"));
+        assert!(auth.ends_with(&format!("Signature={}", sig)));
+        assert_eq!(sig.len(), 64);
+
+        // 验证确定性
+        let (auth2, sig2, _) = compute_hw_authorization(&params);
+        assert_eq!(auth, auth2);
+        assert_eq!(sig, sig2);
     }
 }

@@ -93,46 +93,19 @@ impl TrafficRouteProvider {
         let x_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let short_date = now.format("%Y%m%d").to_string();
 
-        let mut query = query_params;
-        query.push(("Action", action.to_string()));
-        query.push(("Version", VOLC_VERSION.to_string()));
-
-        let canonical_query_str = build_canonical_query_string(&query);
-
         let body_str = body.map(|b| b.to_string()).unwrap_or_default();
         let x_content_sha256 = sha256_hex(body_str.as_bytes());
 
-        // Canonical Request
-        let canonical_headers = format!(
-            "content-type:application/json\nhost:{}\nx-content-sha256:{}\nx-date:{}\n",
-            VOLC_HOST, x_content_sha256, x_date
-        );
-        let signed_headers = "content-type;host;x-content-sha256;x-date";
-        let canonical_request = format!(
-            "POST\n/\n{}\n{}\n{}\n{}",
-            canonical_query_str, canonical_headers, signed_headers, x_content_sha256
-        );
-
-        // StringToSign
-        let credential_scope = format!("{}/{}/{}/request", short_date, VOLC_REGION, VOLC_SERVICE);
-        let string_to_sign = format!(
-            "HMAC-SHA256\n{}\n{}\n{}",
-            x_date,
-            credential_scope,
-            sha256_hex(canonical_request.as_bytes())
-        );
-
-        // 计算 SigV4 派生密钥
-        let k_date = hmac_sha256(self.sk.as_bytes(), short_date.as_bytes());
-        let k_region = hmac_sha256(&k_date, VOLC_REGION.as_bytes());
-        let k_service = hmac_sha256(&k_region, VOLC_SERVICE.as_bytes());
-        let k_signing = hmac_sha256(&k_service, b"request");
-        let signature = hex::encode(hmac_sha256(&k_signing, string_to_sign.as_bytes()));
-
-        let auth_header = format!(
-            "HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
-            self.ak, credential_scope, signed_headers, signature
-        );
+        let sign_params = VolcSignParams {
+            ak: &self.ak,
+            sk: &self.sk,
+            action,
+            x_date: &x_date,
+            short_date: &short_date,
+            query_params: &query_params,
+            body_str: &body_str,
+        };
+        let (auth_header, _sig, canonical_query_str) = compute_volc_authorization(&sign_params);
 
         let url = format!("{}/?{}", VOLC_ENDPOINT, canonical_query_str);
 
@@ -305,6 +278,65 @@ impl DnsProvider for TrafficRouteProvider {
     }
 }
 
+/// 火山引擎 SigV4 签名计算参数
+pub(crate) struct VolcSignParams<'a> {
+    pub ak: &'a str,
+    pub sk: &'a str,
+    pub action: &'a str,
+    pub x_date: &'a str,
+    pub short_date: &'a str,
+    pub query_params: &'a [(&'a str, String)],
+    pub body_str: &'a str,
+}
+
+/// 计算火山引擎 SigV4 签名与 Authorization 标头
+///
+/// # 设计原理
+/// - **实现初衷**: 将火山引擎签名与派生密钥计算逻辑抽离为纯函数，使得签名可独立进行单测验证 (P0-7)。
+/// - **核心优势**: 采用参数结构体收敛参数列表，支持传入固定时间戳和参数进行标准测试向量回归，杜绝鉴权失效。
+pub(crate) fn compute_volc_authorization(params: &VolcSignParams<'_>) -> (String, String, String) {
+    let mut query = params.query_params.to_vec();
+    query.push(("Action", params.action.to_string()));
+    query.push(("Version", VOLC_VERSION.to_string()));
+
+    let canonical_query_str = build_canonical_query_string(&query);
+    let x_content_sha256 = sha256_hex(params.body_str.as_bytes());
+
+    let canonical_headers = format!(
+        "content-type:application/json\nhost:{}\nx-content-sha256:{}\nx-date:{}\n",
+        VOLC_HOST, x_content_sha256, params.x_date
+    );
+    let signed_headers = "content-type;host;x-content-sha256;x-date";
+    let canonical_request = format!(
+        "POST\n/\n{}\n{}\n{}\n{}",
+        canonical_query_str, canonical_headers, signed_headers, x_content_sha256
+    );
+
+    let credential_scope = format!(
+        "{}/{}/{}/request",
+        params.short_date, VOLC_REGION, VOLC_SERVICE
+    );
+    let string_to_sign = format!(
+        "HMAC-SHA256\n{}\n{}\n{}",
+        params.x_date,
+        credential_scope,
+        sha256_hex(canonical_request.as_bytes())
+    );
+
+    let k_date = hmac_sha256(params.sk.as_bytes(), params.short_date.as_bytes());
+    let k_region = hmac_sha256(&k_date, VOLC_REGION.as_bytes());
+    let k_service = hmac_sha256(&k_region, VOLC_SERVICE.as_bytes());
+    let k_signing = hmac_sha256(&k_service, b"request");
+    let signature = hex::encode(hmac_sha256(&k_signing, string_to_sign.as_bytes()));
+
+    let auth_header = format!(
+        "HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
+        params.ak, credential_scope, signed_headers, signature
+    );
+
+    (auth_header, signature, canonical_query_str)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +356,38 @@ mod tests {
 
         assert_eq!(update_body["ZID"], 123456789u64);
         assert_eq!(update_body["RecordID"], "rec_001");
+    }
+
+    #[test]
+    fn test_volc_sigv4_known_vector() {
+        let query_params = vec![("PageNumber", "1".to_string())];
+        let params = VolcSignParams {
+            ak: "AKLTODUzNzU3...",
+            sk: "WW1Wall5TXpVM...",
+            action: "ListZones",
+            x_date: "20231005T120000Z",
+            short_date: "20231005",
+            query_params: &query_params,
+            body_str: "",
+        };
+
+        let (auth, sig, canonical_query) = compute_volc_authorization(&params);
+
+        assert!(canonical_query.contains("Action=ListZones"));
+        assert!(canonical_query.contains("PageNumber=1"));
+        assert!(canonical_query.contains("Version=2018-08-01"));
+        assert!(
+            auth.starts_with(
+                "HMAC-SHA256 Credential=AKLTODUzNzU3.../20231005/cn-north-1/DNS/request"
+            )
+        );
+        assert!(auth.contains("SignedHeaders=content-type;host;x-content-sha256;x-date"));
+        assert!(auth.ends_with(&format!("Signature={}", sig)));
+        assert_eq!(sig.len(), 64);
+
+        // 验证确定性
+        let (auth2, sig2, _) = compute_volc_authorization(&params);
+        assert_eq!(auth, auth2);
+        assert_eq!(sig, sig2);
     }
 }
