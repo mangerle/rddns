@@ -294,9 +294,13 @@ pub async fn login_auth_handler(
 
     let config = state.config_manager.get_config();
     if let Some(ref auth) = config.auth {
-        if username == auth.username
-            && crate::util::crypto::verify_password_async(req.password, auth.password_hash.clone())
-                .await
+        if crate::util::crypto::verify_credentials_constant_time(
+            username,
+            &req.password,
+            &auth.username,
+            &auth.password_hash,
+        )
+        .await
         {
             record_login_failure(&limiter_key, true);
             return Ok(Json(ApiResponse::ok("登录成功")));

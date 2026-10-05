@@ -158,6 +158,34 @@ pub async fn verify_password_async(password: String, hash: String) -> bool {
     })
 }
 
+/// 预置合法 bcrypt 假哈希（cost=10），用于用户名不匹配时执行常量时间耗时验证，防止时序侧信道攻击枚举用户名 (P1-8)
+pub const DUMMY_BCRYPT_HASH: &str = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
+/// 统一常量时间凭据校验，防止利用 bcrypt 耗时与快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
+///
+/// # 设计原理
+/// - **实现初衷**: 当攻击者提交不存在的用户名时，若系统直接返回错误，耗时仅微秒级；而提交存在的用户名时，
+///   由于执行了 bcrypt 哈希计算，耗时需 100ms~300ms。攻击者可利用这一时间差精确枚举系统管理员用户名。
+/// - **核心优势**: 无论用户名匹配与否，恒定调用 `verify_password_async` 执行哈希计算（用户名错误时验证预设的 Dummy Hash），
+///   消除时间侧信道特征。
+pub async fn verify_credentials_constant_time(
+    input_username: &str,
+    input_password: &str,
+    target_username: &str,
+    target_password_hash: &str,
+) -> bool {
+    let user_matched = input_username == target_username;
+    let hash_to_verify = if user_matched {
+        target_password_hash
+    } else {
+        DUMMY_BCRYPT_HASH
+    };
+
+    let pass_matched =
+        verify_password_async(input_password.to_string(), hash_to_verify.to_string()).await;
+    user_matched && pass_matched
+}
+
 /// 阿里云 POP 规范 URL 编码（RFC 3986 基础上的特殊转义规则）
 /// 将所有非保留字符（A-Z, a-z, 0-9, '-', '_', '.', '~'）编码为大写百分号形式，
 /// 并且将 '+' 编码为 '%20'，'*' 编码为 '%2A'，'%7E' 转回 '~'
@@ -290,5 +318,33 @@ mod tests {
         assert!(validate_password_strength("12345678").is_ok());
         assert!(validate_password_strength("a".repeat(72).as_str()).is_ok());
         assert!(validate_password_strength("a".repeat(73).as_str()).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_verify_credentials_constant_time() {
+        // 使用已知密码生成哈希
+        let real_user = "admin";
+        let real_pass = "MySecretPass123";
+        let real_hash = hash_password_async(real_pass.to_string()).await.unwrap();
+
+        // 1. 正确用户名 + 正确密码
+        assert!(
+            verify_credentials_constant_time(real_user, real_pass, real_user, &real_hash).await
+        );
+
+        // 2. 正确用户名 + 错误密码
+        assert!(
+            !verify_credentials_constant_time(real_user, "WrongPass", real_user, &real_hash).await
+        );
+
+        // 3. 错误用户名 + 正确密码
+        assert!(
+            !verify_credentials_constant_time("attacker", real_pass, real_user, &real_hash).await
+        );
+
+        // 4. 错误用户名 + 错误密码
+        assert!(
+            !verify_credentials_constant_time("attacker", "WrongPass", real_user, &real_hash).await
+        );
     }
 }

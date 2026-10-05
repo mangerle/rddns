@@ -128,7 +128,6 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         && let Ok(decoded_bytes) = BASE64_STANDARD.decode(encoded.trim())
         && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
         && let Some((user, pass)) = decoded_str.split_once(':')
-        && user == auth_conf.username
     {
         let client_ip = req
             .extensions()
@@ -149,10 +148,12 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
                 .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
         }
 
-        // 异步校验 bcrypt 密码哈希，受并发闸门保护
-        let is_valid = crate::util::crypto::verify_password_async(
-            pass.to_string(),
-            auth_conf.password_hash.clone(),
+        // 常量时间校验凭据，防止利用用户名快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
+        let is_valid = crate::util::crypto::verify_credentials_constant_time(
+            user,
+            pass,
+            &auth_conf.username,
+            &auth_conf.password_hash,
         )
         .await;
 
