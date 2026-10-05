@@ -1,7 +1,7 @@
 use crate::config::model::EmailConfig;
 use crate::dns::trait_def::SyncStatus;
 use crate::notifier::trait_def::{
-    NotificationEvent, NotificationOverallStatus, Notifier, NotifyError,
+    NotificationEvent, NotificationOverallStatus, Notifier, NotifyError, escape_html,
 };
 use async_trait::async_trait;
 use lettre::message::header::ContentType;
@@ -17,16 +17,6 @@ pub struct EmailNotifier {
 impl EmailNotifier {
     pub fn new(config: EmailConfig) -> Self {
         Self { config }
-    }
-
-    /// HTML 特殊字符转义
-    fn escape_html(input: &str) -> String {
-        input
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#x27;")
     }
 
     /// 渲染现代响应式 HTML 邮件模板
@@ -56,13 +46,13 @@ impl EmailNotifier {
                     <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;"><span style="background:{status_badge_bg};color:{status_badge_color};padding:3px 8px;border-radius:12px;font-size:12px;font-weight:600;white-space:nowrap;display:inline-block;">{status_text}</span></td>
                     <td style="padding:10px 10px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.4;">{message}</td>
                 </tr>"#,
-                domain = Self::escape_html(&r.domain),
+                domain = escape_html(&r.domain),
                 record_type = r.record_type,
-                target_ip = Self::escape_html(&r.target_ip),
+                target_ip = escape_html(&r.target_ip),
                 status_badge_bg = status_badge_bg,
                 status_badge_color = status_badge_color,
                 status_text = status_text,
-                message = Self::escape_html(&r.message)
+                message = escape_html(&r.message)
             ));
         }
 
@@ -177,7 +167,7 @@ impl EmailNotifier {
             status_border = status_border,
             status_color = status_color,
             status_title = status_title,
-            task_name = Self::escape_html(&event.task_name),
+            task_name = escape_html(&event.task_name),
             time_str = time_str,
             ipv4_str = ipv4_str,
             ipv6_str = ipv6_str,

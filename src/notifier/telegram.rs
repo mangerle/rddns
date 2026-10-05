@@ -1,5 +1,5 @@
 use crate::config::model::TelegramConfig;
-use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
+use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError, escape_html};
 use async_trait::async_trait;
 use log::info;
 use reqwest::Client;
@@ -14,15 +14,6 @@ impl TelegramNotifier {
     pub fn new(config: TelegramConfig) -> Self {
         let client = crate::util::http::create_notifier_client();
         Self { config, client }
-    }
-    /// HTML 特殊字符转义
-    fn escape_html(input: &str) -> String {
-        input
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#x27;")
     }
 }
 
@@ -55,7 +46,7 @@ impl Notifier for TelegramNotifier {
             <b>时间</b>: {timestamp}\n\n\
             <b>详情</b>:\n{details}",
             status = event.overall_status.as_str(),
-            task_name = Self::escape_html(&event.task_name),
+            task_name = escape_html(&event.task_name),
             ipv4 = event
                 .ipv4
                 .map(|ip| ip.to_string())
@@ -64,9 +55,9 @@ impl Notifier for TelegramNotifier {
                 .ipv6
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "无".to_string()),
-            domains = Self::escape_html(&event.domains_comma_separated()),
+            domains = escape_html(&event.domains_comma_separated()),
             timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S"),
-            details = Self::escape_html(&event.format_details_text())
+            details = escape_html(&event.format_details_text())
         );
 
         let payload = json!({
@@ -118,10 +109,10 @@ mod tests {
             timestamp: Local::now(),
         };
 
-        let escaped_task = TelegramNotifier::escape_html(&event.task_name);
+        let escaped_task = escape_html(&event.task_name);
         assert_eq!(escaped_task, "home_nas_task &lt;v1&gt;");
 
-        let escaped_details = TelegramNotifier::escape_html(&event.format_details_text());
+        let escaped_details = escape_html(&event.format_details_text());
         assert!(escaped_details.contains("&lt;API Error&gt; &amp; [400]"));
     }
 }

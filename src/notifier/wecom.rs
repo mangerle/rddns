@@ -1,5 +1,5 @@
 use crate::config::model::WeComConfig;
-use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
+use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError, escape_html};
 use async_trait::async_trait;
 use log::info;
 use parking_lot::RwLock;
@@ -188,7 +188,7 @@ impl WeComNotifier {
         let description = format!(
             "<div class=\"gray\">{}</div><div class=\"normal\">任务：{}</div><div class=\"normal\">IPv4：{}</div><div class=\"normal\">IPv6：{}</div><div class=\"normal\">域名：{}</div>\n\n{}",
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
-            event.task_name,
+            escape_html(&event.task_name),
             event
                 .ipv4
                 .map(|ip| ip.to_string())
@@ -197,8 +197,8 @@ impl WeComNotifier {
                 .ipv6
                 .map(|ip| ip.to_string())
                 .unwrap_or_else(|| "无".to_string()),
-            event.domains_comma_separated(),
-            event.format_details_text()
+            escape_html(&event.domains_comma_separated()),
+            escape_html(&event.format_details_text())
         );
 
         let payload = json!({
@@ -273,5 +273,17 @@ mod tests {
         let entry = cached.unwrap();
         assert_eq!(entry.access_token, token);
         assert!(entry.expires_at > Instant::now());
+    }
+
+    #[test]
+    fn test_wecom_html_escaping_prevents_injection() {
+        let malicious_task = "<script>alert('xss')</script>";
+        let escaped = escape_html(malicious_task);
+        assert_eq!(
+            escaped,
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
     }
 }

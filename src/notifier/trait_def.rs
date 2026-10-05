@@ -53,6 +53,16 @@ impl From<serde_json::Error> for NotifyError {
     }
 }
 
+/// HTML 特殊字符转义（防御 XSS 与标签注入）
+pub(crate) fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// 同步总状态标识
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationOverallStatus {
