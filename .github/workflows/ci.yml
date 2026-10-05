@@ -45,10 +45,19 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: 安装前端依赖并构建
+      - name: 安装前端依赖
         run: |
           cd frontend
           npm ci
+
+      - name: 前端代码规范检查 (Lint)
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: 构建前端静态产物 (Build)
+        run: |
+          cd frontend
           npm run build
 
       - name: 上传前端构建产物
