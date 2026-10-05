@@ -47,6 +47,7 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 psl = "2.1"
 shipup = { version = "0.5.1", default-features = false, features = ["async", "archive", "rustls-tls"] }
 dashmap = "6.2.1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
@@ -56,7 +57,7 @@ tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 opt-level = "z"       # 针对二进制体积与代码段映射进行极致优化 (Optimize for minimum size)
-lto = true            # 开启全局链接时优化 (Link Time Optimization)，跨模块裁剪死代码
+lto = "thin"          # 采用 ThinLTO 平衡编译时间与跨模块死代码裁剪 (加速发布流水线构建)
 codegen-units = 1     # 启用单代码生成单元，最大化优化内联
 strip = true          # 自动剥离符号表与调试元信息
 # 刻意不设置 panic = "abort"：保留栈展开(unwinding)能力，使后台任务的

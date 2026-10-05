@@ -104,15 +104,16 @@ fn resolve_config_path(cli_path: &Path) -> PathBuf {
     }
 }
 
-/// 执行管理员密码重置并保存至配置文件
-fn handle_reset_password(config_manager: &ConfigManager, new_pwd: &str) -> Result<()> {
-    let trimmed = new_pwd.trim();
-    if trimmed.is_empty() {
-        error!("重置密码失败：新密码不能为空");
+/// 执行管理员密码重置并保存至配置文件 (S-6, S-7)
+fn handle_reset_password(config_manager: &ConfigManager, cli_new_pwd: &str) -> Result<()> {
+    let pwd_from_env = std::env::var("RDDNS_NEW_PASSWORD").ok();
+    let target_pwd = pwd_from_env.as_deref().unwrap_or(cli_new_pwd);
+    if let Err(msg) = rddns::util::crypto::validate_password_strength(target_pwd) {
+        error!("重置密码失败: {}", msg);
         exit(1);
     }
     let mut conf = (*config_manager.get_config()).clone();
-    let hash_val = hash(trimmed, DEFAULT_COST).context("生成密码哈希失败")?;
+    let hash_val = hash(target_pwd, DEFAULT_COST).context("生成密码哈希失败")?;
     let username = conf
         .auth
         .as_ref()
@@ -127,9 +128,8 @@ fn handle_reset_password(config_manager: &ConfigManager, new_pwd: &str) -> Resul
         .context("保存新密码至配置文件失败")?;
 
     info!("==========================================");
-    info!("管理员密码重置成功");
+    info!("管理员密码已成功重置");
     info!("管理员账号: {}", username);
-    info!("新登录密码: {}", trimmed);
     info!("配置文件:   {}", config_manager.get_config_path().display());
     info!("==========================================");
     Ok(())
@@ -183,6 +183,12 @@ fn spawn_signal_listener(cancel_token: CancellationToken) -> tokio::task::JoinHa
         }
 
         cancel_token.cancel();
+        // 10 秒硬退出兜底，防止挂起的连接导致进程永不退出 (P-1)
+        spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            log::warn!("平滑停机超过 10 秒兜底时限，强制退出进程");
+            std::process::exit(0);
+        });
     })
 }
 
