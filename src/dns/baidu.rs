@@ -12,6 +12,9 @@ use std::net::IpAddr;
 const BAIDU_ENDPOINT: &str = "https://bcd.baidubce.com";
 const BAIDU_HOST: &str = "bcd.baidubce.com";
 
+/// 百度云 BCE-AUTH-V1 默认签名有效时间（1800 秒）
+pub const DEFAULT_BCE_EXPIRATION_SECS: u32 = 1800;
+
 /// 百度智能云 DNS 提供商
 pub struct BaiduCloudProvider {
     ak: String,
@@ -53,13 +56,20 @@ impl BaiduCloudProvider {
     /// 构建百度云 BCE-AUTH-V1 签名标头
     fn build_auth_header(&self, method: &str, uri: &str) -> String {
         let now_utc = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        Self::compute_bce_auth_header(&self.ak, &self.sk, method, uri, &now_utc)
+        Self::compute_bce_auth_header(
+            &self.ak,
+            &self.sk,
+            method,
+            uri,
+            &now_utc,
+            DEFAULT_BCE_EXPIRATION_SECS,
+        )
     }
 
     /// 计算百度云 BCE-AUTH-V1 签名标头纯函数
     ///
     /// # 设计原理
-    /// - **实现初衷**: 将时间戳参数显式化，支持已知时间测试向量以对齐单元测试 (P0-7)。
+    /// - **实现初衷**: 将时间戳与过期时间参数显式化，支持已知时间测试向量以对齐单元测试 (P0-7)。
     /// - **核心优势**: 消除当前系统时间导致的测试不确定性，验证签名格式及派生密钥正确性。
     pub(crate) fn compute_bce_auth_header(
         ak: &str,
@@ -67,8 +77,9 @@ impl BaiduCloudProvider {
         method: &str,
         uri: &str,
         now_utc: &str,
+        expiration_secs: u32,
     ) -> String {
-        let auth_prefix = format!("bce-auth-v1/{}/{}/1800", ak, now_utc);
+        let auth_prefix = format!("bce-auth-v1/{}/{}/{}", ak, now_utc, expiration_secs);
         let canonical_req = format!("{}\n{}\n\nhost:{}", method, uri, BAIDU_HOST);
         let signing_key = hmac_sha256_hex(sk.as_bytes(), auth_prefix.as_bytes());
         let signature = hmac_sha256_hex(signing_key.as_bytes(), canonical_req.as_bytes());
@@ -232,7 +243,14 @@ mod tests {
         let uri = "/v1/domain/resolve/add";
         let now_utc = "2023-10-05T12:00:00Z";
 
-        let auth = BaiduCloudProvider::compute_bce_auth_header(ak, sk, method, uri, now_utc);
+        let auth = BaiduCloudProvider::compute_bce_auth_header(
+            ak,
+            sk,
+            method,
+            uri,
+            now_utc,
+            DEFAULT_BCE_EXPIRATION_SECS,
+        );
 
         assert!(auth.starts_with("bce-auth-v1/test_ak/2023-10-05T12:00:00Z/1800/host/"));
         let parts: Vec<&str> = auth.split('/').collect();
@@ -241,7 +259,14 @@ mod tests {
         assert_eq!(sig.len(), 64);
 
         // 验证确定性
-        let auth2 = BaiduCloudProvider::compute_bce_auth_header(ak, sk, method, uri, now_utc);
+        let auth2 = BaiduCloudProvider::compute_bce_auth_header(
+            ak,
+            sk,
+            method,
+            uri,
+            now_utc,
+            DEFAULT_BCE_EXPIRATION_SECS,
+        );
         assert_eq!(auth, auth2);
     }
 }
