@@ -10,6 +10,13 @@ use log::{debug, error, info};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Instant;
 use tokio::task::JoinSet;
+use tokio::time::{Duration, timeout};
+
+/// 单次 DNS 服务商同步请求的全局兜底超时时间
+#[cfg(not(test))]
+const DNS_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const DNS_SYNC_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// 并发探测任务所需的公网 IPv4 与 IPv6 地址
 ///
@@ -107,8 +114,9 @@ pub(crate) fn spawn_protocol_sync_tasks(
                 let _permit = sem.acquire().await.ok();
                 let start_time = Instant::now();
                 let full_domain = domain.full_domain();
-                match provider.sync_record(&domain, rec_type, &ip, ttl).await {
-                    Ok(res) => {
+                let sync_future = provider.sync_record(&domain, rec_type, &ip, ttl);
+                match timeout(DNS_SYNC_TIMEOUT, sync_future).await {
+                    Ok(Ok(res)) => {
                         let cost_ms = start_time.elapsed().as_millis();
                         info!(
                             "[{}] 同步域名 {} ({}) 完成: {} (耗时 {}ms)",
@@ -120,7 +128,7 @@ pub(crate) fn spawn_protocol_sync_tasks(
                         );
                         res
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         let cost_ms = start_time.elapsed().as_millis();
                         error!(
                             "[{}] 同步域名 {} ({}) 失败: {} (耗时 {}ms)",
@@ -131,6 +139,19 @@ pub(crate) fn spawn_protocol_sync_tasks(
                             rec_type,
                             ip.to_string(),
                             e.to_string(),
+                        )
+                    }
+                    Err(_elapsed) => {
+                        let cost_ms = start_time.elapsed().as_millis();
+                        error!(
+                            "[{}] 同步域名 {} ({}) 超时 (超过 {:?}) (耗时 {}ms)",
+                            task_name, full_domain, type_str, DNS_SYNC_TIMEOUT, cost_ms
+                        );
+                        SyncRecordResult::failed(
+                            full_domain,
+                            rec_type,
+                            ip.to_string(),
+                            format!("DNS 同步请求超时 (超过 {:?})", DNS_SYNC_TIMEOUT),
                         )
                     }
                 }
@@ -394,5 +415,53 @@ mod tests {
         dispatch_sync_notification("task", &dispatcher, None, None, vec![s1.clone()]);
         dispatch_sync_notification("task", &dispatcher, None, None, vec![s2.clone()]);
         dispatch_sync_notification("task", &dispatcher, None, None, vec![s1, s2]);
+    }
+
+    struct HangProvider;
+
+    #[async_trait::async_trait]
+    impl DnsProvider for HangProvider {
+        fn provider_name(&self) -> &'static str {
+            "hang"
+        }
+
+        async fn sync_record(
+            &self,
+            _domain: &crate::core::domain::ParsedDomain,
+            _record_type: DnsRecordType,
+            _ip: &std::net::IpAddr,
+            _ttl: Option<u32>,
+        ) -> Result<SyncRecordResult, crate::dns::trait_def::DnsProviderError> {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_protocol_sync_tasks_timeout() {
+        let mut join_set = JoinSet::new();
+        let domain = parse_domain("timeout.example.com").unwrap();
+        let sem = Arc::new(Semaphore::new(1));
+        let synced = HashMap::new();
+
+        spawn_protocol_sync_tasks(
+            &mut join_set,
+            ProtocolSyncParams {
+                enabled: true,
+                task_name: "timeout_task".to_string(),
+                record_type: DnsRecordType::A,
+                ip_opt: Some(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))),
+                domains: std::slice::from_ref(&domain),
+                provider: Arc::new(HangProvider),
+                ttl: None,
+                synced_domains: &synced,
+                force_sync_all: true,
+                semaphore: sem,
+            },
+        );
+
+        let res = join_set.join_next().await.unwrap().unwrap();
+        assert_eq!(res.status, SyncStatus::Failed);
+        assert!(res.message.contains("超时"));
     }
 }
