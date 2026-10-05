@@ -128,9 +128,11 @@ impl ConfigManager {
     /// 会在锁被占用时直接返回 [`ConfigError::Locked`]。
     ///
     /// # 设计原理
-    /// 同步版本内联执行磁盘 IO，故在异步上下文中调用时**不会**阻塞事件循环，
-    /// 而是以快速失败方式避让——这既是性能考量，也是避免阻塞 Tokio 工作线程
-    /// 的必要设计。
+    /// 同步版本直接在当前调用线程内联执行磁盘 IO 与 fsync。在异步上下文中调用时，
+    /// 虽通过 `try_lock` 快速失败机制避免死锁与长时间等待，但由于内联写盘仍会占用
+    /// 当前工作线程时间片，因此运行期异步环境必须严格调用 [`Self::modify_config_async`]。
+    /// 此外，磁盘 IO 在内存读写锁外部执行，仅在更新内存快照与广播时短暂持有写锁（微秒级），
+    /// 避免阻塞并发读取 (P2-4)。
     ///
     /// # Errors
     /// - 当临时文件生成失败、磁盘写入出错或闭包逻辑校验失败时返回错误；
@@ -148,12 +150,18 @@ impl ConfigManager {
             Err(_) => self.async_write_lock.blocking_lock(),
         };
 
-        let mut guard = self.current.write();
-        let new_config = f(&guard)?;
+        let current_config = self.get_config();
+        let new_config = f(&current_config)?;
+
+        // 磁盘 IO 在内存写锁之外执行，杜绝持有 RwLock 锁期间阻塞文件系统写入
         Self::atomic_save_to_path(&self.file_path, &new_config)?;
+
         let new_arc = Arc::new(new_config);
-        *guard = new_arc.clone();
-        let _ = self.sender.send(new_arc.clone());
+        {
+            let mut guard = self.current.write();
+            *guard = new_arc.clone();
+            let _ = self.sender.send(new_arc.clone());
+        }
         info!("配置文件已原子更新保存并广播: {}", self.file_path.display());
         Ok(new_arc)
     }
