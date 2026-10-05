@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -267,23 +267,6 @@ impl RecordOps for TrafficRouteProvider {
             .request_volc("UpdateRecord", vec![], Some(update_body))
             .await?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for TrafficRouteProvider {
-    fn provider_name(&self) -> &'static str {
-        <Self as RecordOps>::provider_name(self)
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

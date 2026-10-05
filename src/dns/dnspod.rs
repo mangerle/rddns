@@ -1,7 +1,7 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
+use crate::dns::ops::{RecordOps, RemoteRecord};
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
@@ -179,23 +179,6 @@ impl RecordOps for TencentCloudProvider {
 
         let _: serde_json::Value = self.tc3.request_api("ModifyRecord", modify_payload).await?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for TencentCloudProvider {
-    fn provider_name(&self) -> &'static str {
-        "腾讯云 (DNSPod)"
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

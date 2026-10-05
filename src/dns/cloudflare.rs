@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use log::warn;
 use parking_lot::RwLock;
@@ -348,23 +348,6 @@ impl RecordOps for CloudflareProvider {
 
         let _: CfRecord = parse_cf_response(resp, "CloudflareUpdateFailed").await?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for CloudflareProvider {
-    fn provider_name(&self) -> &'static str {
-        "Cloudflare"
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

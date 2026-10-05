@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -268,23 +268,6 @@ impl RecordOps for AliDnsProvider {
             .await?;
 
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for AliDnsProvider {
-    fn provider_name(&self) -> &'static str {
-        "阿里云 (AliDNS)"
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -316,22 +316,5 @@ impl RecordOps for RainYunProvider {
                     .unwrap_or_else(|| "更新雨云记录失败".to_string()),
             })
         }
-    }
-}
-
-#[async_trait]
-impl DnsProvider for RainYunProvider {
-    fn provider_name(&self) -> &'static str {
-        <Self as RecordOps>::provider_name(self)
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

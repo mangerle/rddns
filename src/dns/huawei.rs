@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::crypto::{
     append_ntp_hint_if_expired, build_canonical_query_string, hmac_sha256_hex, sha256_hex,
 };
@@ -282,23 +282,6 @@ impl RecordOps for HuaweiDnsProvider {
             .await?;
 
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for HuaweiDnsProvider {
-    fn provider_name(&self) -> &'static str {
-        "华为云 (Huawei Cloud)"
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
 

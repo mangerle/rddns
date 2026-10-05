@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -279,22 +279,5 @@ impl RecordOps for NsOneProvider {
 
         check_nsone_error(&body, status, "更新记录失败")?;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl DnsProvider for NsOneProvider {
-    fn provider_name(&self) -> &'static str {
-        <Self as RecordOps>::provider_name(self)
-    }
-
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

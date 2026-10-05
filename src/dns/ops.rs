@@ -27,7 +27,7 @@
 //!   归并或标注，交由 [`RecordOps::before_sync`] 钩子做额外清理。
 
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use log::debug;
 use std::net::IpAddr;
@@ -265,6 +265,23 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         record_type,
         target_ip,
     ))
+}
+
+#[async_trait]
+impl<T: RecordOps> DnsProvider for T {
+    fn provider_name(&self) -> &'static str {
+        RecordOps::provider_name(self)
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
+    }
 }
 
 #[cfg(test)]
