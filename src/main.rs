@@ -109,8 +109,7 @@ fn handle_reset_password(config_manager: &ConfigManager, cli_new_pwd: &str) -> R
     let pwd_from_env = std::env::var("RDDNS_NEW_PASSWORD").ok();
     let target_pwd = pwd_from_env.as_deref().unwrap_or(cli_new_pwd);
     if let Err(msg) = rddns::util::crypto::validate_password_strength(target_pwd) {
-        error!("重置密码失败: {}", msg);
-        exit(1);
+        anyhow::bail!("重置密码失败: {}", msg);
     }
     let mut conf = (*config_manager.get_config()).clone();
     let hash_val = hash(target_pwd, DEFAULT_COST).context("生成密码哈希失败")?;
