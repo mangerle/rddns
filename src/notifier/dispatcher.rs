@@ -150,7 +150,7 @@ impl NotificationDispatcher {
                     debug!("同步存在失败，但配置关闭了失败报警，跳过发送");
                     return true;
                 }
-                self.check_and_update_error_throttle(&event.task_name, event.format_details_text())
+                self.check_and_update_error_throttle(&event.task_name, event.error_fingerprint())
             }
         }
     }

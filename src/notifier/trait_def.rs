@@ -1,8 +1,10 @@
 use crate::dns::trait_def::SyncRecordResult;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
+use regex::Regex;
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::LazyLock;
 
 #[derive(Debug)]
 pub enum NotifyError {
@@ -169,6 +171,46 @@ impl NotificationEvent {
             .collect();
         domains.join(", ")
     }
+
+    /// 生成用于冷却抑制判断的稳定错误指纹 (P2-9)
+    ///
+    /// # 设计原理
+    /// 各云厂商返回的错误消息中往往包含动态的 RequestId、TraceId、时间戳或随机数。
+    /// 若直接拿原始错误文本做全值等值比较，会导致抑制机制完全失效。
+    /// 本指纹提取域名、记录类型与规范化后的错误摘要，消除动态易变因子。
+    pub fn error_fingerprint(&self) -> String {
+        let mut lines = Vec::new();
+        for r in &self.results {
+            if r.status != crate::dns::trait_def::SyncStatus::Created
+                && r.status != crate::dns::trait_def::SyncStatus::Updated
+                && r.status != crate::dns::trait_def::SyncStatus::Unchanged
+            {
+                let normalized_msg = normalize_error_for_fingerprint(&r.message);
+                lines.push(format!(
+                    "[{}] {}: {}",
+                    r.record_type, r.domain, normalized_msg
+                ));
+            }
+        }
+        if lines.is_empty() {
+            normalize_error_for_fingerprint(&self.format_details_text())
+        } else {
+            lines.join(";")
+        }
+    }
+}
+
+/// 匹配云服务商错误信息中动态可变成分（RequestId、UUID、纯数字时间戳）的正则表达式
+static DYNAMIC_ERROR_VAR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(request_?id|trace_?id|req_?id|timestamp|nonce)\s*[:=]\s*[^,\s;}]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\b\d{10,13}\b")
+        .expect("静态错误归一化正则表达式语法必定合法")
+});
+
+/// 对错误信息中的动态变量执行归一化，剔除请求 ID、时间戳与 UUID (P2-9)
+pub fn normalize_error_for_fingerprint(input: &str) -> String {
+    DYNAMIC_ERROR_VAR_REGEX
+        .replace_all(input, "<VAR>")
+        .to_string()
 }
 
 /// 统一的通知发送者接口
@@ -284,5 +326,50 @@ mod tests {
         assert!(formatted.contains("/bot******"));
         assert!(formatted.contains("pwd=******"));
         assert!(formatted.contains("token=******"));
+    }
+
+    #[test]
+    fn test_error_fingerprint_normalization() {
+        let msg1 = "API 请求失败: Code=InvalidSignature, RequestId: 12345678-1234-1234-1234-1234567890ab, timestamp: 1696500000";
+        let msg2 = "API 请求失败: Code=InvalidSignature, RequestId: 87654321-4321-4321-4321-ba0987654321, timestamp: 1696500999";
+
+        let norm1 = normalize_error_for_fingerprint(msg1);
+        let norm2 = normalize_error_for_fingerprint(msg2);
+
+        assert_eq!(norm1, norm2);
+
+        let event1 = NotificationEvent {
+            overall_status: NotificationOverallStatus::Failed,
+            task_name: "test_task".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: false,
+            results: vec![SyncRecordResult {
+                domain: "sub.example.com".to_string(),
+                record_type: DnsRecordType::A,
+                target_ip: "1.1.1.1".to_string(),
+                status: SyncStatus::Failed,
+                message: msg1.to_string(),
+            }],
+            timestamp: Local::now(),
+        };
+
+        let event2 = NotificationEvent {
+            overall_status: NotificationOverallStatus::Failed,
+            task_name: "test_task".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: false,
+            results: vec![SyncRecordResult {
+                domain: "sub.example.com".to_string(),
+                record_type: DnsRecordType::A,
+                target_ip: "1.1.1.1".to_string(),
+                status: SyncStatus::Failed,
+                message: msg2.to_string(),
+            }],
+            timestamp: Local::now(),
+        };
+
+        assert_eq!(event1.error_fingerprint(), event2.error_fingerprint());
     }
 }
