@@ -138,12 +138,7 @@ impl DnsProvider for GcoreProvider {
         let zone = zones
             .into_iter()
             .find(|z| z.name.eq_ignore_ascii_case(&domain.root_domain))
-            .ok_or_else(|| {
-                DnsProviderError::ZoneNotFound(format!(
-                    "在 Gcore 中未找到域名 [{}] 对应的 Zone",
-                    domain.root_domain
-                ))
-            })?;
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(domain.root_domain.clone()))?;
 
         // 2. 查询现有 RRSet (带 limit=100 参数)
         let rrset_url = format!("{}/zones/{}/rrsets?limit=100", GCORE_API_BASE, zone.name);

@@ -205,12 +205,7 @@ impl AliEsaProvider {
         let site = sites
             .into_iter()
             .find(|s| s.site_name.eq_ignore_ascii_case(root_domain))
-            .ok_or_else(|| {
-                DnsProviderError::ZoneNotFound(format!(
-                    "在阿里云 ESA 中未找到根域名 [{}] 对应的站点",
-                    root_domain
-                ))
-            })?;
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
         Ok(site.site_id)
     }

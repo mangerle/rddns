@@ -114,10 +114,7 @@ impl NsOneProvider {
 
         let status = resp.status();
         if status == StatusCode::NOT_FOUND {
-            return Err(DnsProviderError::ZoneNotFound(format!(
-                "在 IBM NS1 Connect 中未找到根域名 [{}]",
-                root_domain
-            )));
+            return Err(DnsProviderError::ZoneNotFound(root_domain.to_string()));
         }
 
         let body = resp.text().await?;

@@ -121,12 +121,8 @@ impl DnsProvider for Dynv6Provider {
             .into_iter()
             .find(|z| full_domain == z.name || full_domain.ends_with(&format!(".{}", z.name)));
 
-        let zone = matched_zone.ok_or_else(|| {
-            DnsProviderError::ZoneNotFound(format!(
-                "在 Dynv6 账户中未找到与域名 [{}] 匹配的 Zone",
-                full_domain
-            ))
-        })?;
+        let zone =
+            matched_zone.ok_or_else(|| DnsProviderError::ZoneNotFound(full_domain.to_string()))?;
 
         let is_main_domain = full_domain.eq_ignore_ascii_case(&zone.name);
 

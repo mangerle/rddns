@@ -146,10 +146,7 @@ impl RainYunProvider {
             }
         }
 
-        Err(DnsProviderError::ZoneNotFound(format!(
-            "在雨云账户中未找到域名 [{}] 对应的 Domain ID，请在配置中手动指定 Domain ID",
-            root_domain
-        )))
+        Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
     }
 }
 

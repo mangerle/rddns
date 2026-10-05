@@ -167,10 +167,7 @@ impl HipmDnsMgrProvider {
             }
         }
 
-        Err(DnsProviderError::ZoneNotFound(format!(
-            "在 HiPM DNSMgr 中未找到根域名 [{}] 对应的域名 ID",
-            root_domain
-        )))
+        Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
     }
 
     /// 查询指定子域名记录

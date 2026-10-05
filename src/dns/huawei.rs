@@ -183,11 +183,7 @@ impl RecordOps for HuaweiDnsProvider {
         let zone = zones
             .into_iter()
             .find(|z| z.name.eq_ignore_ascii_case(&hw_root_name))
-            .ok_or_else(|| {
-                DnsProviderError::ZoneNotFound(format!(
-                    "在华为云 DNS 中未找到根域名 [{root_domain}] 对应的公网 Zone"
-                ))
-            })?;
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
         Ok(zone.id)
     }

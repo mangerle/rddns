@@ -73,12 +73,7 @@ impl TencentEoProvider {
         let matched = zones
             .into_iter()
             .find(|z| z.zone_name.eq_ignore_ascii_case(root_domain))
-            .ok_or_else(|| {
-                DnsProviderError::ZoneNotFound(format!(
-                    "在腾讯云 EdgeOne 中未找到根域名 [{}] 对应的 Zone",
-                    root_domain
-                ))
-            })?;
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
         Ok(matched.zone_id)
     }
