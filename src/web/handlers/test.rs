@@ -11,6 +11,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// 测试通知触发的最小时间间隔（毫秒），杜绝短时间内滥用中继发送通知 (P1-9)
+const TEST_NOTIFY_MIN_INTERVAL_MS: i64 = 3000;
+
+/// 上一次触发测试通知的时间戳（毫秒）
+static LAST_NOTIFY_TEST_TIMESTAMP_MS: AtomicI64 = AtomicI64::new(0);
 
 /// 测试 IP 提取器配置请求体
 #[derive(Debug, Deserialize)]
@@ -100,12 +107,35 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
     }
 }
 
+/// 辅助判断是否配置了至少一个启用的通知渠道
+fn has_any_enabled_channel(config: &NotificationConfig) -> bool {
+    config.wechat_official.as_ref().is_some_and(|c| c.enabled)
+        || config.wecom.as_ref().is_some_and(|c| c.enabled)
+        || config.telegram.as_ref().is_some_and(|c| c.enabled)
+        || config.dingtalk.as_ref().is_some_and(|c| c.enabled)
+        || config.feishu.as_ref().is_some_and(|c| c.enabled)
+        || config.bark.as_ref().is_some_and(|c| c.enabled)
+        || config.email.as_ref().is_some_and(|c| c.enabled)
+        || config.webhook.as_ref().is_some_and(|c| c.enabled)
+}
+
 /// 测试通知发送（优先提取当前已配置的真实公网 IP 与真实域名数据）
 pub async fn test_notify_handler(
     State(state): State<AppState>,
     Json(config): Json<NotificationConfig>,
 ) -> impl IntoResponse {
-    // 校验所有通知渠道的 URL 地址安全性，防御针对内网及保留地址的 SSRF 探测
+    // 1. 检查是否至少启用了某一个通知渠道（优先阻断空配置）
+    if !has_any_enabled_channel(&config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(
+                "未启用任何通知渠道，请先启用至少一个通知渠道再进行测试".to_string(),
+            )),
+        )
+            .into_response();
+    }
+
+    // 2. 校验所有通知渠道的 URL 地址安全性，防御针对内网及保留地址的 SSRF 探测
     if let Err(e) = crate::web::handlers::config::validate_notification_urls(&config) {
         return (
             StatusCode::BAD_REQUEST,
@@ -113,6 +143,33 @@ pub async fn test_notify_handler(
                 "测试通知失败: {}",
                 e.message
             ))),
+        )
+            .into_response();
+    }
+
+    // 3. 频控校验：防止短时间内高频调用通知测试造成垃圾消息轰炸或放大反射攻击 (P1-9)
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let last = LAST_NOTIFY_TEST_TIMESTAMP_MS.load(Ordering::Acquire);
+    if now_ms.saturating_sub(last) < TEST_NOTIFY_MIN_INTERVAL_MS {
+        let remaining_secs = (TEST_NOTIFY_MIN_INTERVAL_MS - (now_ms - last) + 999) / 1000;
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(format!(
+                "测试通知发送过于频繁，请等待 {} 秒后重试",
+                remaining_secs
+            ))),
+        )
+            .into_response();
+    }
+    if LAST_NOTIFY_TEST_TIMESTAMP_MS
+        .compare_exchange(last, now_ms, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "正在处理先前的测试通知请求，请勿并发发起".to_string(),
+            )),
         )
             .into_response();
     }
@@ -218,6 +275,10 @@ pub async fn test_notify_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::storage::ConfigManager;
+    use crate::core::state::StateManager;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
     async fn test_test_ip_rejects_command() {
@@ -299,5 +360,58 @@ mod tests {
                 target
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_test_notify_rejects_empty_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: StateManager::new(),
+            cancel_token: CancellationToken::new(),
+        };
+
+        let empty_config = NotificationConfig::default();
+        let res = test_notify_handler(State(state), Json(empty_config))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_test_notify_rate_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: StateManager::new(),
+            cancel_token: CancellationToken::new(),
+        };
+
+        let mut config = NotificationConfig::default();
+        config.telegram = Some(crate::config::model::TelegramConfig {
+            enabled: true,
+            bot_token: "fake_token".to_string(),
+            chat_id: "fake_id".to_string(),
+            api_proxy: None,
+        });
+
+        // 第一次调用设置限流时间戳
+        let _ = test_notify_handler(State(state.clone()), Json(config.clone())).await;
+
+        // 连续快速调用第二次，必须被频控拦截并返回 429
+        let res2 = test_notify_handler(State(state), Json(config))
+            .await
+            .into_response();
+        assert_eq!(res2.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 }
