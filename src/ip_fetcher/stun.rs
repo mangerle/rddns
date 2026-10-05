@@ -115,7 +115,7 @@ impl StunIpFetcher {
         }
     }
 
-    /// 使用公共递归 DNS 兜底查询 STUN 服务器的 AAAA 记录
+    /// 使用公共递归 DNS 并发兜底查询 STUN 服务器的 AAAA 记录 (P-4)
     async fn resolve_fallback_ipv6(norm_server: &str) -> Vec<SocketAddr> {
         let (host, port) = Self::parse_server_host_port(norm_server);
         let host_clean = host.trim();
@@ -126,41 +126,59 @@ impl StunIpFetcher {
             return Vec::new();
         }
 
-        let dns_servers = ["223.5.5.5:53", "119.29.29.29:53", "1.1.1.1:53"];
-        let mut results = Vec::new();
-        for dns in dns_servers {
-            if let Ok(ips) = query_dns_server(
-                dns,
+        let (f1, f2, f3) = tokio::join!(
+            query_dns_server(
+                "223.5.5.5:53",
                 host_clean,
                 QueryRecordType::AAAA,
-                Duration::from_secs(2),
-            )
-            .await
-            {
+                Duration::from_secs(2)
+            ),
+            query_dns_server(
+                "119.29.29.29:53",
+                host_clean,
+                QueryRecordType::AAAA,
+                Duration::from_secs(2)
+            ),
+            query_dns_server(
+                "1.1.1.1:53",
+                host_clean,
+                QueryRecordType::AAAA,
+                Duration::from_secs(2)
+            ),
+        );
+
+        let mut results = Vec::new();
+        for res in [f1, f2, f3] {
+            if let Ok(ips) = res {
                 for ip in ips {
                     if let IpAddr::V6(v6) = ip {
                         results.push(SocketAddr::new(IpAddr::V6(v6), port));
                     }
                 }
-                if !results.is_empty() {
-                    break;
-                }
+            }
+            if !results.is_empty() {
+                break;
             }
         }
         results
     }
 
-    /// 解析 STUN 服务器为具体的目标 Socket 地址
+    /// 解析 STUN 服务器为具体的目标 Socket 地址 (P-4)
     async fn resolve_stun_target_addr(
         norm_server: &str,
         is_ipv6: bool,
     ) -> Result<SocketAddr, FetchError> {
-        let mut target_addrs: Vec<SocketAddr> = match lookup_host(norm_server).await {
-            Ok(iter) => iter
+        let lookup_fut = tokio::time::timeout(Duration::from_secs(3), lookup_host(norm_server));
+        let mut target_addrs: Vec<SocketAddr> = match lookup_fut.await {
+            Ok(Ok(iter)) => iter
                 .filter(|a| if is_ipv6 { a.is_ipv6() } else { a.is_ipv4() })
                 .collect(),
-            Err(e) => {
+            Ok(Err(e)) => {
                 debug!("系统原生 DNS 解析 [{}] 失败: {}", norm_server, e);
+                Vec::new()
+            }
+            Err(_) => {
+                debug!("系统原生 DNS 解析 [{}] 超时 (3s)", norm_server);
                 Vec::new()
             }
         };
