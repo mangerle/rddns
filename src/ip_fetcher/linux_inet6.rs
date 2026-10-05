@@ -68,7 +68,8 @@ pub fn parse_if_inet6_line(line: &str) -> Option<LinuxIfInet6Entry> {
     let hex_flags = parts.next()?;
     let if_name = parts.next()?;
 
-    if hex_ip.len() != 32 {
+    // 严格校验 IPv6 十六进制字符串长度与字符集，杜绝非 ASCII 字符在切片时触发 panic (P3-16)
+    if hex_ip.len() != 32 || !hex_ip.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
 
@@ -251,5 +252,20 @@ fe800000000000000200f8fffed144ff 02 40 20 80     eth0
         assert_eq!(entries_wlan0.len(), 1);
         assert_eq!(entries_wlan0[0].flags, 0x880);
         assert!(entries_wlan0[0].is_stable_global());
+    }
+
+    #[test]
+    fn test_parse_if_inet6_line_non_ascii_safety() {
+        // 构造刚好 32 字节但包含非 ASCII 字符的畸形串 (26 字节 ASCII + 2 个 3 字节 UTF-8 字符)
+        let malformed_32_bytes = "12345678901234567890123456测试 02 40 00 80 eth0";
+        assert_eq!(
+            malformed_32_bytes.split_whitespace().next().unwrap().len(),
+            32
+        );
+        assert!(parse_if_inet6_line(malformed_32_bytes).is_none());
+
+        // 包含非法字符（非十六进制）
+        let invalid_hex = "2408820778cd12340200f8fffed144zz 02 40 00 80 eth0";
+        assert!(parse_if_inet6_line(invalid_hex).is_none());
     }
 }
