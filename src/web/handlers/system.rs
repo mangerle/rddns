@@ -9,10 +9,26 @@ use log::{error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::spawn;
 
-/// 手动触发立即全量同步
+use axum::http::StatusCode;
+use tokio::sync::mpsc::error::TrySendError;
+
+/// 手动触发立即全量同步 (P-6: 采用 try_send 防挂起与限流反压)
 pub async fn manual_sync_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let _ = state.trigger_sender.send(()).await;
-    Json(ApiResponse::ok("已触发后台全量同步"))
+    match state.trigger_sender.try_send(()) {
+        Ok(()) => (StatusCode::OK, Json(ApiResponse::ok("已触发后台全量同步"))).into_response(),
+        Err(TrySendError::Full(_)) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<()>::err(
+                "已有同步任务在队列中，请稍后再试".into(),
+            )),
+        )
+            .into_response(),
+        Err(TrySendError::Closed(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::<()>::err("调度器已停止，无法触发同步".into())),
+        )
+            .into_response(),
+    }
 }
 
 /// 获取最近操作日志快照

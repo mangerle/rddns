@@ -5,15 +5,12 @@ use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
-use crate::util::net::is_private_or_loopback;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
-use url::{Host, Url};
 
 /// 测试 IP 提取器配置请求体
 #[derive(Debug, Deserialize)]
@@ -33,43 +30,7 @@ pub struct TestIpResult {
 
 /// 校验测试目标 URL 是否安全（防范 SSRF 滥用与协议走私）
 fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
-    let trimmed = raw_url.trim();
-    if trimmed.is_empty() {
-        return Ok(());
-    }
-    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-        return Err(format!(
-            "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址！",
-            trimmed
-        ));
-    }
-    let parsed =
-        Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
-    match parsed.host() {
-        Some(Host::Ipv4(v4)) => {
-            if is_private_or_loopback(&IpAddr::V4(v4)) {
-                return Err(format!(
-                    "出于安全策略，禁止测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址！",
-                    v4
-                ));
-            }
-        }
-        Some(Host::Ipv6(v6)) => {
-            if is_private_or_loopback(&IpAddr::V6(v6)) {
-                return Err(format!(
-                    "出于安全策略，禁止测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址！",
-                    v6
-                ));
-            }
-        }
-        Some(Host::Domain(domain)) => {
-            if domain.trim().eq_ignore_ascii_case("localhost") {
-                return Err("出于安全策略，禁止测试指向 localhost 的地址！".to_string());
-            }
-        }
-        None => return Err("URL 端点缺少有效的主机地址！".to_string()),
-    }
-    Ok(())
+    crate::util::net::validate_safe_url_endpoint(raw_url)
 }
 
 /// 测试 IP 提取器在线获取
@@ -144,6 +105,18 @@ pub async fn test_notify_handler(
     State(state): State<AppState>,
     Json(config): Json<NotificationConfig>,
 ) -> impl IntoResponse {
+    // 校验所有通知渠道的 URL 地址安全性，防御针对内网及保留地址的 SSRF 探测
+    if let Err(e) = crate::web::handlers::config::validate_notification_urls(&config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()>::err(format!(
+                "测试通知失败: {}",
+                e.message
+            ))),
+        )
+            .into_response();
+    }
+
     let app_config = state.config_manager.get_config();
     let dispatcher = NotificationDispatcher::new(config);
 
@@ -239,6 +212,7 @@ pub async fn test_notify_handler(
     Json(ApiResponse::ok(
         "测试通知已派发至已启用的渠道，请查看目标平台",
     ))
+    .into_response()
 }
 
 #[cfg(test)]

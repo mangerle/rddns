@@ -1,5 +1,5 @@
 use crate::web::handlers::AppState;
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
@@ -8,6 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -82,13 +83,36 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         && let Some((user, pass)) = decoded_str.split_once(':')
         && user == auth_conf.username
     {
-        // 异步校验 bcrypt 密码哈希，避免阻塞 async runtime
-        if crate::util::crypto::verify_password_async(
+        let client_ip = req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let limiter_key = format!("{}:{}", user, client_ip);
+
+        // 校验账号是否已锁定，防止持续暴破 (S-3, S-8)
+        if let Err(locked_err) = crate::web::handlers::auth::check_login_locked(&limiter_key) {
+            return Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .body(axum::body::Body::from(format!(
+                    r#"{{"success":false,"message":"{}"}}"#,
+                    locked_err
+                )))
+                .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
+        }
+
+        // 异步校验 bcrypt 密码哈希，受并发闸门保护
+        let is_valid = crate::util::crypto::verify_password_async(
             pass.to_string(),
             auth_conf.password_hash.clone(),
         )
-        .await
-        {
+        .await;
+
+        // 记录失败或成功状态
+        crate::web::handlers::auth::record_login_failure(&limiter_key, is_valid);
+
+        if is_valid {
             return next.run(req).await;
         }
     }
@@ -127,6 +151,7 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         let app = Router::new()
@@ -165,6 +190,7 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         let app = Router::new()

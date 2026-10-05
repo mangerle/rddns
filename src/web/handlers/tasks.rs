@@ -40,6 +40,7 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         }
     }
 

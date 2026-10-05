@@ -83,6 +83,12 @@ pub async fn static_handler(uri: Uri, req_headers: HeaderMap) -> impl IntoRespon
                 "Referrer-Policy",
                 HeaderValue::from_static("strict-origin-when-cross-origin"),
             );
+            headers.insert(
+                "Content-Security-Policy",
+                HeaderValue::from_static(
+                    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+                ),
+            );
 
             if path.ends_with(".html") || path == "index.html" {
                 headers.insert(

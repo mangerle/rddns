@@ -70,7 +70,7 @@ fn now_and_retain(map: &mut HashMap<String, LoginFailRecord>) -> Instant {
 /// # 设计原理
 /// 仅依据 `locked_until` 判定，与失败计数解耦，避免出现「每次失败都刷新
 /// 时间戳导致锁定永不过期」的问题。
-fn check_login_locked(key: &str) -> Result<(), AppError> {
+pub(crate) fn check_login_locked(key: &str) -> Result<(), AppError> {
     let mut map = LOGIN_FAIL_LIMITER.lock();
     let now = now_and_retain(&mut map);
 
@@ -89,7 +89,7 @@ fn check_login_locked(key: &str) -> Result<(), AppError> {
 /// - 成功登录：清空该账号的失败记录；
 /// - 失败：累加计数，仅在**首次**达到阈值时写入锁定截止时间；
 ///   已处于锁定期时不刷新截止时间，使锁定时长固定为 LOGIN_LOCK_DURATION_SECS。
-fn record_login_failure(key: &str, is_success: bool) {
+pub(crate) fn record_login_failure(key: &str, is_success: bool) {
     let mut map = LOGIN_FAIL_LIMITER.lock();
     let now = now_and_retain(&mut map);
 
@@ -129,10 +129,10 @@ pub async fn get_auth_status_handler(
 ) -> Json<ApiResponse<AuthStatusResponse>> {
     let config = state.config_manager.get_config();
     let need_init = config.auth.is_none();
-    let username = config.auth.as_ref().map(|a| a.username.clone());
+    // 出于安全防御考虑，不在公开状态接口暴露真实管理员用户名，避免攻击者精准发起暴力破解
     Json(ApiResponse::ok(AuthStatusResponse {
         need_init,
-        username,
+        username: None,
     }))
 }
 
@@ -192,16 +192,15 @@ pub async fn init_auth_handler(
     }
 
     let username = req.username.trim();
-    let password = req.password.trim();
-    if username.is_empty() || password.is_empty() {
-        return Err(AppError::bad_request("用户名和密码不能为空"));
+    if username.is_empty() {
+        return Err(AppError::bad_request("用户名不能为空"));
     }
-    if password.len() < 4 {
-        return Err(AppError::bad_request("管理员密码长度不能少于 4 个字符"));
+    if let Err(msg) = crate::util::crypto::validate_password_strength(&req.password) {
+        return Err(AppError::bad_request(msg));
     }
 
     // 异步生成 bcrypt 密码哈希，避免阻塞 async runtime
-    let hash = crate::util::crypto::hash_password_async(password.to_string())
+    let hash = crate::util::crypto::hash_password_async(req.password.clone())
         .await
         .map_err(|e| AppError::internal(format!("密码加密失败: {}", e)))?;
 
@@ -210,9 +209,7 @@ pub async fn init_auth_handler(
         .config_manager
         .modify_config_async::<_, ConfigError>(|current_conf| {
             if current_conf.auth.is_some() {
-                return Err(ConfigError::TempFile(
-                    "系统已初始化管理员账号，无法重复初始化".to_string(),
-                ));
+                return Err(ConfigError::AlreadyExists);
             }
             let mut updated = current_conf.clone();
             updated.auth = Some(UserAuthConfig {
@@ -236,31 +233,30 @@ pub struct LoginRequest {
 
 /// 登录验证接口
 pub async fn login_auth_handler(
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<&'static str>>, AppError> {
     let username = req.username.trim();
-    let password = req.password.trim();
-    if username.is_empty() || password.is_empty() {
+    if username.is_empty() || req.password.is_empty() {
         return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
+    let limiter_key = format!("{}:{}", username, peer_addr.ip());
+
     // 检查登录频控锁定状态
-    check_login_locked(username)?;
+    check_login_locked(&limiter_key)?;
 
     let config = state.config_manager.get_config();
     if let Some(ref auth) = config.auth {
         if username == auth.username
-            && crate::util::crypto::verify_password_async(
-                password.to_string(),
-                auth.password_hash.clone(),
-            )
-            .await
+            && crate::util::crypto::verify_password_async(req.password, auth.password_hash.clone())
+                .await
         {
-            record_login_failure(username, true);
+            record_login_failure(&limiter_key, true);
             return Ok(Json(ApiResponse::ok("登录成功")));
         }
-        record_login_failure(username, false);
+        record_login_failure(&limiter_key, false);
         return Err(AppError::unauthorized("用户名或密码错误"));
     }
 
@@ -303,6 +299,7 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         // 模拟来自公网 IP (8.8.8.8) 的初始化请求
@@ -330,6 +327,7 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
@@ -376,13 +374,14 @@ mod tests {
             trigger_sender: tx,
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
         let headers = HeaderMap::new();
         let req = AuthInitRequest {
             username: "admin".to_string(),
-            password: "123".to_string(), // 少于 4 位
+            password: "1234567".to_string(), // 少于 8 位
         };
 
         let res = init_auth_handler(ConnectInfo(local_addr), headers, State(state), Json(req))

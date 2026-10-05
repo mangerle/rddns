@@ -3,6 +3,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
+use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
 use url::form_urlencoded::byte_serialize;
 
@@ -91,22 +93,69 @@ pub fn random_u32() -> u32 {
 /// - **实现初衷**：bcrypt 属于密集 CPU 计算，若在 Tokio 工作线程直接计算会引发严重事件循环延迟。
 /// - **核心优势**：通过 `spawn_blocking` 将密集计算移交专用线程池。
 ///
+/// 全局 bcrypt 计算并发闸门，限制同时执行的密码哈希校验数量，彻底防范 CPU DoS 耗尽攻击
+static BCRYPT_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
+
+/// 异步计算 bcrypt 密码哈希 (移入后台阻塞线程池)
+///
 /// # Errors
 /// 当密码过长（>72字节）或后台阻塞任务执行异常时返回错误。
 pub async fn hash_password_async(password: String) -> Result<String, String> {
+    let _permit = BCRYPT_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|e| e.to_string())?;
     spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string()))
         .await
         .map_err(|e| format!("执行后台哈希任务失败: {}", e))?
+}
+
+/// 校验密码强度与合法长度 (S-7)
+///
+/// # 设计原理
+/// - **实现初衷**: 统一密码长度下限（>= 8 位）与上限（<= 72 字节），杜绝 bcrypt 截断风险与弱密码爆破。
+/// - **核心优势**: 严格比对字符与字节长度，不执行 `.trim()` 以确保与各端传输的真实凭据完全一致。
+///
+/// # Errors
+/// 当密码为空、长度小于 8 或大于 72 字节时返回错误提示。
+pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
+    if password.is_empty() {
+        return Err("密码不能为空");
+    }
+    if password.len() < 8 {
+        return Err("密码长度不能少于 8 个字符");
+    }
+    if password.len() > 72 {
+        return Err("密码长度不能超过 72 字节（受 bcrypt 算法上限限制）");
+    }
+    Ok(())
 }
 
 /// 异步校验 bcrypt 密码哈希 (移入后台阻塞线程池)
 ///
 /// # 设计原理
 /// - **实现初衷**：避免在 Web 身份验证接口中阻塞异步运行时。
+/// - **核心优势**：通过并发闸门控制 CPU 资源消耗，杜绝并发暴破 DoS，并在发生异常时输出明确日志。
 pub async fn verify_password_async(password: String, hash: String) -> bool {
-    spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false))
-        .await
-        .unwrap_or(false)
+    let _permit = match BCRYPT_SEMAPHORE.acquire().await {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("获取 bcrypt 信号量失败: {}", e);
+            return false;
+        }
+    };
+    spawn_blocking(move || match bcrypt::verify(password, &hash) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("密码哈希格式校验异常: {}", e);
+            false
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        log::error!("执行密码校验后台任务异常: {}", e);
+        false
+    })
 }
 
 /// 阿里云 POP 规范 URL 编码（RFC 3986 基础上的特殊转义规则）
@@ -232,5 +281,14 @@ mod tests {
         let r2 = random_u16();
         let r3 = random_u32();
         assert!(r1 != r2 || r3 != 0);
+    }
+
+    #[test]
+    fn test_validate_password_strength() {
+        assert!(validate_password_strength("").is_err());
+        assert!(validate_password_strength("1234567").is_err());
+        assert!(validate_password_strength("12345678").is_ok());
+        assert!(validate_password_strength("a".repeat(72).as_str()).is_ok());
+        assert!(validate_password_strength("a".repeat(73).as_str()).is_err());
     }
 }

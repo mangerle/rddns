@@ -20,6 +20,7 @@ use log::error;
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 /// Web 管理后台全局共享状态
 #[derive(Clone)]
@@ -33,6 +34,8 @@ pub struct AppState {
     /// 与 DDNS 引擎共享同一实例（内部为 `Arc<RwLock<..>>`），使前端得以读取
     /// 结构化运行状态，而不必解析日志文本。
     pub state_manager: StateManager,
+    /// 全局退出取消令牌（用于通知在途长连接与 SSE 优雅退出）
+    pub cancel_token: CancellationToken,
 }
 
 /// 统一 API 响应包装模型
@@ -92,6 +95,14 @@ impl AppError {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
     }
 }
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for AppError {}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {

