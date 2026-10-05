@@ -316,6 +316,18 @@ impl DdnsEngine {
         info!("======== 任务 [{}] 同步执行完毕 ========\n", task.name);
     }
 
+    /// 伴随取消令牌执行单次全量检查，若在执行期间收到停止信号，返回 false 提示调用方平滑退出
+    async fn run_once_cancellable(
+        &self,
+        force_cloud_sync: bool,
+        cancel_token: &CancellationToken,
+    ) -> bool {
+        select! {
+            _ = cancel_token.cancelled() => false,
+            _ = self.run_once(force_cloud_sync) => true,
+        }
+    }
+
     /// 启动引擎后台主循环
     ///
     /// # 设计原理
@@ -339,20 +351,26 @@ impl DdnsEngine {
         let mut trigger_rx_closed = false;
         let mut config_rx_closed = false;
 
-        loop {
+        'engine_loop: loop {
             select! {
                 _ = cancel_token.cancelled() => {
                     info!("收到停止信号，DDNS 调度引擎平滑退出");
-                    break;
+                    break 'engine_loop;
                 }
                 _ = timer.tick() => {
-                    self.run_once(false).await;
+                    if !self.run_once_cancellable(false, &cancel_token).await {
+                        info!("定时同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
+                        break 'engine_loop;
+                    }
                 }
                 manual_req = self.trigger_receiver.recv(), if !trigger_rx_closed => {
                     match manual_req {
                         Some(_) => {
                             info!("收到手动强制同步触发指令");
-                            self.run_once(true).await;
+                            if !self.run_once_cancellable(true, &cancel_token).await {
+                                info!("手动同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
+                                break 'engine_loop;
+                            }
                         }
                         None => {
                             warn!("手动同步触发通道已关闭，已停用手动指令监听分支，防止 CPU 空转");

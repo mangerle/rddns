@@ -456,3 +456,30 @@ async fn test_run_loop_graceful_shutdown() {
     cancel_token.cancel();
     engine.run_loop(cancel_token).await;
 }
+
+#[tokio::test]
+async fn test_run_loop_cancelled_via_token_when_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_file = dir.path().join(".rddns.toml");
+    let manager = Arc::new(ConfigManager::load_or_create(config_file).unwrap());
+    let state_mgr = StateManager::new();
+
+    let (engine, trigger_tx) = DdnsEngine::new(manager, state_mgr);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+    let token_clone = cancel_token.clone();
+
+    let handle = tokio::spawn(async move {
+        engine.run_loop(token_clone).await;
+    });
+
+    // 触发手动同步并稍后发出取消信号
+    let _ = trigger_tx.send(()).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    cancel_token.cancel();
+
+    // 验证在收到取消信号后能够在极短时间内平滑退出，不会挂死
+    tokio::time::timeout(tokio::time::Duration::from_secs(3), handle)
+        .await
+        .expect("调度循环未在规定时间内平滑退出")
+        .expect("调度任务执行异常");
+}
