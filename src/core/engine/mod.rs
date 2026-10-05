@@ -22,10 +22,17 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::time::{MissedTickBehavior, interval, timeout};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) use params::*;
+
+/// 单个任务 IP 探测的总聚合超时上限（秒）
+///
+/// # 设计原理
+/// - **实现初衷**: 防止多端点 URL 或 STUN 节点连续网络超时导致整个探测流程挂起达数十秒 (P1-16)。
+/// - **核心优势**: 强制在 20 秒内闭环返回结果，释放 Tokio 协程调度，防止调度循环与手动触发被持续阻塞。
+const IP_PROBE_AGGREGATE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// DDNS 核心调度引擎
 ///
@@ -151,7 +158,18 @@ impl DdnsEngine {
         info!("======== 开始执行任务: [{}] ========", task.name);
         let mut current_state = state_manager.get_task_state(&task.name);
 
-        let (ipv4_opt, ipv6_opt) = sync::probe_task_ips(task).await;
+        let (ipv4_opt, ipv6_opt) =
+            match timeout(IP_PROBE_AGGREGATE_TIMEOUT, sync::probe_task_ips(task)).await {
+                Ok(ips) => ips,
+                Err(_) => {
+                    warn!(
+                        "[{}] IP 探测聚合耗时超过 {} 秒上限，触发熔断并跳过本轮",
+                        task.name,
+                        IP_PROBE_AGGREGATE_TIMEOUT.as_secs()
+                    );
+                    (None, None)
+                }
+            };
         let mut ip_fetch_failed = false;
         if task.ipv4.enabled {
             if ipv4_opt.is_some() {
