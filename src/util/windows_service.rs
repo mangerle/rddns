@@ -4,7 +4,9 @@
 //! 本模块负责管理 Windows NT 服务的运行时全局标记、取消令牌注册、
 //! 以及在自更新完成后协调 SCM 进行安全平滑重启，不承载上层业务逻辑。
 
-use anyhow::{Context, Result};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::Result;
 use log::info;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
