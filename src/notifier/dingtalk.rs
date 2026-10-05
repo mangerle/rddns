@@ -81,19 +81,16 @@ impl Notifier for DingTalkNotifier {
             }
         });
 
-        let resp = self.client.post(&url).json(&payload).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::notifier::trait_def::send_json_post(
+            &self.client,
+            &url,
+            &payload,
+            self.channel_name(),
+        )
+        .await?;
 
-        if status.is_success() {
-            crate::notifier::trait_def::check_errcode_response(&body, "钉钉接口")?;
-            info!("[{}] 钉钉消息发送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "钉钉返回错误 [{}]: {}",
-                status, body
-            )))
-        }
+        crate::notifier::trait_def::check_errcode_response(&body, "钉钉接口")?;
+        info!("[{}] 钉钉消息发送成功", self.channel_name());
+        Ok(())
     }
 }

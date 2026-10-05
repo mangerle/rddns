@@ -61,18 +61,15 @@ impl Notifier for BarkNotifier {
             payload["sound"] = json!(sound);
         }
 
-        let resp = self.client.post(&url).json(&payload).send().await?;
-        let status = resp.status();
-        let resp_body = resp.text().await.unwrap_or_default();
+        crate::notifier::trait_def::send_json_post(
+            &self.client,
+            &url,
+            &payload,
+            self.channel_name(),
+        )
+        .await?;
 
-        if status.is_success() {
-            info!("[{}] Bark 消息推送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "Bark 返回错误 [{}]: {}",
-                status, resp_body
-            )))
-        }
+        info!("[{}] Bark 消息推送成功", self.channel_name());
+        Ok(())
     }
 }

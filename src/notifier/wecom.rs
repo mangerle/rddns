@@ -129,20 +129,17 @@ impl WeComNotifier {
             }
         });
 
-        let resp = self.client.post(webhook_url).json(&payload).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::notifier::trait_def::send_json_post(
+            &self.client,
+            webhook_url,
+            &payload,
+            "企业微信机器人",
+        )
+        .await?;
 
-        if status.is_success() {
-            crate::notifier::trait_def::check_errcode_response(&body, "企业微信机器人")?;
-            info!("[{}] 机器人通知发送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "企业微信机器人返回错误 [{}]: {}",
-                status, body
-            )))
-        }
+        crate::notifier::trait_def::check_errcode_response(&body, "企业微信机器人")?;
+        info!("[{}] 机器人通知发送成功", self.channel_name());
+        Ok(())
     }
 
     async fn send_app(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
@@ -198,20 +195,17 @@ impl WeComNotifier {
             }
         });
 
-        let resp = self.client.post(&send_url).json(&payload).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = crate::notifier::trait_def::send_json_post(
+            &self.client,
+            &send_url,
+            &payload,
+            "企业微信应用消息",
+        )
+        .await?;
 
-        if status.is_success() {
-            crate::notifier::trait_def::check_errcode_response(&body, "企业微信应用消息")?;
-            info!("[{}] 应用消息发送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "企业微信应用消息返回错误 [{}]: {}",
-                status, body
-            )))
-        }
+        crate::notifier::trait_def::check_errcode_response(&body, "企业微信应用消息")?;
+        info!("[{}] 应用消息发送成功", self.channel_name());
+        Ok(())
     }
 }
 

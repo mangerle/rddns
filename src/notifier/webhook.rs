@@ -78,19 +78,9 @@ impl Notifier for CustomWebhookNotifier {
             req = req.body(rendered_body);
         }
 
-        let resp = req.send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "Webhook 返回错误 [{}]: {}",
-                status, body
-            )))
-        }
+        let body = crate::notifier::trait_def::execute_notify_request(req, self.channel_name()).await?;
+        info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
+        Ok(())
     }
 }
 

@@ -128,6 +128,35 @@ pub trait Notifier: Send + Sync {
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError>;
 }
 
+/// 发送通用 HTTP 请求并统一处理响应状态与提取响应文本
+pub async fn execute_notify_request(
+    req: reqwest::RequestBuilder,
+    channel_name: &str,
+) -> Result<String, NotifyError> {
+    let resp = req.send().await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        Ok(body)
+    } else {
+        Err(NotifyError::Provider(format!(
+            "{} 返回错误 [{}]: {}",
+            channel_name, status, body
+        )))
+    }
+}
+
+/// 发送 POST JSON 请求并统一处理响应状态与提取响应文本
+pub async fn send_json_post(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &serde_json::Value,
+    channel_name: &str,
+) -> Result<String, NotifyError> {
+    execute_notify_request(client.post(url).json(payload), channel_name).await
+}
+
 /// 校验国内常见开放平台 (钉钉/企业微信/微信等) 的 JSON errcode 业务响应
 pub fn check_errcode_response(body: &str, platform_name: &str) -> Result<(), NotifyError> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body)

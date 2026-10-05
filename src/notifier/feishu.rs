@@ -196,35 +196,26 @@ impl Notifier for FeishuNotifier {
             payload["sign"] = json!(sign_base64);
         }
 
-        let resp = self
-            .client
-            .post(&self.config.webhook_url)
-            .json(&payload)
-            .send()
-            .await?;
+        let body = crate::notifier::trait_def::send_json_post(
+            &self.client,
+            &self.config.webhook_url,
+            &payload,
+            self.channel_name(),
+        )
+        .await?;
 
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            if let Ok(v) = serde_json::from_str::<Value>(&body)
-                && let Some(code) = v.get("code").and_then(|c| c.as_i64())
-                && code != 0
-            {
-                let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("未知错误");
-                return Err(NotifyError::Provider(format!(
-                    "飞书接口业务错误 [code: {}]: {}",
-                    code, msg
-                )));
-            }
-            info!("[{}] 飞书消息发送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
-                "飞书返回错误 [{}]: {}",
-                status, body
-            )))
+        if let Ok(v) = serde_json::from_str::<Value>(&body)
+            && let Some(code) = v.get("code").and_then(|c| c.as_i64())
+            && code != 0
+        {
+            let msg = v.get("msg").and_then(|m| m.as_str()).unwrap_or("未知错误");
+            return Err(NotifyError::Provider(format!(
+                "飞书接口业务错误 [code: {}]: {}",
+                code, msg
+            )));
         }
+        info!("[{}] 飞书消息发送成功", self.channel_name());
+        Ok(())
     }
 }
 
