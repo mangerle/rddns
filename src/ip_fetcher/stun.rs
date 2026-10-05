@@ -163,11 +163,11 @@ impl StunIpFetcher {
         results
     }
 
-    /// 解析 STUN 服务器为具体的目标 Socket 地址 (P-4)
-    async fn resolve_stun_target_addr(
+    /// 解析 STUN 服务器为候选目标 Socket 地址列表 (支持多 A/AAAA 记录遍历)
+    async fn resolve_stun_target_addrs(
         norm_server: &str,
         is_ipv6: bool,
-    ) -> Result<SocketAddr, FetchError> {
+    ) -> Result<Vec<SocketAddr>, FetchError> {
         let lookup_fut = tokio::time::timeout(Duration::from_secs(3), lookup_host(norm_server));
         let mut target_addrs: Vec<SocketAddr> = match lookup_fut.await {
             Ok(Ok(iter)) => iter
@@ -187,13 +187,15 @@ impl StunIpFetcher {
             target_addrs = Self::resolve_fallback_ipv6(norm_server).await;
         }
 
-        target_addrs.into_iter().next().ok_or_else(|| {
-            FetchError::Other(format!(
+        if target_addrs.is_empty() {
+            Err(FetchError::Other(format!(
                 "未能解析到 STUN 服务器 [{}] 对应的 {} 地址 (请检查网络 DNS 或该服务器是否支持双栈)",
                 norm_server,
                 if is_ipv6 { "IPv6" } else { "IPv4" }
-            ))
-        })
+            )))
+        } else {
+            Ok(target_addrs)
+        }
     }
 
     /// 确定本地出站 UDP Socket 绑定地址
@@ -215,10 +217,10 @@ impl StunIpFetcher {
         }
     }
 
-    /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP
+    /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP (支持多解析候选地址遍历与 Anycast 兼容)
     async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
         let norm_server = Self::normalize_server_addr(server);
-        let target_addr = Self::resolve_stun_target_addr(&norm_server, is_ipv6).await?;
+        let target_addrs = Self::resolve_stun_target_addrs(&norm_server, is_ipv6).await?;
         let bind_addr = Self::determine_bind_addr(self.http_interface.as_deref(), is_ipv6);
 
         let socket = UdpSocket::bind(bind_addr).await.map_err(|e| {
@@ -232,34 +234,66 @@ impl StunIpFetcher {
             }
         })?;
 
-        let (req_bytes, tx_id) = Self::build_binding_request();
-        socket.send_to(&req_bytes, target_addr).await.map_err(|e| {
-            if is_ipv6 {
-                FetchError::Other(format!(
-                    "向 STUN 目标 [{}] 发送 IPv6 数据包失败: 本地网络无 IPv6 出站路由或不可达 (错误: {})",
-                    target_addr, e
-                ))
-            } else {
-                FetchError::Io(e)
+        let mut last_err = None;
+
+        for target_addr in target_addrs {
+            let (req_bytes, tx_id) = Self::build_binding_request();
+            if let Err(e) = socket.send_to(&req_bytes, target_addr).await {
+                debug!("向 STUN 目标 [{}] 发送数据包失败: {}", target_addr, e);
+                last_err = Some(FetchError::Io(e));
+                continue;
             }
-        })?;
 
-        let mut recv_buf = [0u8; 1024];
-        let recv_future = socket.recv_from(&mut recv_buf);
+            let mut recv_buf = [0u8; 1024];
+            let recv_future = socket.recv_from(&mut recv_buf);
 
-        let (len, from_addr) = timeout(self.timeout, recv_future)
-            .await
-            .map_err(|_| FetchError::Timeout)?
-            .map_err(FetchError::Io)?;
+            let recv_result = timeout(self.timeout, recv_future).await;
+            let (len, from_addr) = match recv_result {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => {
+                    debug!("从 STUN 目标 [{}] 接收数据失败: {}", target_addr, e);
+                    last_err = Some(FetchError::Io(e));
+                    continue;
+                }
+                Err(_) => {
+                    debug!("STUN 目标 [{}] 响应超时", target_addr);
+                    last_err = Some(FetchError::Timeout);
+                    continue;
+                }
+            };
 
-        if from_addr != target_addr {
-            return Err(FetchError::Other(format!(
-                "STUN 响应来源地址不匹配: 期望 {}, 实际 {}",
-                target_addr, from_addr
-            )));
+            // 严格保证响应来自同协议族
+            if from_addr.is_ipv6() != target_addr.is_ipv6() {
+                debug!(
+                    "STUN 响应协议族不匹配: 期望 {}, 实际 {}",
+                    target_addr, from_addr
+                );
+                last_err = Some(FetchError::Other(format!(
+                    "STUN 响应协议族不匹配: 期望 {}, 实际 {}",
+                    target_addr, from_addr
+                )));
+                continue;
+            }
+
+            // 对于 Anycast/集群部署的 STUN 服务，源地址可能与发往的目的 VIP 不完全一致，
+            // RFC 5389 核心依靠 96 位密码学 Transaction ID 进行响应归属绑定
+            if from_addr != target_addr {
+                debug!(
+                    "STUN 响应来源地址与目标不完全一致 (Anycast/多宿主节点特性): 目标 {}, 来源 {}",
+                    target_addr, from_addr
+                );
+            }
+
+            match Self::parse_binding_response(&recv_buf[..len], &tx_id) {
+                Ok(ip) => return Ok(ip),
+                Err(e) => {
+                    debug!("解析 STUN 目标 [{}] 响应失败: {}", target_addr, e);
+                    last_err = Some(e);
+                }
+            }
         }
 
-        Self::parse_binding_response(&recv_buf[..len], &tx_id)
+        Err(last_err.unwrap_or(FetchError::Timeout))
     }
 
     /// 获取默认的公共 STUN 服务器列表
