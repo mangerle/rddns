@@ -23,6 +23,12 @@ pub enum ConfigError {
     TomlSer(#[from] toml::ser::Error),
     #[error("原子替换临时文件错误: {0}")]
     TempFile(String),
+    /// 配置校验失败
+    #[error("配置校验失败: {0}")]
+    Validation(String),
+    /// 账号已初始化业务冲突
+    #[error("管理员账号已初始化，无法重复初始化")]
+    AlreadyExists,
     /// 配置正被另一处异步更新持有写锁
     ///
     /// # 设计原理
@@ -60,6 +66,9 @@ impl ConfigManager {
             info!("正在加载配置文件: {}", path.display());
             let content = fs::read_to_string(&path)?;
             let conf: AppConfig = toml::from_str(&content)?;
+            if let Err(errs) = conf.validate() {
+                return Err(ConfigError::Validation(errs.join("; ")));
+            }
             conf
         } else {
             info!("配置文件不存在，创建默认配置: {}", path.display());

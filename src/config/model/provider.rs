@@ -48,6 +48,7 @@ pub enum ProviderConfig {
     /// Porkbun
     Porkbun { api_key: String, secret_key: String },
     /// GoDaddy
+    #[serde(alias = "godaddy")]
     GoDaddy { api_key: String, api_secret: String },
     /// Dynv6
     Dynv6 { token: String },
@@ -64,6 +65,7 @@ pub enum ProviderConfig {
     /// Namecheap
     Namecheap { password: String },
     /// NameSilo
+    #[serde(alias = "namesilo")]
     NameSilo { api_key: String },
     /// Spaceship
     Spaceship { api_key: String, api_secret: String },
@@ -76,12 +78,14 @@ pub enum ProviderConfig {
         team_id: Option<String>,
     },
     /// 雨云 (RainYun)
+    #[serde(alias = "rainyun")]
     RainYun {
         api_key: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         domain_id: Option<String>,
     },
     /// ClouDNS
+    #[serde(alias = "cloudns")]
     ClouDNS {
         auth_id: String,
         auth_password: String,
@@ -91,8 +95,10 @@ pub enum ProviderConfig {
     /// Name.com
     NameCom { username: String, api_token: String },
     /// DNS.LA
+    #[serde(alias = "dnsla")]
     DnsLa { api_id: String, api_secret: String },
     /// 阿里云 ESA (Edge Security Acceleration)
+    #[serde(alias = "aliesa")]
     AliEsa {
         access_key_id: String,
         access_key_secret: String,
@@ -100,19 +106,24 @@ pub enum ProviderConfig {
         endpoint: Option<String>,
     },
     /// 腾讯云 EdgeOne (EO)
+    #[serde(alias = "edgeone")]
     EdgeOne {
         secret_id: String,
         secret_key: String,
     },
     /// 时代互联 (NowCN)
+    #[serde(alias = "nowcn")]
     NowCn { id: String, secret: String },
     /// 时代互联国际版 (Eranet)
     Eranet { id: String, secret: String },
     /// TNetHK
+    #[serde(alias = "tnethk")]
     TNetHk { id: String, secret: String },
     /// IBM NS1 Connect
+    #[serde(alias = "nsone")]
     NsOne { api_key: String },
     /// HiPM DNSMgr
+    #[serde(alias = "hipm_dnsmgr")]
     HipmDnsMgr {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<String>,
@@ -407,6 +418,52 @@ mod tests {
 
         for conf in cases {
             assert!(conf.is_configured(), "凭据完整时应判定为已配置: {:?}", conf);
+        }
+    }
+
+    /// 契约测试：确保 web-ui/index.html 下拉框提交的所有服务商 type 键均能被正确反序列化识别
+    #[test]
+    fn test_all_frontend_provider_keys_accepted() {
+        let frontend_keys = [
+            "cloudflare",
+            "ali_dns",
+            "tencent_cloud",
+            "huawei_cloud",
+            "porkbun",
+            "godaddy",
+            "dynv6",
+            "baidu_cloud",
+            "traffic_route",
+            "namecheap",
+            "namesilo",
+            "spaceship",
+            "dynadot",
+            "vercel",
+            "rainyun",
+            "cloudns",
+            "gcore",
+            "name_com",
+            "dnsla",
+            "aliesa",
+            "edgeone",
+            "nowcn",
+            "eranet",
+            "tnethk",
+            "nsone",
+            "hipm_dnsmgr",
+            "callback",
+        ];
+
+        for key in frontend_keys {
+            let json_probe = format!("{{\"type\":\"{}\",\"__probe__\":1}}", key);
+            if let Err(e) = serde_json::from_str::<ProviderConfig>(&json_probe) {
+                assert!(
+                    !e.to_string().contains("unknown variant"),
+                    "前端 type 键 [{}] 后端无法识别变体: {}",
+                    key,
+                    e
+                );
+            }
         }
     }
 }
