@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 
 /// 文件日志 Appender 配置选项
 #[derive(Debug, Clone)]
@@ -184,21 +183,22 @@ impl Write for SizeRollingWriter {
     }
 }
 
-/// 初始化非阻塞文件日志 Appender
+/// 创建文件大小滚动写入器实例
 ///
 /// * `log_dir`: 日志存放目录 (如 "logs")
 /// * `file_name`: 主日志文件名 (如 "rddns.log")
 /// * `max_bytes`: 单文件最大字节数 (如 10 * 1024 * 1024 为 10MB)
 /// * `max_files`: 最大保留的历史轮转文件数 (如 5)
-pub fn init_file_appender<P: AsRef<Path>>(
+///
+/// # Errors
+/// 当日志目录创建失败或日志文件打开失败时返回错误。
+pub fn init_file_writer<P: AsRef<Path>>(
     log_dir: P,
     file_name: &str,
     max_bytes: u64,
     max_files: usize,
-) -> Result<(NonBlocking, WorkerGuard)> {
-    let writer = SizeRollingWriter::new(log_dir.as_ref(), file_name, max_bytes, max_files)?;
-    let (non_blocking, guard) = tracing_appender::non_blocking(writer);
-    Ok((non_blocking, guard))
+) -> Result<SizeRollingWriter> {
+    SizeRollingWriter::new(log_dir.as_ref(), file_name, max_bytes, max_files)
 }
 
 #[cfg(test)]

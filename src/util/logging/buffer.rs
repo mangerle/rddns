@@ -1,25 +1,31 @@
 use chrono::Local;
+use log::Level;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::field::{Field, Visit};
-use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::Context;
 
 /// 单条日志记录条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
+    /// 唯一递增自增标识
     pub id: u64,
+    /// 格式化时间戳字符串 (YYYY-MM-DD HH:MM:SS)
     pub timestamp: String,
+    /// 日志级别文本 (INFO, WARN, ERROR, DEBUG 等)
     pub level: String,
+    /// 触发日志的模块路径或目标
     pub target: String,
+    /// 已经过脱敏过滤的最终日志正文
     pub message: String,
 }
 
 /// 内存环形日志缓冲区
+///
+/// # 设计原理
+/// - **实现初衷**：为 Web 前端管理面板与实时 SSE 日志流提供低延迟、固定容量的最新记录快照。
+/// - **核心优势**：通过 `RwLock` 保证轻量并发读取，配合 `tokio::sync::broadcast` 支持多客户端并发广播。
 #[derive(Clone)]
 pub struct LogBuffer {
     inner: Arc<RwLock<LogBufferInner>>,
@@ -33,6 +39,7 @@ struct LogBufferInner {
 }
 
 impl LogBuffer {
+    /// 创建指定容量的内存环形日志缓冲区 (容量自动限制在 1..10000 之间)
     pub fn new(capacity: usize) -> Self {
         let real_capacity = capacity.clamp(1, 10000);
         let (sender, _) = broadcast::channel(100);
@@ -46,7 +53,7 @@ impl LogBuffer {
         }
     }
 
-    /// 插入一条新日志 (P-9: 统一脱敏敏感凭据)
+    /// 插入一条新日志 (自动脱敏敏感凭据并广播给 SSE 订阅者)
     pub fn push(&self, level: Level, target: &str, message: String) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let sanitized_msg = crate::dns::trait_def::sanitize_sensitive_url_params(&message);
@@ -81,76 +88,6 @@ impl LogBuffer {
     }
 }
 
-/// Tracing Subscriber Layer 适配器
-pub struct BufferLogLayer {
-    buffer: LogBuffer,
-}
-
-impl BufferLogLayer {
-    pub fn new(buffer: LogBuffer) -> Self {
-        Self { buffer }
-    }
-}
-
-#[derive(Default)]
-struct LogVisitor {
-    message: Option<String>,
-    extra_fields: Vec<String>,
-}
-
-impl LogVisitor {
-    fn finish(self) -> String {
-        let msg = self.message.unwrap_or_default();
-        if self.extra_fields.is_empty() {
-            msg
-        } else if msg.is_empty() {
-            self.extra_fields.join(", ")
-        } else {
-            format!("{} [{}]", msg, self.extra_fields.join(", "))
-        }
-    }
-}
-
-impl Visit for LogVisitor {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "message" {
-            self.message = Some(value.to_string());
-        } else {
-            self.extra_fields
-                .push(format!("{}: {}", field.name(), value));
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            let s = format!("{:?}", value);
-            let cleaned = if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-                &s[1..s.len() - 1]
-            } else {
-                &s
-            };
-            self.message = Some(cleaned.to_string());
-        } else {
-            self.extra_fields
-                .push(format!("{}: {:?}", field.name(), value));
-        }
-    }
-}
-
-impl<S: Subscriber> Layer<S> for BufferLogLayer {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let metadata = event.metadata();
-        let mut visitor = LogVisitor::default();
-        event.record(&mut visitor);
-
-        let final_message = visitor.finish();
-        if !final_message.is_empty() {
-            self.buffer
-                .push(*metadata.level(), metadata.target(), final_message);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,24 +95,14 @@ mod tests {
     #[test]
     fn test_log_buffer_capacity() {
         let buffer = LogBuffer::new(3);
-        buffer.push(Level::INFO, "test", "msg 1".to_string());
-        buffer.push(Level::INFO, "test", "msg 2".to_string());
-        buffer.push(Level::INFO, "test", "msg 3".to_string());
-        buffer.push(Level::INFO, "test", "msg 4".to_string());
+        buffer.push(Level::Info, "test", "msg 1".to_string());
+        buffer.push(Level::Info, "test", "msg 2".to_string());
+        buffer.push(Level::Info, "test", "msg 3".to_string());
+        buffer.push(Level::Info, "test", "msg 4".to_string());
 
         let recent = buffer.get_recent();
         assert_eq!(recent.len(), 3);
         assert_eq!(recent[0].message, "msg 2");
         assert_eq!(recent[2].message, "msg 4");
-    }
-
-    #[test]
-    fn test_log_visitor_finish() {
-        let visitor = LogVisitor {
-            message: Some("操作成功".to_string()),
-            extra_fields: vec!["task: demo".to_string(), "cost_ms: 12".to_string()],
-        };
-
-        assert_eq!(visitor.finish(), "操作成功 [task: demo, cost_ms: 12]");
     }
 }
