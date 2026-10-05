@@ -6,6 +6,7 @@
 
 use rddns::core::domain::parse_domain;
 use rddns::ip_fetcher::command::validate_command_str;
+use rddns::util::dns_packet::{QueryRecordType, build_dns_query_packet, parse_dns_response_packet};
 use rddns::util::net::{
     extract_ipv4, extract_ipv6, is_private_or_loopback, validate_safe_url_endpoint,
 };
@@ -114,6 +115,46 @@ fn main() {
             let _ = black_box(is_private_or_loopback(&test_ip));
         },
     );
+
+    // 5. DNS 报文编解码器基准 (P2-11)
+    let domain = "sub.example.com";
+    run_benchmark(
+        "DNS 编解码: 构建 A 记录查询请求包",
+        100_000,
+        || {
+            let _ = black_box(build_dns_query_packet(domain, QueryRecordType::A, 0x1234));
+        },
+    );
+
+    let domain_v6 = "ipv6.test.example.org";
+    run_benchmark(
+        "DNS 编解码: 构建 AAAA 记录查询包",
+        100_000,
+        || {
+            let _ = black_box(build_dns_query_packet(
+                domain_v6,
+                QueryRecordType::AAAA,
+                0x5678,
+            ));
+        },
+    );
+
+    // 构造标准的 DNS 应答报文 (A 记录: 192.0.2.1)
+    let mut mock_response = Vec::new();
+    mock_response.extend_from_slice(&0x1234u16.to_be_bytes());
+    mock_response.extend_from_slice(&[0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+    mock_response.extend_from_slice(b"\x03sub\x07example\x03com\x00\x00\x01\x00\x01");
+    mock_response.extend_from_slice(&[
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 192, 0, 2, 1,
+    ]);
+
+    run_benchmark("DNS 编解码: 解析 A 记录响应包", 100_000, || {
+        let _ = black_box(parse_dns_response_packet(
+            &mock_response,
+            0x1234,
+            QueryRecordType::A,
+        ));
+    });
 
     println!("================================================================");
 }

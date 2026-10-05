@@ -62,6 +62,12 @@ strip = true          # 自动剥离符号表与调试元信息
 # JoinError::is_panic() 得以生效，从而在单个任务崩溃时能够被上层捕获、
 # 记录告警并触发降级自愈，而非直接终止整个进程。
 
+[profile.bench]
+opt-level = "z"       # 保持与发布二进制完全一致的优化级别，杜绝基准与发布产物表现脱节 (P2-10)
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [[bench]]
 name = "core_benchmarks"
 harness = false
