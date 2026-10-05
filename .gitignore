@@ -5,6 +5,7 @@
 *.tmp
 .rddns_config.yaml
 
-# 前端构建与依赖缓存
+# 前端构建产物与依赖缓存
 frontend/node_modules/
+frontend/dist/
 
