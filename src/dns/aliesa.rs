@@ -3,8 +3,9 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
@@ -155,22 +156,38 @@ impl AliEsaProvider {
         let status = resp.status();
         let body_text = resp.text().await?;
 
-        if !status.is_success() {
-            if let Ok(err_resp) = serde_json::from_str::<AliEsaErrorResp>(&body_text) {
-                return Err(DnsProviderError::ApiError {
-                    code: err_resp.code.unwrap_or_else(|| status.to_string()),
-                    message: err_resp
-                        .message
-                        .unwrap_or_else(|| "阿里云 ESA 请求失败".to_string()),
-                });
-            }
+        Self::parse_pop_response(status, &body_text)
+    }
+
+    /// 解析阿里云 ESA 响应体
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：统一对阿里云 ESA 接口的 HTTP 状态码与响应体业务错误码进行双重校验。
+    /// - **核心优势**：杜绝服务端在业务失败时返回 HTTP 200 伴随错误 JSON 导致的静默误判成功。
+    /// - **代价与局限**：对每个响应体先尝试轻量解析业务错误码，存在微小反序列化开销。
+    pub(crate) fn parse_pop_response<T: DeserializeOwned>(
+        status: StatusCode,
+        body_text: &str,
+    ) -> Result<T, DnsProviderError> {
+        if let Ok(err_resp) = serde_json::from_str::<AliEsaErrorResp>(body_text)
+            && let Some(code) = err_resp.code
+        {
             return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: body_text,
+                code,
+                message: err_resp
+                    .message
+                    .unwrap_or_else(|| "阿里云 ESA 请求业务失败".to_string()),
             });
         }
 
-        let parsed = serde_json::from_str::<T>(&body_text)?;
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: body_text.to_string(),
+            });
+        }
+
+        let parsed = serde_json::from_str::<T>(body_text)?;
         Ok(parsed)
     }
 
@@ -257,7 +274,7 @@ impl DnsProvider for AliEsaProvider {
             }
 
             // 更新记录 (POST UpdateRecord)
-            let _: AliEsaActionResp = self
+            let act: AliEsaActionResp = self
                 .request_pop(
                     "POST",
                     "UpdateRecord",
@@ -270,12 +287,19 @@ impl DnsProvider for AliEsaProvider {
                 )
                 .await?;
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+            if act.record_id.is_some() || act.request_id.is_some() {
+                Ok(SyncRecordResult::updated_log(
+                    self.provider_name(),
+                    full_domain,
+                    record_type,
+                    target_ip_str,
+                ))
+            } else {
+                Err(DnsProviderError::ApiError {
+                    code: "AliEsaUpdateError".to_string(),
+                    message: "阿里云 ESA 更新解析记录未返回有效结果".to_string(),
+                })
+            }
         } else {
             // 创建记录 (POST CreateRecord)
             let act: AliEsaActionResp = self
@@ -306,5 +330,43 @@ impl DnsProvider for AliEsaProvider {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aliesa_parse_pop_response_intercepts_biz_error() {
+        let err_json = r#"{
+            "Code": "InvalidSite.NotFound",
+            "Message": "The specified site does not exist.",
+            "RequestId": "ESA-REQ-001"
+        }"#;
+
+        let res = AliEsaProvider::parse_pop_response::<AliEsaActionResp>(StatusCode::OK, err_json);
+
+        match res {
+            Err(DnsProviderError::ApiError { code, message }) => {
+                assert_eq!(code, "InvalidSite.NotFound");
+                assert!(message.contains("The specified site does not exist."));
+            }
+            other => panic!("预期返回 ApiError，实际为: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_aliesa_parse_pop_response_success() {
+        let ok_json = r#"{
+            "RecordId": 12345678,
+            "RequestId": "ESA-REQ-002"
+        }"#;
+
+        let res = AliEsaProvider::parse_pop_response::<AliEsaActionResp>(StatusCode::OK, ok_json);
+
+        assert!(res.is_ok());
+        let act = res.unwrap();
+        assert_eq!(act.record_id, Some(12345678));
     }
 }
