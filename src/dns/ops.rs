@@ -139,6 +139,13 @@ pub trait RecordOps: Send + Sync {
         ttl: Option<u32>,
     ) -> Result<(), DnsProviderError>;
 
+    /// 删除一条解析记录（可选，用于在多条同名同类型冲突记录时清理冗余项）
+    ///
+    /// 默认实现为空操作 (Ok)，支持记录删除的服务商可覆写此方法以自动清理历史冲突记录。
+    async fn delete_record(&self, _zone: &str, _record_id: &str) -> Result<(), DnsProviderError> {
+        Ok(())
+    }
+
     /// 同步前的可选清理钩子
     ///
     /// # 设计原理
@@ -153,6 +160,8 @@ pub trait RecordOps: Send + Sync {
 /// - 查到记录且值一致时返回 `Unchanged`，这是 DDNS 降低云端 API 调用
 ///   频次的关键路径，判定逻辑必须唯一且集中。
 /// - 未查到记录时创建，查到但值不一致时更新。
+/// - 若存在多条同名同类型记录（如容灾历史残留），遍历检测匹配项，避免仅取首条导致误判，并清理多余记录 (P1-14)。
+/// - 更新或创建成功时输出清晰日志，保障可观测性 (P2-13)。
 /// - 任何一步失败都以 [`DnsProviderError`] 向上传播，由上层统一计入
 ///   失败次数并触发通知。
 ///
@@ -173,39 +182,89 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
     let records = ops.list_records(&zone, domain, record_type).await?;
     ops.before_sync(&zone, &records).await;
 
-    match records.first() {
-        Some(existing) if existing.matches_target(ip) => {
-            debug!(
-                "[{}] 域名 {} 记录未变化 ({}), 跳过更新",
-                ops.provider_name(),
-                full_domain,
-                target_ip
-            );
-            Ok(SyncRecordResult::unchanged(
-                full_domain,
-                record_type,
-                target_ip,
-            ))
+    if records.is_empty() {
+        ops.create_record(&zone, domain, record_type, ip, ttl)
+            .await?;
+        return Ok(SyncRecordResult::created_log(
+            ops.provider_name(),
+            full_domain,
+            record_type,
+            target_ip,
+        ));
+    }
+
+    // 检查是否存在同名同类型的多条解析记录 (P1-14)
+    if records.len() > 1 {
+        log::warn!(
+            "[{}] 域名 {} 存在 {} 条同名同类型的解析记录，建议清理历史残留记录以防 DNS 解析异常",
+            ops.provider_name(),
+            full_domain,
+            records.len()
+        );
+    }
+
+    // 优先检查是否有记录已经与目标 IP 一致
+    if let Some((idx, matched)) = records
+        .iter()
+        .enumerate()
+        .find(|(_, r)| r.matches_target(ip))
+    {
+        debug!(
+            "[{}] 域名 {} 记录未变化 (ID: {}, IP: {}), 跳过更新",
+            ops.provider_name(),
+            full_domain,
+            matched.id,
+            target_ip
+        );
+        // 若存在多条记录且仅当前条匹配目标 IP，对其余旧记录尝试调用 delete_record 清理
+        if records.len() > 1 {
+            for (i, rec) in records.iter().enumerate() {
+                if i != idx
+                    && let Err(e) = ops.delete_record(&zone, &rec.id).await
+                {
+                    log::warn!(
+                        "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}) 失败: {}",
+                        ops.provider_name(),
+                        full_domain,
+                        rec.id,
+                        e
+                    );
+                }
+            }
         }
-        Some(existing) => {
-            ops.update_record(&zone, &existing.id, domain, record_type, ip, ttl)
-                .await?;
-            Ok(SyncRecordResult::updated(
-                full_domain,
-                record_type,
-                target_ip,
-            ))
-        }
-        None => {
-            ops.create_record(&zone, domain, record_type, ip, ttl)
-                .await?;
-            Ok(SyncRecordResult::created(
-                full_domain,
-                record_type,
-                target_ip,
-            ))
+        return Ok(SyncRecordResult::unchanged_log(
+            ops.provider_name(),
+            full_domain,
+            record_type,
+            target_ip,
+        ));
+    }
+
+    // 所有现有记录均未匹配目标 IP：更新首条记录，并对其余多余旧记录尝试清理
+    let primary = &records[0];
+    ops.update_record(&zone, &primary.id, domain, record_type, ip, ttl)
+        .await?;
+
+    if records.len() > 1 {
+        for rec in &records[1..] {
+            if let Err(e) = ops.delete_record(&zone, &rec.id).await {
+                log::warn!(
+                    "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}) 失败: {}",
+                    ops.provider_name(),
+                    full_domain,
+                    rec.id,
+                    e
+                );
+            }
         }
     }
+
+    Ok(SyncRecordResult::updated_log(
+        ops.provider_name(),
+        full_domain,
+        record_type,
+        target_ip,
+    ))
 }
 
 #[cfg(test)]
@@ -243,6 +302,7 @@ mod tests {
         before_sync: usize,
         created: usize,
         updated: usize,
+        deleted: usize,
     }
 
     /// 可配置的测试用 RecordOps 实现
@@ -317,6 +377,17 @@ mod tests {
             Ok(())
         }
 
+        async fn delete_record(
+            &self,
+            zone: &str,
+            _record_id: &str,
+        ) -> Result<(), DnsProviderError> {
+            let mut log = self.log.lock();
+            log.deleted += 1;
+            log.last_zone = Some(zone.to_string());
+            Ok(())
+        }
+
         async fn before_sync(&self, _zone: &str, _records: &[RemoteRecord]) {
             self.log.lock().before_sync += 1;
         }
@@ -350,6 +421,49 @@ mod tests {
         assert!(log.listed, "应先查询现存记录");
         assert_eq!(log.updated, 0, "值未变时不得触发更新");
         assert_eq!(log.created, 0, "值未变时不得触发创建");
+    }
+
+    #[tokio::test]
+    async fn test_template_handles_multi_records_and_cleans_redundancy() {
+        // 场景 1: 多条记录中第 2 条匹配目标 IP，第 1 条为旧残留记录
+        let ops = MockOps::with_records(vec![
+            RemoteRecord::new("old-rec", "9.9.9.9"),
+            RemoteRecord::new("valid-rec", "1.2.3.4"),
+        ]);
+        let result = sync_record_via(
+            &ops,
+            &test_domain(),
+            DnsRecordType::A,
+            &IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+            None,
+        )
+        .await
+        .expect("应成功返回");
+
+        assert_eq!(result.status, crate::dns::trait_def::SyncStatus::Unchanged);
+        let log = ops.log();
+        assert_eq!(log.updated, 0);
+        assert_eq!(log.deleted, 1, "应主动触发清理未匹配的旧冗余记录");
+
+        // 场景 2: 多条记录均不匹配目标 IP
+        let ops2 = MockOps::with_records(vec![
+            RemoteRecord::new("old-rec-1", "8.8.8.8"),
+            RemoteRecord::new("old-rec-2", "9.9.9.9"),
+        ]);
+        let result2 = sync_record_via(
+            &ops2,
+            &test_domain(),
+            DnsRecordType::A,
+            &IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+            None,
+        )
+        .await
+        .expect("应成功返回");
+
+        assert_eq!(result2.status, crate::dns::trait_def::SyncStatus::Updated);
+        let log2 = ops2.log();
+        assert_eq!(log2.updated, 1, "应更新首条记录");
+        assert_eq!(log2.deleted, 1, "应清理多余的其他旧记录");
     }
 
     #[tokio::test]
