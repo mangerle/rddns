@@ -20,12 +20,15 @@ pub struct VersionInfo {
     pub release_notes: String,
 }
 
+/// 官方发布的 Ed25519 签名验证公钥（Base64 编码，32 字节）
+const OFFICIAL_UPDATE_PUBLIC_KEY: &str = "I2/rMK9CRnRY3qr3IBfYhelfNaqvDIBX/FfVYQQ8C80=";
+
 /// 构造全局统一配置的 shipup 更新器实例
 ///
 /// # 设计原理
 /// - **实现初衷**：收敛自更新配置（发布源、超时时间、平台架构与签名校验策略），避免在检测与升级两处重复构造。
 /// - **核心优势**：基于 GitHubProvider 直接获取静态清单，并结合编译期 TARGET 变量实现精确架构路由。
-/// - **代价与局限**：当前未配置 Ed25519 强制私钥签名，通过 HTTPS 与 SHA-256 校验包体完整性。
+/// - **代价与局限**：强制要求远端发布包携带官方 Ed25519 签名，若签名缺失或公钥不匹配将拒绝升级。
 fn build_updater(timeout: Duration) -> Result<Updater> {
     let current_version = env!("CARGO_PKG_VERSION");
     let target = env!("TARGET");
@@ -34,7 +37,8 @@ fn build_updater(timeout: Duration) -> Result<Updater> {
         .current_version(current_version)
         .context("当前程序版本号格式不符合 SemVer 规范")?
         .github_releases("mangerle", "rddns")
-        .require_signature(false)
+        .public_key(OFFICIAL_UPDATE_PUBLIC_KEY)
+        .require_signature(true)
         .timeout(timeout);
 
     if !target.is_empty() {
@@ -193,5 +197,31 @@ mod tests {
     fn test_build_updater() {
         let updater = build_updater(Duration::from_secs(10));
         assert!(updater.is_ok());
+    }
+
+    #[test]
+    fn test_official_public_key_format() {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        let decoded = BASE64
+            .decode(OFFICIAL_UPDATE_PUBLIC_KEY)
+            .expect("官方更新公钥必须是合法的 Base64 编码");
+        assert_eq!(
+            decoded.len(),
+            32,
+            "Ed25519 签名验证公钥长度必须严格为 32 字节"
+        );
+    }
+
+    #[test]
+    fn test_signature_verification_flow() {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use shipup::signature::verify_ed25519;
+
+        let dummy_sig = BASE64.encode([0u8; 64]);
+        let dummy_digest = [1u8; 32];
+        let verify_result = verify_ed25519(&dummy_digest, &dummy_sig, OFFICIAL_UPDATE_PUBLIC_KEY);
+        assert!(verify_result.is_err(), "伪造签名必须被拒绝");
     }
 }
