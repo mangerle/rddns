@@ -317,10 +317,14 @@ where
                 Ok(c) => c,
                 Err(err) => {
                     warn!(
-                        "创建通用 HTTP 客户端亦失败: {}，将使用 reqwest 默认实例兜底",
+                        "创建通用 HTTP 客户端亦失败: {}，将使用带超时约束的兜底客户端实例",
                         err
                     );
-                    Client::new()
+                    Client::builder()
+                        .timeout(timeout)
+                        .connect_timeout(Duration::from_secs(5).min(timeout))
+                        .build()
+                        .unwrap_or_else(|_| Client::new())
                 }
             }
         }
