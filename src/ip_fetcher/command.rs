@@ -12,25 +12,30 @@ use tokio::time::timeout;
 /// 外部命令标准输出的最大读取字节上限 (64KB，与 URL 探测保持一致防范 OOM 风险)
 pub const MAX_COMMAND_OUTPUT_BYTES: usize = 65536;
 
-/// 危险 Shell 注入元字符集合
-pub const DANGEROUS_SHELL_CHARS: &[char] = &['|', ';', '&', '`', '$', '>', '<', '\n', '\r'];
+/// 危险 Shell 注入与逃逸元字符集合 (包含 Unix 与 Windows cmd 敏感元字符及命令组合符)
+pub const DANGEROUS_SHELL_CHARS: &[char] = &[
+    '|', ';', '&', '`', '$', '>', '<', '\n', '\r', '^', '%', '{', '}', '(', ')',
+];
 
 /// 校验外部命令字符串的安全性与非空限制 (S-9)
 ///
 /// # 设计原理
-/// - **实现初衷**: 统一 Web 配置保存与调度引擎启动两处的命令合法性校验，防止恶意注入或误配置。
-/// - **核心优势**: 严格拦截命令拼接元字符，限制执行单个独立脚本或可执行文件。
+/// - **实现初衷**: 统一 Web 配置保存、应用启动配置加载与调度引擎各处命令的合法性校验，杜绝 Shell 注入。
+/// - **核心优势**: 严格拦截命令拼接、转义与变量扩展元字符（包含 Windows ^ 与 %，以及大括号和圆括号），仅允许执行单个独立程序或带常规安全参数的脚本。
 ///
 /// # Errors
-/// 若命令为空或包含危险元字符返回错误提示。
+/// 若命令为空、包含空字符或危险元字符返回中文错误提示。
 pub fn validate_command_str(cmd: &str) -> Result<(), &'static str> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return Err("命令内容不能为空");
     }
+    if trimmed.contains('\0') {
+        return Err("命令包含非法的空字符 (NULL Byte)");
+    }
     if trimmed.chars().any(|c| DANGEROUS_SHELL_CHARS.contains(&c)) {
         return Err(
-            "命令包含高风险 Shell 注入字符 (|;&`$><)，仅允许执行单个独立脚本或可执行文件及参数",
+            "命令包含高风险 Shell 注入字符 (|;&`$><^%{}())，仅允许执行单个独立脚本或可执行文件及常规参数",
         );
     }
     Ok(())
@@ -217,5 +222,31 @@ mod tests {
         let fetcher = CommandIpFetcher::new("echo 1.2.3.4 | bash".to_string(), None, 5);
         let res = fetcher.fetch_ipv4().await;
         assert!(matches!(res, Err(FetchError::Other(_))));
+    }
+
+    #[test]
+    fn test_validate_command_str_blocks_injection_variants() {
+        // 正常命令
+        assert!(validate_command_str("curl https://api.ipify.org").is_ok());
+        assert!(validate_command_str("python3 /opt/scripts/get_ip.py --timeout 5").is_ok());
+
+        // 空命令与 NULL Byte
+        assert!(validate_command_str("   ").is_err());
+        assert!(validate_command_str("echo 1.1.1.1\0whoami").is_err());
+
+        // 管道与执行串联符
+        assert!(validate_command_str("echo 1.1.1.1 | sh").is_err());
+        assert!(validate_command_str("echo 1.1.1.1 ; calc").is_err());
+        assert!(validate_command_str("echo 1.1.1.1 && calc").is_err());
+        assert!(validate_command_str("echo `whoami`").is_err());
+        assert!(validate_command_str("echo $(whoami)").is_err());
+
+        // Windows ^ 转义与 % 环境变量注入
+        assert!(validate_command_str("echo 1.1.1.1^&calc").is_err());
+        assert!(validate_command_str("%COMSPEC% /c calc").is_err());
+
+        // 括号与大括号代码块绕过
+        assert!(validate_command_str("{cat,/etc/passwd}").is_err());
+        assert!(validate_command_str("(calc)").is_err());
     }
 }

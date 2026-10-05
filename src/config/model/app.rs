@@ -119,20 +119,8 @@ impl AppConfig {
                     }
                 } else if ip_cfg.source_type == IpSourceType::Command {
                     if let Some(ref cmd_str) = ip_cfg.cmd {
-                        let trimmed = cmd_str.trim();
-                        if trimmed.is_empty() {
-                            errs.push(format!(
-                                "任务 [{}] 配置为命令提取 IP，但指定的命令内容为空",
-                                name
-                            ));
-                        }
-                        const DANGEROUS_SHELL_CHARS: &[char] =
-                            &['|', ';', '&', '`', '$', '>', '<', '\n', '\r'];
-                        if trimmed.chars().any(|c| DANGEROUS_SHELL_CHARS.contains(&c)) {
-                            errs.push(format!(
-                                "任务 [{}] 中的命令包含高风险 Shell 注入字符 (|;&`$><)，仅允许执行单个独立脚本或可执行文件及参数",
-                                name
-                            ));
+                        if let Err(e) = crate::ip_fetcher::command::validate_command_str(cmd_str) {
+                            errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
                         }
                     } else {
                         errs.push(format!(
