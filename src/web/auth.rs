@@ -1,7 +1,7 @@
 use crate::web::handlers::AppState;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
@@ -12,6 +12,42 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+
+/// 提取客户端的有效识别 IP
+///
+/// # 安全与设计考虑 (P1-2)
+/// - **实现初衷**: 当 rddns 部署在反向代理（如 Nginx、Caddy、Traefik）后方时，底层 TCP 连接对端 IP 为反代的回环地址（如 127.0.0.1 或 ::1）。
+///   若直接以 TCP 对端为准，会导致所有客户端共享限流计数器，任意匿名攻击者 5 次失败即可使全局管理面板拒绝服务。
+/// - **核心优势**: 仅在 TCP 连接确系来自本地回环地址（Loopback）时，才信任并解析 `X-Forwarded-For` 或 `X-Real-IP` 头中的真实客户端 IP；
+///   对公网直连请求严格忽略任何伪造的转发标头，坚守防伪造底线。
+pub(crate) fn resolve_client_ip(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> String {
+    let peer_ip = peer_addr.map(|sa| sa.ip());
+
+    // 仅当底层 TCP 来源为本地回环（反向代理典型部署）时才信任转发标头
+    if let Some(ip) = peer_ip
+        && ip.is_loopback()
+    {
+        // 1. 尝试从 X-Forwarded-For 提取（取首个有效客户端 IP）
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+            && let Some(client) = xff.split(',').next().map(|s| s.trim())
+            && !client.is_empty()
+        {
+            return client.to_string();
+        }
+
+        // 2. 尝试从 X-Real-IP 提取
+        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok())
+            && !real_ip.trim().is_empty()
+        {
+            return real_ip.trim().to_string();
+        }
+    }
+
+    // 默认使用底层 TCP 对端真实 IP
+    peer_ip
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
 
 /// SSE Ticket 默认有效生命周期 (30 秒)
 const SSE_TICKET_TTL: Duration = Duration::from_secs(30);
@@ -129,11 +165,11 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
         && let Some((user, pass)) = decoded_str.split_once(':')
     {
-        let client_ip = req
+        let peer_addr = req
             .extensions()
             .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map(|ci| ci.0);
+        let client_ip = resolve_client_ip(peer_addr, req.headers());
         let limiter_key = format!("{}:{}", user, client_ip);
 
         // 校验账号是否已锁定，防止持续暴破 (S-3, S-8)
@@ -310,5 +346,42 @@ mod tests {
         }
         // 消费过期 ticket 判定为 false 且已被销毁
         assert!(!consume_sse_ticket("expired_ticket"));
+    }
+
+    #[test]
+    fn test_resolve_client_ip_loopback_proxy_and_direct() {
+        use std::net::SocketAddr;
+
+        let loopback_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let public_addr: SocketAddr = "203.0.113.50:54321".parse().unwrap();
+
+        // 1. 本地回环来自反向代理 + X-Forwarded-For 多级 IP：提取最左侧客户端真实 IP
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "198.51.100.88, 10.0.0.1".parse().unwrap(),
+        );
+        let ip = resolve_client_ip(Some(loopback_addr), &headers);
+        assert_eq!(ip, "198.51.100.88");
+
+        // 2. 本地回环来自反向代理 + X-Real-IP
+        let mut headers2 = HeaderMap::new();
+        headers2.insert("x-real-ip", "198.51.100.99".parse().unwrap());
+        let ip2 = resolve_client_ip(Some(loopback_addr), &headers2);
+        assert_eq!(ip2, "198.51.100.99");
+
+        // 3. 直连公网 IP + 恶意伪造 X-Forwarded-For：坚决忽略伪造标头，以 TCP 对端为准
+        let mut fake_headers = HeaderMap::new();
+        fake_headers.insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
+        fake_headers.insert("x-real-ip", "2.2.2.2".parse().unwrap());
+        let ip3 = resolve_client_ip(Some(public_addr), &fake_headers);
+        assert_eq!(ip3, "203.0.113.50");
+
+        // 4. 无标头或无 SocketAddr
+        let empty_headers = HeaderMap::new();
+        let ip4 = resolve_client_ip(Some(loopback_addr), &empty_headers);
+        assert_eq!(ip4, "127.0.0.1");
+        let ip5 = resolve_client_ip(None, &empty_headers);
+        assert_eq!(ip5, "unknown");
     }
 }

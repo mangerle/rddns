@@ -279,6 +279,7 @@ pub struct LoginRequest {
 /// 登录验证接口
 pub async fn login_auth_handler(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<&'static str>>, AppError> {
@@ -287,7 +288,8 @@ pub async fn login_auth_handler(
         return Err(AppError::bad_request("用户名和密码不能为空"));
     }
 
-    let limiter_key = format!("{}:{}", username, peer_addr.ip());
+    let client_ip = crate::web::auth::resolve_client_ip(Some(peer_addr), &headers);
+    let limiter_key = format!("{}:{}", username, client_ip);
 
     // 检查登录频控锁定状态
     check_login_locked(&limiter_key)?;
