@@ -165,39 +165,7 @@ Run in background daemon mode without installing a system service:
 
 ---
 
-### Method 5: Docker Deployment
-
-Deploy with Docker or Docker Compose:
-
-#### Command Line
-```bash
-docker run -d \
-  --name rddns \
-  --restart always \
-  --net host \
-  -v /etc/rddns/.rddns.toml:/.rddns.toml \
-  mangerle/rddns:latest
-```
-
-#### Docker Compose
-```yaml
-services:
-  rddns:
-    image: mangerle/rddns:latest
-    container_name: rddns
-    restart: always
-    network_mode: host
-    volumes:
-      - /etc/rddns/.rddns.toml:/.rddns.toml
-    environment:
-      - TZ=Asia/Shanghai
-```
-
-> *Tip: Using `network_mode: host` is recommended so the application can directly read physical network interfaces and public IPv6 addresses.*
-
----
-
-### Method 6: Build from Source
+### Method 5: Build from Source
 
 Ensure you have the [Rust toolchain](https://rustup.rs/) installed (Rust 1.85+ recommended):
 
