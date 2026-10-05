@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
-use url::form_urlencoded::byte_serialize;
 
 type HmacSha1 = Hmac<Sha1>;
 type HmacSha256 = Hmac<Sha256>;
@@ -221,13 +220,7 @@ pub fn build_canonical_query_string<K: AsRef<str>, V: AsRef<str>>(query: &[(K, V
 
     sorted
         .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                byte_serialize(k.as_bytes()).collect::<String>(),
-                byte_serialize(v.as_bytes()).collect::<String>()
-            )
-        })
+        .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -293,7 +286,7 @@ mod tests {
     fn test_build_canonical_query_string() {
         let query = vec![("b", "2"), ("a", "1 2"), ("c", "3/4")];
         let res = build_canonical_query_string(&query);
-        assert_eq!(res, "a=1+2&b=2&c=3%2F4");
+        assert_eq!(res, "a=1%202&b=2&c=3%2F4");
     }
 
     #[test]
