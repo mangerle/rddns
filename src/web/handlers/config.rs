@@ -12,13 +12,11 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::collections::HashSet;
 
-/// 获取当前配置 (将用户密码哈希置空，配合 skip_serializing_if 彻底不向前端输出密码字段)
+/// 获取当前配置 (将用户密码哈希置空，并将敏感 API 密钥与凭据全量掩码化，彻底杜绝敏感凭据明文过网泄露)
 pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoResponse {
     let conf = state.config_manager.get_config();
     let mut clean_conf = (*conf).clone();
-    if let Some(ref mut auth) = clean_conf.auth {
-        auth.password_hash.clear();
-    }
+    clean_conf.mask_credentials();
     (
         [
             (
@@ -228,6 +226,7 @@ pub async fn save_config_handler(
             to_save.not_allow_wan_access = old_config.not_allow_wan_access;
             to_save.auth =
                 resolve_saved_auth(to_save.auth, old_config.auth.as_ref(), new_password_hash);
+            to_save.restore_masked_credentials(old_config);
             Ok(to_save)
         })
         .await
@@ -440,5 +439,150 @@ type = "cloudflare"
         let auth = current.auth.as_ref().unwrap();
         assert_eq!(auth.username, "admin");
         assert_eq!(auth.password_hash, "$2b$12$test_existing_hash");
+    }
+
+    #[test]
+    fn test_credential_masking_and_restoration() {
+        use crate::config::model::CREDENTIAL_MASK;
+        use crate::config::model::notification::*;
+        use crate::config::model::provider::ProviderConfig;
+
+        let original_config = AppConfig {
+            auth: Some(UserAuthConfig {
+                username: "admin".to_string(),
+                password_hash: "$2b$12$secret_hash".to_string(),
+            }),
+            dns_tasks: vec![
+                DnsTaskConfig {
+                    name: "AliDns Task".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "LTAI_real_id".to_string(),
+                        access_key_secret: "real_secret_123".to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+                DnsTaskConfig {
+                    name: "Cloudflare Task".to_string(),
+                    provider: ProviderConfig::Cloudflare {
+                        api_token: Some("cf_token_abc".to_string()),
+                        api_key: None,
+                        email: None,
+                    },
+                    ..Default::default()
+                },
+            ],
+            notifications: NotificationConfig {
+                telegram: Some(TelegramConfig {
+                    enabled: true,
+                    bot_token: "tg_bot_token_xyz".to_string(),
+                    chat_id: "123456".to_string(),
+                    api_proxy: None,
+                }),
+                email: Some(EmailConfig {
+                    enabled: true,
+                    smtp_server: "smtp.example.com".to_string(),
+                    smtp_port: 465,
+                    use_ssl: true,
+                    username: "user@example.com".to_string(),
+                    password: "smtp_password_999".to_string(),
+                    from_address: "user@example.com".to_string(),
+                    to_addresses: vec!["admin@example.com".to_string()],
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // 1. 测试脱敏逻辑：下发前端时所有凭据被掩码为 ******
+        let mut masked = original_config.clone();
+        masked.mask_credentials();
+
+        // 密码哈希被清空
+        assert!(masked.auth.as_ref().unwrap().password_hash.is_empty());
+        // 非敏感 ID 保持不变
+        assert_eq!(
+            match &masked.dns_tasks[0].provider {
+                ProviderConfig::AliDns { access_key_id, .. } => access_key_id.as_str(),
+                _ => panic!(),
+            },
+            "LTAI_real_id"
+        );
+        // 敏感密钥全部变为掩码
+        assert_eq!(
+            match &masked.dns_tasks[0].provider {
+                ProviderConfig::AliDns {
+                    access_key_secret, ..
+                } => access_key_secret.as_str(),
+                _ => panic!(),
+            },
+            CREDENTIAL_MASK
+        );
+        assert_eq!(
+            match &masked.dns_tasks[1].provider {
+                ProviderConfig::Cloudflare { api_token, .. } => api_token.as_deref().unwrap(),
+                _ => panic!(),
+            },
+            CREDENTIAL_MASK
+        );
+        assert_eq!(
+            masked.notifications.telegram.as_ref().unwrap().bot_token,
+            CREDENTIAL_MASK
+        );
+        assert_eq!(
+            masked.notifications.email.as_ref().unwrap().password,
+            CREDENTIAL_MASK
+        );
+
+        // 2. 测试保存恢复逻辑：前端原样提交带掩码的配置时，无缝还原旧密钥
+        let mut submitted_from_frontend = masked.clone();
+        // 用户改了任务名称，但未改动密钥输入框 (仍为 ******)
+        submitted_from_frontend.dns_tasks[0].name = "Updated AliDns Task".to_string();
+        // 用户在第 2 个任务中输入了全新的 token
+        submitted_from_frontend.dns_tasks[1].provider = ProviderConfig::Cloudflare {
+            api_token: Some("new_brand_new_token_456".to_string()),
+            api_key: None,
+            email: None,
+        };
+
+        submitted_from_frontend.restore_masked_credentials(&original_config);
+
+        // 验证任务 1 的密钥被正确还原
+        assert_eq!(
+            match &submitted_from_frontend.dns_tasks[0].provider {
+                ProviderConfig::AliDns {
+                    access_key_secret, ..
+                } => access_key_secret.as_str(),
+                _ => panic!(),
+            },
+            "real_secret_123"
+        );
+        // 验证任务 2 的新密钥成功保存，未被旧密钥冲掉
+        assert_eq!(
+            match &submitted_from_frontend.dns_tasks[1].provider {
+                ProviderConfig::Cloudflare { api_token, .. } => api_token.as_deref().unwrap(),
+                _ => panic!(),
+            },
+            "new_brand_new_token_456"
+        );
+        // 验证通知渠道的旧密钥成功还原
+        assert_eq!(
+            submitted_from_frontend
+                .notifications
+                .telegram
+                .as_ref()
+                .unwrap()
+                .bot_token,
+            "tg_bot_token_xyz"
+        );
+        assert_eq!(
+            submitted_from_frontend
+                .notifications
+                .email
+                .as_ref()
+                .unwrap()
+                .password,
+            "smtp_password_999"
+        );
     }
 }

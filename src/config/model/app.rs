@@ -71,6 +71,35 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// 对全量配置中的敏感凭据执行掩码化 (P1-5)
+    pub fn mask_credentials(&mut self) {
+        if let Some(ref mut auth) = self.auth {
+            auth.password_hash.clear();
+        }
+        for task in &mut self.dns_tasks {
+            task.provider.mask_credentials();
+        }
+        self.notifications.mask_credentials();
+    }
+
+    /// 保存配置时根据旧配置还原掩码凭据 (P1-5)
+    pub fn restore_masked_credentials(&mut self, old: &Self) {
+        for (i, new_task) in self.dns_tasks.iter_mut().enumerate() {
+            let matched_old = old
+                .dns_tasks
+                .iter()
+                .find(|t| t.name == new_task.name)
+                .or_else(|| old.dns_tasks.get(i));
+            if let Some(old_task) = matched_old {
+                new_task
+                    .provider
+                    .restore_masked_credentials(&old_task.provider);
+            }
+        }
+        self.notifications
+            .restore_masked_credentials(&old.notifications);
+    }
+
     /// 校验配置的边界与合法性
     ///
     /// # 设计原理

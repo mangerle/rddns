@@ -49,6 +49,76 @@ pub struct NotificationConfig {
     pub webhook: Option<WebhookConfig>,
 }
 
+impl NotificationConfig {
+    /// 对通知配置中的敏感凭据进行掩码脱敏 (P1-5)
+    pub fn mask_credentials(&mut self) {
+        use super::{mask_opt, mask_str};
+        if let Some(ref mut c) = self.wechat_official {
+            mask_str(&mut c.app_secret);
+        }
+        if let Some(ref mut c) = self.wecom {
+            mask_opt(&mut c.corp_secret);
+        }
+        if let Some(ref mut c) = self.telegram {
+            mask_str(&mut c.bot_token);
+        }
+        if let Some(ref mut c) = self.dingtalk {
+            mask_str(&mut c.access_token);
+            mask_opt(&mut c.secret);
+        }
+        if let Some(ref mut c) = self.feishu {
+            mask_opt(&mut c.secret);
+        }
+        if let Some(ref mut c) = self.bark {
+            mask_str(&mut c.device_key);
+        }
+        if let Some(ref mut c) = self.email {
+            mask_str(&mut c.password);
+        }
+    }
+
+    /// 根据旧配置还原未被修改的掩码凭据 (P1-5)
+    pub fn restore_masked_credentials(&mut self, old: &Self) {
+        use super::{restore_opt, restore_str};
+        if let Some(ref mut c) = self.wechat_official
+            && let Some(ref old_c) = old.wechat_official
+        {
+            restore_str(&mut c.app_secret, &old_c.app_secret);
+        }
+        if let Some(ref mut c) = self.wecom
+            && let Some(ref old_c) = old.wecom
+        {
+            restore_opt(&mut c.corp_secret, &old_c.corp_secret);
+        }
+        if let Some(ref mut c) = self.telegram
+            && let Some(ref old_c) = old.telegram
+        {
+            restore_str(&mut c.bot_token, &old_c.bot_token);
+        }
+        if let Some(ref mut c) = self.dingtalk
+            && let Some(ref old_c) = old.dingtalk
+        {
+            restore_str(&mut c.access_token, &old_c.access_token);
+            restore_opt(&mut c.secret, &old_c.secret);
+        }
+        if let Some(ref mut c) = self.feishu
+            && let Some(ref old_c) = old.feishu
+        {
+            restore_opt(&mut c.secret, &old_c.secret);
+        }
+        if let Some(ref mut c) = self.bark
+            && let Some(ref old_c) = old.bark
+        {
+            restore_str(&mut c.device_key, &old_c.device_key);
+        }
+        if let Some(ref mut c) = self.email
+            && let Some(ref old_c) = old.email
+        {
+            restore_str(&mut c.password, &old_c.password);
+        }
+    }
+}
+
 /// 微信公众号原生模板消息推送配置
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct WechatOfficialConfig {
