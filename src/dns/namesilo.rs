@@ -45,6 +45,25 @@ impl NameSiloProvider {
             &domain.sub_domain
         }
     }
+
+    /// 计算并规范化 TTL（NameSilo 官方限制最低 TTL 为 3600 秒）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: NameSilo API 强制要求 DNS 记录 TTL 必须 >= 3600 秒，否则直接报错拒绝。
+    /// - **核心优势**: 当用户配置的 TTL 低于 3600 秒时，输出清晰提示日志并自动平滑调整，杜绝静默改动导致用户疑惑 (P2-18)。
+    fn resolve_ttl(ttl: Option<u32>) -> String {
+        const NAMESILO_MIN_TTL: u32 = 3600;
+        let configured = ttl.unwrap_or(NAMESILO_MIN_TTL);
+        if configured < NAMESILO_MIN_TTL {
+            log::info!(
+                "[NameSilo] 用户配置的 TTL ({} 秒) 低于服务商官方最低限制 (3600 秒)，已自动修正为 3600 秒",
+                configured
+            );
+            NAMESILO_MIN_TTL.to_string()
+        } else {
+            configured.to_string()
+        }
+    }
 }
 
 #[async_trait]
@@ -103,7 +122,6 @@ impl RecordOps for NameSiloProvider {
         Ok(matched)
     }
 
-    /// 新增解析记录
     async fn create_record(
         &self,
         zone: &str,
@@ -113,7 +131,7 @@ impl RecordOps for NameSiloProvider {
         ttl: Option<u32>,
     ) -> Result<(), DnsProviderError> {
         let sub_host = Self::resolve_sub_host(domain);
-        let ttl_val = ttl.unwrap_or(3600).max(3600).to_string();
+        let ttl_val = Self::resolve_ttl(ttl);
         let rec_type_str = record_type.to_string();
         let target_ip_str = ip.to_string();
 
@@ -158,7 +176,7 @@ impl RecordOps for NameSiloProvider {
         ttl: Option<u32>,
     ) -> Result<(), DnsProviderError> {
         let sub_host = Self::resolve_sub_host(domain);
-        let ttl_val = ttl.unwrap_or(3600).max(3600).to_string();
+        let ttl_val = Self::resolve_ttl(ttl);
         let target_ip_str = ip.to_string();
 
         let update_url = format!("{}/dnsUpdateRecord", NAMESILO_API_BASE);

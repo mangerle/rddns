@@ -49,6 +49,25 @@ impl PorkbunProvider {
             "secretapikey": self.secret_key,
         })
     }
+
+    /// 计算并规范化 TTL（Porkbun 官方限制最低 TTL 为 600 秒）
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: Porkbun API 强制要求 DNS 记录 TTL 必须 >= 600 秒，否则直接报错拒绝。
+    /// - **核心优势**: 当用户配置的 TTL 低于 600 秒时，输出清晰提示日志并自动平滑调整，杜绝静默改动导致用户疑惑 (P2-18)。
+    fn resolve_ttl(ttl: Option<u32>) -> String {
+        const PORKBUN_MIN_TTL: u32 = 600;
+        let configured = ttl.unwrap_or(PORKBUN_MIN_TTL);
+        if configured < PORKBUN_MIN_TTL {
+            log::info!(
+                "[Porkbun] 用户配置的 TTL ({} 秒) 低于服务商官方最低限制 (600 秒)，已自动修正为 600 秒",
+                configured
+            );
+            PORKBUN_MIN_TTL.to_string()
+        } else {
+            configured.to_string()
+        }
+    }
 }
 
 #[async_trait]
@@ -120,7 +139,7 @@ impl RecordOps for PorkbunProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(600).to_string();
+        let ttl_val = Self::resolve_ttl(ttl);
         let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
         let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
 
@@ -166,7 +185,7 @@ impl RecordOps for PorkbunProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(600).to_string();
+        let ttl_val = Self::resolve_ttl(ttl);
         let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
         let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
 
