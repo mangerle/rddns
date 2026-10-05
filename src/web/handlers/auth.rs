@@ -20,6 +20,12 @@ const LOGIN_FAIL_THRESHOLD: u32 = 5;
 const LOGIN_LOCK_DURATION_SECS: u64 = 300;
 /// 频控记录的空闲清理时长（秒），需大于锁定时长以避免锁定期内记录被提前回收
 const LOGIN_RECORD_IDLE_SECS: u64 = 600;
+/// 登录频控记录表最大容量硬上限，防止未认证请求序列耗尽内存 (P1-1)
+const LOGIN_LIMITER_HARD_LIMIT: usize = 1024;
+/// 登录频控键的最大有效长度（字节），超长键自动在 UTF-8 字符边界截断
+const MAX_LIMITER_KEY_LEN: usize = 64;
+/// 最小清理间隔，避免单请求高频 O(n) retain 遍历引发 CPU 放大
+const CLEANUP_MIN_INTERVAL: Duration = Duration::from_secs(10);
 
 /// 登录尝试频控记录
 ///
@@ -41,6 +47,8 @@ struct LoginFailRecord {
 /// 登录尝试频控记录表 (用户名 -> 失败记录)
 static LOGIN_FAIL_LIMITER: LazyLock<Mutex<HashMap<String, LoginFailRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// 上次执行全局空闲记录清理的时刻
+static LAST_LIMITER_CLEANUP: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// 生成锁定提示文案
 fn build_locked_message(remain_secs: u64) -> AppError {
@@ -50,18 +58,53 @@ fn build_locked_message(remain_secs: u64) -> AppError {
     ))
 }
 
-/// 清理空闲记录并返回当前时刻
+/// 对频控键执行字符边界安全截断，防御超长请求体注入
+fn sanitize_limiter_key(key: &str) -> &str {
+    if key.len() > MAX_LIMITER_KEY_LEN {
+        let idx = key.floor_char_boundary(MAX_LIMITER_KEY_LEN);
+        &key[..idx]
+    } else {
+        key
+    }
+}
+
+/// 按需清理空闲记录并返回当前时刻，防止无节制的全表 retain 遍历
 ///
 /// # 设计原理
-/// 统一收口清理逻辑，确保各判定入口的过期标准一致。
+/// - 仅在距上次清理达到最小时间间隔或表容量逼近硬上限时才触发全量 retain。
+/// - 若清理后容量仍超过硬上限，主动淘汰未锁定的最久未失败记录，确保内存有界。
 fn now_and_retain(map: &mut HashMap<String, LoginFailRecord>) -> Instant {
     let now = Instant::now();
-    let idle = Duration::from_secs(LOGIN_RECORD_IDLE_SECS);
-    map.retain(|_, rec| {
-        // 仍处于锁定期的记录必须保留，直到锁定自然到期
-        rec.locked_until.is_some_and(|until| until > now)
-            || now.duration_since(rec.last_fail_at) < idle
-    });
+    let mut last_cleanup = LAST_LIMITER_CLEANUP.lock();
+    let should_cleanup = match *last_cleanup {
+        Some(t) => {
+            now.duration_since(t) >= CLEANUP_MIN_INTERVAL || map.len() >= LOGIN_LIMITER_HARD_LIMIT
+        }
+        None => true,
+    };
+
+    if should_cleanup {
+        let idle = Duration::from_secs(LOGIN_RECORD_IDLE_SECS);
+        map.retain(|_, rec| {
+            rec.locked_until.is_some_and(|until| until > now)
+                || now.duration_since(rec.last_fail_at) < idle
+        });
+        *last_cleanup = Some(now);
+
+        // 若仍触碰容量硬上限，按 last_fail_at 淘汰未锁定的最旧记录
+        if map.len() >= LOGIN_LIMITER_HARD_LIMIT {
+            let mut entries: Vec<(String, Instant)> = map
+                .iter()
+                .filter(|(_, r)| r.locked_until.is_none_or(|u| u <= now))
+                .map(|(k, r)| (k.clone(), r.last_fail_at))
+                .collect();
+            entries.sort_unstable_by_key(|(_, t)| *t);
+            let to_remove = map.len().saturating_sub(LOGIN_LIMITER_HARD_LIMIT / 2);
+            for (k, _) in entries.into_iter().take(to_remove) {
+                map.remove(&k);
+            }
+        }
+    }
     now
 }
 
@@ -70,7 +113,8 @@ fn now_and_retain(map: &mut HashMap<String, LoginFailRecord>) -> Instant {
 /// # 设计原理
 /// 仅依据 `locked_until` 判定，与失败计数解耦，避免出现「每次失败都刷新
 /// 时间戳导致锁定永不过期」的问题。
-pub(crate) fn check_login_locked(key: &str) -> Result<(), AppError> {
+pub(crate) fn check_login_locked(raw_key: &str) -> Result<(), AppError> {
+    let key = sanitize_limiter_key(raw_key);
     let mut map = LOGIN_FAIL_LIMITER.lock();
     let now = now_and_retain(&mut map);
 
@@ -89,7 +133,8 @@ pub(crate) fn check_login_locked(key: &str) -> Result<(), AppError> {
 /// - 成功登录：清空该账号的失败记录；
 /// - 失败：累加计数，仅在**首次**达到阈值时写入锁定截止时间；
 ///   已处于锁定期时不刷新截止时间，使锁定时长固定为 LOGIN_LOCK_DURATION_SECS。
-pub(crate) fn record_login_failure(key: &str, is_success: bool) {
+pub(crate) fn record_login_failure(raw_key: &str, is_success: bool) {
+    let key = sanitize_limiter_key(raw_key);
     let mut map = LOGIN_FAIL_LIMITER.lock();
     let now = now_and_retain(&mut map);
 
@@ -481,5 +526,34 @@ mod tests {
         // check_login_locked 必须在密码校验之前生效
         assert!(check_login_locked(key).is_err());
         cleanup_record(key);
+    }
+
+    #[test]
+    fn test_limiter_key_truncation_prevents_memory_explosion() {
+        let oversized_key = "a".repeat(1024);
+        record_login_failure(&oversized_key, false);
+
+        let map = LOGIN_FAIL_LIMITER.lock();
+        // 验证键被安全截断至 MAX_LIMITER_KEY_LEN 范围之内
+        assert!(map.contains_key(&"a".repeat(MAX_LIMITER_KEY_LEN)));
+        drop(map);
+
+        cleanup_record(&oversized_key);
+    }
+
+    #[test]
+    fn test_limiter_capacity_hard_limit_eviction() {
+        // 批量插入超过硬上限条目，验证容量受到有效遏制
+        for i in 0..LOGIN_LIMITER_HARD_LIMIT + 50 {
+            let key = format!("batch_user_{}", i);
+            record_login_failure(&key, false);
+        }
+
+        let map = LOGIN_FAIL_LIMITER.lock();
+        assert!(
+            map.len() <= LOGIN_LIMITER_HARD_LIMIT,
+            "频控散列表容量必须受到 LOGIN_LIMITER_HARD_LIMIT 约束，当前大小: {}",
+            map.len()
+        );
     }
 }
