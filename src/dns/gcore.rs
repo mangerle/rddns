@@ -163,12 +163,20 @@ impl DnsProvider for GcoreProvider {
         });
 
         if let Some(existing) = matched {
-            // 检查现有 IP 是否匹配
+            // 检查现有 IP 是否匹配（遍历所有 resource_records 及其 content 多值项，避免仅 pop 检查最后一条导致漏匹配）
             let is_matched = existing
                 .resource_records
-                .and_then(|mut r| r.pop())
-                .and_then(|rr| rr.content)
-                .map(|contents| contents.iter().any(|c| c.as_str() == Some(&target_ip_str)))
+                .as_ref()
+                .map(|rrs| {
+                    rrs.iter().any(|rr| {
+                        rr.content
+                            .as_ref()
+                            .map(|contents| {
+                                contents.iter().any(|c| c.as_str() == Some(&target_ip_str))
+                            })
+                            .unwrap_or(false)
+                    })
+                })
                 .unwrap_or(false);
 
             if is_matched {

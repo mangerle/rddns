@@ -241,12 +241,16 @@ impl RecordOps for HuaweiDnsProvider {
                 r.name.eq_ignore_ascii_case(&hw_domain_name)
                     && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
             })
-            .map(|r| {
-                let val = r
-                    .records
-                    .and_then(|mut recs| recs.pop())
-                    .unwrap_or_default();
-                RemoteRecord::new(r.id, val)
+            .flat_map(|r| {
+                let rec_id = r.id;
+                let recs = r.records.unwrap_or_default();
+                if recs.is_empty() {
+                    vec![RemoteRecord::new(rec_id, "")]
+                } else {
+                    recs.into_iter()
+                        .map(|val| RemoteRecord::new(rec_id.clone(), val))
+                        .collect()
+                }
             })
             .collect();
 
