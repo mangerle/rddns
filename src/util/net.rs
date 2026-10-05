@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::sync::LazyLock;
 use url::{Host, Url};
 
@@ -157,26 +157,32 @@ pub fn is_public_ipv4(addr: &Ipv4Addr) -> bool {
 pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => {
+            let octets = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
+                || v4.is_broadcast()
                 || v4.is_unspecified()
                 || is_cgnat_ipv4(v4)
-                || (v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0)
-                || (v4.octets()[0] == 192 && v4.octets()[1] == 88 && v4.octets()[2] == 99)
+                || (octets[0] == 169 && octets[1] == 254) // 云元数据 / 链路本地 (169.254.0.0/16)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
+                || (octets[0] == 198 && (octets[1] & 0xfe) == 18)
+                || octets[0] == 0
+                || octets[0] >= 240
         }
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || !is_global_unicast_ipv6(v6),
     }
 }
 
-/// 校验 URL 端点安全性（防范针对内网及保留地址的 SSRF 攻击）
+/// 校验 URL 端点安全性（防范针对内网及保留地址的 SSRF 攻击与 DNS 重绑定绕过）
 ///
 /// # 设计原理
-/// - **实现初衷**: 统一验证用户配置或测试请求中的外部 URL 端点，防止将请求指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
-/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性并拦截所有私网及回环 IP 与 localhost。
+/// - **实现初衷**: 统一验证外部 URL 端点，防止将请求指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
+/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性；针对域名执行 DNS 解析校验，彻底防御通过自定义域名指向 127.0.0.1 或云元数据进行 DNS 重绑定绕过。
 ///
 /// # Errors
-/// 当协议非法、URL 格式无效、缺少主机或指向内部网络地址时返回错误描述。
+/// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
 pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
@@ -208,8 +214,32 @@ pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
             }
         }
         Some(Host::Domain(domain)) => {
-            if domain.trim().eq_ignore_ascii_case("localhost") {
-                return Err("出于安全策略，禁止配置或测试指向 localhost 的目标地址".to_string());
+            let lower_domain = domain.trim().to_ascii_lowercase();
+            if lower_domain == "localhost"
+                || lower_domain.ends_with(".localhost")
+                || lower_domain.ends_with(".local")
+                || lower_domain.ends_with(".internal")
+                || lower_domain.ends_with(".localdomain")
+                || lower_domain.ends_with(".arpa")
+            {
+                return Err(
+                    "出于安全策略，禁止配置或测试指向 localhost 及内部保留域名的目标地址"
+                        .to_string(),
+                );
+            }
+
+            // 执行实际 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            if let Ok(addrs) = (domain, port).to_socket_addrs() {
+                for socket_addr in addrs {
+                    let ip = socket_addr.ip();
+                    if is_private_or_loopback(&ip) {
+                        return Err(format!(
+                            "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
+                            domain, ip
+                        ));
+                    }
+                }
             }
         }
         None => return Err("URL 端点缺少有效的主机地址".to_string()),
@@ -451,5 +481,29 @@ mod tests {
         let relay_6to4 = Ipv4Addr::from_str("192.88.99.1").unwrap();
         assert!(!is_public_ipv4(&ietf_reserved));
         assert!(!is_public_ipv4(&relay_6to4));
+    }
+
+    #[test]
+    fn test_validate_safe_url_endpoint_ssrf_protection() {
+        // 1. 允许合法公网地址
+        assert!(validate_safe_url_endpoint("https://api.ipify.org").is_ok());
+        assert!(validate_safe_url_endpoint("http://114.114.114.114/ip").is_ok());
+
+        // 2. 拦截私有 IP / 回环 / 云元数据字面量
+        assert!(validate_safe_url_endpoint("http://127.0.0.1:8080").is_err());
+        assert!(validate_safe_url_endpoint("http://10.0.0.1").is_err());
+        assert!(validate_safe_url_endpoint("http://192.168.1.1").is_err());
+        assert!(validate_safe_url_endpoint("http://172.16.0.1").is_err());
+        assert!(validate_safe_url_endpoint("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_safe_url_endpoint("http://[::1]:80").is_err());
+
+        // 3. 拦截 localhost 及内部保留域名
+        assert!(validate_safe_url_endpoint("http://localhost:8080/test").is_err());
+        assert!(validate_safe_url_endpoint("http://service.local/api").is_err());
+        assert!(validate_safe_url_endpoint("http://k8s.internal/secret").is_err());
+
+        // 4. 拦截协议非法
+        assert!(validate_safe_url_endpoint("ftp://example.com").is_err());
+        assert!(validate_safe_url_endpoint("file:///etc/passwd").is_err());
     }
 }
