@@ -7,8 +7,9 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 
-use parking_lot::RwLock;
-use std::time::{Duration, Instant};
+use crate::notifier::token_cache::DclTokenCache;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 /// 微信 Access Token 响应实体
 #[derive(Debug, Deserialize)]
@@ -19,12 +20,6 @@ struct WechatTokenResponse {
     pub errmsg: Option<String>,
 }
 
-/// 内存缓存的 AccessToken 凭据
-struct CachedToken {
-    token: String,
-    expires_at: Instant,
-}
-
 /// 微信模板消息发送响应实体
 #[derive(Debug, Deserialize)]
 struct WechatSendResponse {
@@ -32,15 +27,8 @@ struct WechatSendResponse {
     pub errmsg: String,
 }
 
-use std::collections::HashMap;
-
-/// 全局微信公众号 AccessToken 缓存池 (app_id -> CachedToken)，避免每次任务重复请求消耗微信配额
-static GLOBAL_WECHAT_TOKEN_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedToken>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// 微信 Token 刷新并发互斥锁，避免缓存失效瞬间多个协程并发击穿微信 API 限流
-static WECHAT_TOKEN_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+/// 全局微信公众号 AccessToken 缓存池，通过 DclTokenCache 实现双重检查锁与防并发击穿
+static WECHAT_TOKEN_CACHE: LazyLock<DclTokenCache> = LazyLock::new(|| DclTokenCache::new(64));
 
 /// 微信公众号原生模板消息适配器
 pub struct WechatOfficialNotifier {
@@ -61,56 +49,37 @@ impl WechatOfficialNotifier {
     /// - **核心优势**: 采用双重检查锁 (Double-Checked Locking) 模式，锁前快速读取，锁后二次确认，确保同一时刻仅单个协程向远端刷新。
     async fn fetch_access_token(&self) -> Result<String, NotifyError> {
         let app_id = self.config.app_id.trim();
+        let app_secret = self.config.app_secret.trim();
 
-        // 1. 快速检查读缓存
-        if let Some(cached) = GLOBAL_WECHAT_TOKEN_CACHE.read().get(app_id)
-            && Instant::now() < cached.expires_at
-        {
-            return Ok(cached.token.clone());
-        }
+        WECHAT_TOKEN_CACHE
+            .get_or_fetch(app_id, || async {
+                let url = format!(
+                    "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
+                    app_id,
+                    app_secret
+                );
 
-        // 2. 加异步互斥锁防止缓存击穿
-        let _guard = WECHAT_TOKEN_MUTEX.lock().await;
+                let resp = self.client.get(&url).send().await?;
+                let token_resp: WechatTokenResponse = resp.json().await?;
 
-        // 3. 双重检查确认是否已被前序协程刷新完毕
-        if let Some(cached) = GLOBAL_WECHAT_TOKEN_CACHE.read().get(app_id)
-            && Instant::now() < cached.expires_at
-        {
-            return Ok(cached.token.clone());
-        }
+                if let Some(token) = token_resp.access_token
+                    && !token.is_empty()
+                {
+                    let ttl_secs = token_resp.expires_in.unwrap_or(7200).saturating_sub(300); // 预留 5 分钟缓冲
+                    let ttl = Duration::from_secs(ttl_secs.max(60));
+                    return Ok((token, ttl));
+                }
 
-        let url = format!(
-            "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
-            app_id,
-            self.config.app_secret.trim()
-        );
-
-        let resp = self.client.get(&url).send().await?;
-        let token_resp: WechatTokenResponse = resp.json().await?;
-
-        if let Some(token) = token_resp.access_token
-            && !token.is_empty()
-        {
-            let ttl_secs = token_resp.expires_in.unwrap_or(7200).saturating_sub(300); // 预留 5 分钟缓冲
-            let expires_at = Instant::now() + Duration::from_secs(ttl_secs.max(60));
-            GLOBAL_WECHAT_TOKEN_CACHE.write().insert(
-                app_id.to_string(),
-                CachedToken {
-                    token: token.clone(),
-                    expires_at,
-                },
-            );
-            return Ok(token);
-        }
-
-        let err_code = token_resp.errcode.unwrap_or(-1);
-        let err_msg = token_resp
-            .errmsg
-            .unwrap_or_else(|| "未知凭证错误".to_string());
-        Err(NotifyError::Provider(format!(
-            "微信公众号获取 AccessToken 失败 [{}]: {}",
-            err_code, err_msg
-        )))
+                let err_code = token_resp.errcode.unwrap_or(-1);
+                let err_msg = token_resp
+                    .errmsg
+                    .unwrap_or_else(|| "未知凭证错误".to_string());
+                Err(NotifyError::Provider(format!(
+                    "微信公众号获取 AccessToken 失败 [{}]: {}",
+                    err_code, err_msg
+                )))
+            })
+            .await
     }
 
     /// 构建模板消息 data 字典

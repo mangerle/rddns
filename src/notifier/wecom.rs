@@ -1,32 +1,20 @@
 use crate::config::model::WeComConfig;
+use crate::notifier::token_cache::DclTokenCache;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError, escape_html};
 use async_trait::async_trait;
 use log::info;
-use parking_lot::RwLock;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct WeComNotifier {
     config: WeComConfig,
     client: Client,
 }
 
-#[derive(Debug, Clone)]
-struct WeComTokenCacheEntry {
-    access_token: String,
-    expires_at: Instant,
-}
-
-static WECOM_TOKEN_CACHE: LazyLock<RwLock<HashMap<String, WeComTokenCacheEntry>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// 企业微信 Token 刷新并发互斥锁，避免缓存失效瞬间多个协程并发击穿企业微信 API 限流
-static WECOM_TOKEN_MUTEX: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
+static WECOM_TOKEN_CACHE: LazyLock<DclTokenCache> = LazyLock::new(|| DclTokenCache::new(64));
 
 impl WeComNotifier {
     pub fn new(config: WeComConfig) -> Self {
@@ -38,67 +26,42 @@ impl WeComNotifier {
     ///
     /// # 设计原理
     /// - **实现初衷**: 避免在 Token 过期瞬间多个并发通知任务同时穿透去请求企业微信 Token 接口，触发 API 限流。
-    /// - **核心优势**: 采用双重检查锁 (Double-Checked Locking) 模式，锁前快速读取，锁后二次确认，确保同一时刻仅单个协程向远端刷新。
+    /// - **核心优势**: 借助 DclTokenCache 双重检查锁安全复用，且仅以 corp_id 为键，避免 corp_secret 敏感凭据在全局缓存驻留。
     async fn get_access_token(
         &self,
         corp_id: &str,
         corp_secret: &str,
     ) -> Result<String, NotifyError> {
-        let cache_key = format!("{}:{}", corp_id, corp_secret);
+        WECOM_TOKEN_CACHE
+            .get_or_fetch(corp_id, || async {
+                let token_url = format!(
+                    "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
+                    corp_id, corp_secret
+                );
+                let token_resp = self.client.get(&token_url).send().await?;
+                let token_data: WeComTokenResponse = token_resp.json().await?;
 
-        // 1. 快速检查有效缓存
-        if let Some(entry) = WECOM_TOKEN_CACHE.read().get(&cache_key)
-            && entry.expires_at > Instant::now()
-        {
-            return Ok(entry.access_token.clone());
-        }
+                if token_data.errcode != 0 {
+                    return Err(NotifyError::Provider(format!(
+                        "获取企业微信 access_token 失败 [{}]: {}",
+                        token_data.errcode, token_data.errmsg
+                    )));
+                }
 
-        // 2. 加异步互斥锁防止缓存击穿
-        let _guard = WECOM_TOKEN_MUTEX.lock().await;
+                let access_token = token_data.access_token.ok_or_else(|| {
+                    NotifyError::Provider("返回结果中未包含 access_token".to_string())
+                })?;
 
-        // 3. 双重检查确认是否已被前序协程刷新完毕
-        if let Some(entry) = WECOM_TOKEN_CACHE.read().get(&cache_key)
-            && entry.expires_at > Instant::now()
-        {
-            return Ok(entry.access_token.clone());
-        }
+                // 默认 7200 秒有效，提前 300 秒缓冲刷新
+                let expires_in_secs = token_data
+                    .expires_in
+                    .unwrap_or(7200)
+                    .saturating_sub(300)
+                    .max(60);
 
-        // 2. 缓存未命中或已过期，向企业微信官方服务器获取
-        let token_url = format!(
-            "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
-            corp_id, corp_secret
-        );
-        let token_resp = self.client.get(&token_url).send().await?;
-        let token_data: WeComTokenResponse = token_resp.json().await?;
-
-        if token_data.errcode != 0 {
-            return Err(NotifyError::Provider(format!(
-                "获取企业微信 access_token 失败 [{}]: {}",
-                token_data.errcode, token_data.errmsg
-            )));
-        }
-
-        let access_token = token_data
-            .access_token
-            .ok_or_else(|| NotifyError::Provider("返回结果中未包含 access_token".to_string()))?;
-
-        // 默认 7200 秒有效，提前 300 秒缓冲刷新
-        let expires_in_secs = token_data
-            .expires_in
-            .unwrap_or(7200)
-            .saturating_sub(300)
-            .max(60);
-        let expires_at = Instant::now() + Duration::from_secs(expires_in_secs);
-
-        WECOM_TOKEN_CACHE.write().insert(
-            cache_key,
-            WeComTokenCacheEntry {
-                access_token: access_token.clone(),
-                expires_at,
-            },
-        );
-
-        Ok(access_token)
+                Ok((access_token, Duration::from_secs(expires_in_secs)))
+            })
+            .await
     }
 
     async fn send_bot(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
@@ -249,25 +212,25 @@ struct WeComTokenResponse {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_wecom_token_cache_insertion_and_expiry() {
-        let key = "test_corp:test_secret".to_string();
+    #[tokio::test]
+    async fn test_wecom_token_cache_insertion_and_expiry() {
+        let key = "test_corp".to_string();
         let token = "token_abc_123".to_string();
-        let expires_at = Instant::now() + Duration::from_secs(3600);
 
-        WECOM_TOKEN_CACHE.write().insert(
-            key.clone(),
-            WeComTokenCacheEntry {
-                access_token: token.clone(),
-                expires_at,
-            },
-        );
+        let res = WECOM_TOKEN_CACHE
+            .get_or_fetch(&key, || async {
+                Ok((token.clone(), Duration::from_secs(3600)))
+            })
+            .await;
+        assert_eq!(res.unwrap(), token);
 
-        let cached = WECOM_TOKEN_CACHE.read().get(&key).cloned();
-        assert!(cached.is_some());
-        let entry = cached.unwrap();
-        assert_eq!(entry.access_token, token);
-        assert!(entry.expires_at > Instant::now());
+        // 二次获取直接命中缓存
+        let res2 = WECOM_TOKEN_CACHE
+            .get_or_fetch(&key, || async {
+                Ok(("token_failed".to_string(), Duration::from_secs(3600)))
+            })
+            .await;
+        assert_eq!(res2.unwrap(), token);
     }
 
     #[test]

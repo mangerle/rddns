@@ -58,11 +58,14 @@ impl CloudflareProvider {
         }
 
         let auth_identity = if let Some(ref t) = api_token {
-            format!("token:{}", t.trim())
+            format!(
+                "token:{}",
+                crate::util::crypto::sha256_hex(t.trim().as_bytes())
+            )
         } else {
             format!(
                 "key:{}:{}",
-                api_key.as_deref().unwrap_or(""),
+                crate::util::crypto::sha256_hex(api_key.as_deref().unwrap_or("").as_bytes()),
                 email.as_deref().unwrap_or("")
             )
         };
@@ -152,9 +155,11 @@ impl CloudflareProvider {
             .next()
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
-        GLOBAL_CF_ZONE_CACHE
-            .write()
-            .insert(cache_key, zone.id.clone());
+        let mut guard = GLOBAL_CF_ZONE_CACHE.write();
+        if guard.len() >= 128 {
+            guard.clear();
+        }
+        guard.insert(cache_key, zone.id.clone());
 
         Ok(zone.id)
     }

@@ -84,7 +84,10 @@ impl RainYunProvider {
             return Ok(did.clone());
         }
 
-        let cache_key = (self.api_key.clone(), root_domain.to_string());
+        let cache_key = (
+            crate::util::crypto::sha256_hex(self.api_key.as_bytes()),
+            root_domain.to_string(),
+        );
         if let Some(cached_id) = GLOBAL_RAINYUN_DOMAIN_CACHE.read().get(&cache_key).cloned() {
             return Ok(cached_id);
         }
@@ -126,9 +129,11 @@ impl RainYunProvider {
 
                 if let Some(m) = matched {
                     let did_str = m.id.to_string();
-                    GLOBAL_RAINYUN_DOMAIN_CACHE
-                        .write()
-                        .insert(cache_key, did_str.clone());
+                    let mut guard = GLOBAL_RAINYUN_DOMAIN_CACHE.write();
+                    if guard.len() >= 128 {
+                        guard.clear();
+                    }
+                    guard.insert(cache_key, did_str.clone());
                     return Ok(did_str);
                 }
 

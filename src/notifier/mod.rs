@@ -17,3 +17,5 @@ pub mod webhook;
 pub mod wechat_official;
 
 pub mod wecom;
+
+pub mod token_cache;
