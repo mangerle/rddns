@@ -52,6 +52,7 @@ pub fn trigger_service_shutdown() {
 /// 构造 Windows NT 服务平滑重启后台脚本
 ///
 /// 通过循环探测 SCM 服务状态是否变为 `STOPPED`，避免固定延时造成的竞态或启动失败。
+#[cfg(any(windows, test))]
 pub(crate) fn build_restart_command_script(service_name: &str) -> String {
     format!(
         "for /l %i in (1,1,30) do @(sc.exe query {svc} | findstr /i \"STOPPED\" >nul && (sc.exe start {svc} & exit /b 0) || ping 127.0.0.1 -n 2 >nul) & sc.exe start {svc}",
