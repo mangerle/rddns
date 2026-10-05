@@ -337,6 +337,34 @@ impl DnsProviderError {
             message: truncate_body(body).to_string(),
         }
     }
+
+    /// 判定该错误是否属于可重试的临时网络或对端服务瞬时抖动异常 (P1-11)
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            DnsProviderError::Http(_) => true,
+            DnsProviderError::ApiError { code, message } => {
+                let code_upper = code.to_uppercase();
+                let msg_upper = message.to_uppercase();
+                code_upper.contains("RATE")
+                    || code_upper.contains("THROTTLING")
+                    || code_upper.contains("TOOMANYREQUESTS")
+                    || code_upper.contains("SERVERERROR")
+                    || code_upper == "429"
+                    || code_upper == "500"
+                    || code_upper == "502"
+                    || code_upper == "503"
+                    || code_upper == "504"
+                    || msg_upper.contains("RATE LIMIT")
+                    || msg_upper.contains("TOO MANY REQUESTS")
+                    || msg_upper.contains("SERVER TEMPORARILY UNAVAILABLE")
+                    || msg_upper.contains("GATEWAY TIMEOUT")
+            }
+            DnsProviderError::Json(_)
+            | DnsProviderError::ZoneNotFound(_)
+            | DnsProviderError::MissingCredentials(_)
+            | DnsProviderError::Other(_) => false,
+        }
+    }
 }
 
 /// DNS 提供商抽象接口
@@ -530,5 +558,15 @@ mod tests {
             &v6
         ));
         assert!(!ip_value_matches("2001:db8::2", &v6));
+    }
+
+    #[test]
+    fn test_error_is_retryable() {
+        assert!(DnsProviderError::Http("Connection reset".to_string()).is_retryable());
+        assert!(DnsProviderError::api("503", "Service Unavailable").is_retryable());
+        assert!(DnsProviderError::api("TooManyRequests", "Rate limit exceeded").is_retryable());
+        assert!(!DnsProviderError::MissingCredentials("missing key".to_string()).is_retryable());
+        assert!(!DnsProviderError::ZoneNotFound("example.com".to_string()).is_retryable());
+        assert!(!DnsProviderError::api("InvalidDomain", "Domain does not exist").is_retryable());
     }
 }

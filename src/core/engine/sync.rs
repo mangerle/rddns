@@ -1,13 +1,17 @@
 use crate::config::model::DnsTaskConfig;
+use crate::core::domain::ParsedDomain;
 use crate::core::engine::decision::is_protocol_all_ok;
 use crate::core::engine::params::{ProtocolSyncParams, SyncStateUpdateParams};
-use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+};
 use crate::ip_fetcher::create_ip_fetcher;
 use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use chrono::Local;
-use log::{debug, error, info};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use log::{debug, error, info, warn};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
@@ -17,6 +21,12 @@ use tokio::time::{Duration, timeout};
 const DNS_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const DNS_SYNC_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// 瞬时网络抖动自动重试退避间隔 (P1-11)
+#[cfg(not(test))]
+const RETRY_DELAY: Duration = Duration::from_millis(1000);
+#[cfg(test)]
+const RETRY_DELAY: Duration = Duration::from_millis(10);
 
 /// 并发探测任务所需的公网 IPv4 与 IPv6 地址
 ///
@@ -114,7 +124,8 @@ pub(crate) fn spawn_protocol_sync_tasks(
                 let _permit = sem.acquire().await.ok();
                 let start_time = Instant::now();
                 let full_domain = domain.full_domain();
-                let sync_future = provider.sync_record(&domain, rec_type, &ip, ttl);
+                let sync_future =
+                    sync_record_with_retry(&provider, &task_name, &domain, rec_type, &ip, ttl);
                 match timeout(DNS_SYNC_TIMEOUT, sync_future).await {
                     Ok(Ok(res)) => {
                         let cost_ms = start_time.elapsed().as_millis();
@@ -296,6 +307,35 @@ pub(crate) fn dispatch_sync_notification(
     });
 }
 
+/// 执行带有瞬时抖动自动重试的 DNS 记录同步操作 (P1-11)
+///
+/// 当遇到底层网络连接断开或对端服务端瞬时限流 (502/503/504/RateLimit) 时，
+/// 等待退避时间进行至多一次自动重试，避免单次网络偶发抖动直接导致整个任务同步失败并误发告警。
+async fn sync_record_with_retry(
+    provider: &Arc<dyn DnsProvider>,
+    task_name: &str,
+    domain: &ParsedDomain,
+    rec_type: DnsRecordType,
+    ip: &IpAddr,
+    ttl: Option<u32>,
+) -> Result<SyncRecordResult, DnsProviderError> {
+    match provider.sync_record(domain, rec_type, ip, ttl).await {
+        Ok(res) => Ok(res),
+        Err(e) if e.is_retryable() => {
+            warn!(
+                "[{}] 同步域名 {} ({}) 遇到临时网络抖动: {}，正在进行自动重试...",
+                task_name,
+                domain.full_domain(),
+                rec_type,
+                e
+            );
+            tokio::time::sleep(RETRY_DELAY).await;
+            provider.sync_record(domain, rec_type, ip, ttl).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +503,54 @@ mod tests {
         let res = join_set.join_next().await.unwrap().unwrap();
         assert_eq!(res.status, SyncStatus::Failed);
         assert!(res.message.contains("超时"));
+    }
+
+    struct FlakyProvider {
+        attempt: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl DnsProvider for FlakyProvider {
+        fn provider_name(&self) -> &'static str {
+            "flaky"
+        }
+
+        async fn sync_record(
+            &self,
+            domain: &ParsedDomain,
+            record_type: DnsRecordType,
+            ip: &IpAddr,
+            _ttl: Option<u32>,
+        ) -> Result<SyncRecordResult, DnsProviderError> {
+            let n = self
+                .attempt
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Err(DnsProviderError::Http(
+                    "Connection reset by peer".to_string(),
+                ))
+            } else {
+                Ok(SyncRecordResult::created(
+                    domain.full_domain(),
+                    record_type,
+                    ip.to_string(),
+                ))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_record_with_retry_succeeds_on_second_try() {
+        let domain = parse_domain("retry.example.com").unwrap();
+        let provider: Arc<dyn DnsProvider> = Arc::new(FlakyProvider {
+            attempt: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        let res =
+            sync_record_with_retry(&provider, "test_task", &domain, DnsRecordType::A, &ip, None)
+                .await
+                .unwrap();
+
+        assert_eq!(res.status, SyncStatus::Created);
     }
 }
