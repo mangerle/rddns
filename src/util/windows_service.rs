@@ -85,8 +85,8 @@ pub fn restart_windows_service_after_update() -> Result<()> {
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
         cmd.spawn().context("派生 Windows 服务后台重启指令失败")?;
 
-        // 异步派生延迟停机任务，为前端 SSE 与 Web 响应留出 1.2 秒的完整刷盘与网络传输窗口
-        tokio::spawn(async {
+        // 异步派生延迟停机任务，为前端 SSE 与 Web 响应留出 1.2 秒的完整刷盘与网络传输窗口 (P3-15)
+        let _shutdown_task = tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             trigger_service_shutdown();
         });

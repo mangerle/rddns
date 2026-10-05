@@ -182,8 +182,8 @@ fn spawn_signal_listener(cancel_token: CancellationToken) -> tokio::task::JoinHa
         }
 
         cancel_token.cancel();
-        // 10 秒硬退出兜底，防止挂起的连接导致进程永不退出 (P-1)
-        spawn(async {
+        // 10 秒硬退出兜底 Watchdog 任务，防止挂起的连接导致进程永不退出 (P-1, P3-15)
+        let _watchdog = spawn(async {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             log::warn!("平滑停机超过 10 秒兜底时限，强制退出进程");
             std::process::exit(0);

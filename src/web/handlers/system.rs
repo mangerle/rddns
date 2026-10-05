@@ -114,8 +114,8 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
 
     // 更新流程耗时可达数十秒，不能阻塞 HTTP 响应，故交由后台异步任务执行。
     // RAII 守卫被移入后台任务作用域中，即使任务内部发生 panic 或提早退出，
-    // 在任务结束析构时均必定触发 Drop 释放全局锁，彻底杜绝死锁隐患。
-    spawn(async move {
+    // 在任务结束析构时均必定触发 Drop 释放全局锁，彻底杜绝死锁隐患。 (P3-15)
+    let _upgrade_handle = spawn(async move {
         let _guard = guard;
         let update_task = spawn(async {
             match upgrade_self().await {

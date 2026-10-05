@@ -284,8 +284,8 @@ impl NotificationDispatcher {
         }
 
         let statuses = self.delivery_statuses.clone();
-        // 监管任务：收割各渠道句柄与投递结果，确保 panic 可被识别并聚合投递状态 (P2-7)
-        spawn(async move {
+        // 监管任务：收割各渠道句柄与投递结果，确保 panic 可被识别并聚合投递状态 (P2-7, P3-15)
+        let _harvest_task = spawn(async move {
             while let Some(res) = join_set.join_next().await {
                 match res {
                     Ok((channel_name, delivery_res)) => {
