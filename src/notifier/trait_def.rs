@@ -6,26 +6,30 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug)]
 pub enum NotifyError {
-    Http(reqwest::Error),
+    /// 网络请求错误，文本可能包含敏感 URL
+    Http(String),
+    /// 邮件发送错误
     Email(String),
-    Json(serde_json::Error),
+    /// 数据序列化或反序列化错误
+    Json(String),
+    /// 通知服务商返回的业务错误
     Provider(String),
 }
 
 impl fmt::Display for NotifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Http(e) => write!(
+            Self::Http(msg) => write!(
                 f,
                 "HTTP 请求失败: {}",
-                crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+                crate::dns::trait_def::sanitize_sensitive_url_params(msg)
             ),
             Self::Email(m) => write!(
                 f,
                 "邮件发送错误: {}",
                 crate::dns::trait_def::sanitize_sensitive_url_params(m)
             ),
-            Self::Json(e) => write!(f, "数据序列化错误: {}", e),
+            Self::Json(msg) => write!(f, "数据序列化错误: {}", msg),
             Self::Provider(m) => write!(
                 f,
                 "通知服务商返回错误: {}",
@@ -35,25 +39,17 @@ impl fmt::Display for NotifyError {
     }
 }
 
-impl std::error::Error for NotifyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Http(e) => Some(e),
-            Self::Json(e) => Some(e),
-            _ => None,
-        }
-    }
-}
+impl std::error::Error for NotifyError {}
 
 impl From<reqwest::Error> for NotifyError {
     fn from(e: reqwest::Error) -> Self {
-        Self::Http(e)
+        Self::Http(e.to_string())
     }
 }
 
 impl From<serde_json::Error> for NotifyError {
     fn from(e: serde_json::Error) -> Self {
-        Self::Json(e)
+        Self::Json(e.to_string())
     }
 }
 

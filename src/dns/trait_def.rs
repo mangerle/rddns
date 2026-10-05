@@ -236,7 +236,7 @@ pub enum DnsProviderError {
     /// HTTP 通信层错误，文本可能包含带凭据的请求 URL
     Http(String),
     /// JSON 序列化或反序列化错误
-    Json(serde_json::Error),
+    Json(String),
     /// 未找到根域名对应的 Zone，载荷为根域名本身（不含凭据）
     ZoneNotFound(String),
     /// 服务商返回的业务错误，文本可能包含完整响应体
@@ -291,7 +291,7 @@ impl From<reqwest::Error> for DnsProviderError {
 
 impl From<serde_json::Error> for DnsProviderError {
     fn from(err: serde_json::Error) -> Self {
-        Self::Json(err)
+        Self::Json(err.to_string())
     }
 }
 
