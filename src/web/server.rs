@@ -130,6 +130,12 @@ impl WebServer {
 
         let listener = TcpListener::bind(addr).await?;
         info!("Web 服务已成功监听在: http://{}", addr);
+        if !addr.ip().is_loopback() {
+            warn!(
+                "安全警告：Web 服务当前以明文 HTTP 监听在非回环地址 ({})。HTTP 认证凭据未经传输层加密，同网段或链路嗅探存在密码泄露风险。强烈建议在外部配置反向代理（如 Nginx、Caddy）终止 TLS，或配置 not_allow_wan_access 仅限本地回环访问",
+                addr
+            );
+        }
 
         axum::serve(
             listener,
