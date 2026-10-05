@@ -39,7 +39,7 @@ impl FeishuNotifier {
             .ipv6
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "未获取 / 未启用".to_string());
-        let time_str = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+        let time_str = event.time_str();
 
         let mut table_rows = Vec::new();
         for r in &event.results {

@@ -172,6 +172,57 @@ impl NotificationEvent {
         domains.join(", ")
     }
 
+    /// 获取 IPv4 格式化字符串，未探测到时返回“无”
+    pub fn ipv4_str(&self) -> String {
+        self.ipv4
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "无".to_string())
+    }
+
+    /// 获取 IPv6 格式化字符串，未探测到时返回“无”
+    pub fn ipv6_str(&self) -> String {
+        self.ipv6
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "无".to_string())
+    }
+
+    /// 获取格式化时间文本 (YYYY-MM-DD HH:MM:SS)
+    pub fn time_str(&self) -> String {
+        self.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+
+    /// 统一生成标准 Markdown 通知正文 (P2-14)
+    pub fn format_markdown_summary(&self) -> String {
+        format!(
+            "### rddns 动态解析 [{}]\n\
+            > **任务名称**：{}\n\
+            > **IPv4 地址**：{}\n\
+            > **IPv6 地址**：{}\n\
+            > **解析域名**：{}\n\
+            > **触发时间**：{}\n\n\
+            #### 同步结果：\n{}",
+            self.overall_status.as_str(),
+            self.task_name,
+            self.ipv4_str(),
+            self.ipv6_str(),
+            self.domains_comma_separated(),
+            self.time_str(),
+            self.format_details_text()
+        )
+    }
+
+    /// 统一生成标准纯文本通知摘要 (P2-14)
+    pub fn format_plain_summary(&self) -> String {
+        format!(
+            "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
+            self.task_name,
+            self.ipv4_str(),
+            self.ipv6_str(),
+            self.domains_comma_separated(),
+            self.time_str()
+        )
+    }
+
     /// 生成用于冷却抑制判断的稳定错误指纹 (P2-9)
     ///
     /// # 设计原理

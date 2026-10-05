@@ -33,20 +33,7 @@ impl Notifier for BarkNotifier {
         let url = format!("{}/push", server);
 
         let title = format!("rddns 动态解析 [{}]", event.overall_status.as_str());
-        let body = format!(
-            "任务: {}\nIPv4: {}\nIPv6: {}\n域名: {}\n时间: {}",
-            event.task_name,
-            event
-                .ipv4
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            event
-                .ipv6
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            event.domains_comma_separated(),
-            event.timestamp.format("%Y-%m-%d %H:%M:%S")
-        );
+        let body = event.format_plain_summary();
 
         let mut payload = json!({
             "device_key": key,

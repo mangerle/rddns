@@ -47,16 +47,10 @@ impl Notifier for TelegramNotifier {
             <b>详情</b>:\n{details}",
             status = event.overall_status.as_str(),
             task_name = escape_html(&event.task_name),
-            ipv4 = event
-                .ipv4
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            ipv6 = event
-                .ipv6
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
+            ipv4 = event.ipv4_str(),
+            ipv6 = event.ipv6_str(),
             domains = escape_html(&event.domains_comma_separated()),
-            timestamp = event.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            timestamp = event.time_str(),
             details = escape_html(&event.format_details_text())
         );
 

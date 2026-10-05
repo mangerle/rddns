@@ -112,6 +112,11 @@ impl WeComNotifier {
             })?;
 
         // 拼接 Markdown 内容
+        let status_color = match event.overall_status {
+            crate::notifier::trait_def::NotificationOverallStatus::Success => "info",
+            crate::notifier::trait_def::NotificationOverallStatus::Failed => "warning",
+            crate::notifier::trait_def::NotificationOverallStatus::PartialSuccess => "comment",
+        };
         let markdown_content = format!(
             "### rddns 域名动态解析通知 <font color=\"{}\">{}</font>\n\
             > **任务名称**：{}\n\
@@ -120,23 +125,13 @@ impl WeComNotifier {
             > **涉及域名**：{}\n\
             > **触发时间**：{}\n\n\
             **详细结果**：\n{}",
-            match event.overall_status {
-                crate::notifier::trait_def::NotificationOverallStatus::Success => "info",
-                crate::notifier::trait_def::NotificationOverallStatus::Failed => "warning",
-                crate::notifier::trait_def::NotificationOverallStatus::PartialSuccess => "comment",
-            },
+            status_color,
             event.overall_status.as_str(),
             event.task_name,
-            event
-                .ipv4
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            event
-                .ipv6
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
+            event.ipv4_str(),
+            event.ipv6_str(),
             event.domains_comma_separated(),
-            event.timestamp.format("%Y-%m-%d %H:%M:%S"),
+            event.time_str(),
             event.format_details_text()
         );
 

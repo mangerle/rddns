@@ -49,29 +49,7 @@ impl Notifier for DingTalkNotifier {
         }
 
         let title = format!("rddns 动态解析 [{}]", event.overall_status.as_str());
-        let text = format!(
-            "### rddns 动态解析通知\n\
-            - **状态**：{}\n\
-            - **任务**：{}\n\
-            - **IPv4**：{}\n\
-            - **IPv6**：{}\n\
-            - **域名**：{}\n\
-            - **时间**：{}\n\n\
-            #### 同步结果：\n{}",
-            event.overall_status.as_str(),
-            event.task_name,
-            event
-                .ipv4
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            event
-                .ipv6
-                .map(|ip| ip.to_string())
-                .unwrap_or_else(|| "无".to_string()),
-            event.domains_comma_separated(),
-            event.timestamp.format("%Y-%m-%d %H:%M:%S"),
-            event.format_details_text()
-        );
+        let text = event.format_markdown_summary();
 
         let payload = json!({
             "msgtype": "markdown",
