@@ -89,14 +89,13 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
             if ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
-                    if !trimmed.is_empty()
-                        && !trimmed.starts_with("http://")
-                        && !trimmed.starts_with("https://")
-                    {
-                        return Err(AppError::bad_request(format!(
-                            "任务 [{}] 中的 URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                            name, trimmed
-                        )));
+                    if !trimmed.is_empty() {
+                        crate::util::net::validate_safe_url_endpoint(trimmed).map_err(|e| {
+                            AppError::bad_request(format!(
+                                "任务 [{}] 中的 URL 端点 [{}] 非法: {}",
+                                name, trimmed, e
+                            ))
+                        })?;
                     }
                 }
             } else if ip_cfg.source_type == IpSourceType::Command {
@@ -149,6 +148,13 @@ pub(crate) fn validate_notification_urls(notif: &NotificationConfig) -> Result<(
     }
     if let Some(ref feishu) = notif.feishu {
         check_url(&feishu.webhook_url, "飞书机器人 Webhook 地址")?;
+    }
+    if let Some(ref email) = notif.email {
+        let s = email.smtp_server.trim();
+        if !s.is_empty() {
+            crate::util::net::validate_safe_host(s, Some(email.smtp_port))
+                .map_err(|e| AppError::bad_request(format!("SMTP 服务器地址非法: {}", e)))?;
+        }
     }
     Ok(())
 }

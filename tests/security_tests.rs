@@ -264,3 +264,33 @@ fn test_command_injection_comprehensive_protection() {
         );
     }
 }
+
+#[test]
+fn test_validate_safe_host_blocks_private_and_loopback() {
+    use rddns::util::net::validate_safe_host;
+
+    let blocked_hosts = [
+        "127.0.0.1",
+        "192.168.1.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "169.254.169.254",
+        "::1",
+        "fe80::1",
+        "localhost",
+        "test.local",
+        "internal.service.arpa",
+    ];
+
+    for host in blocked_hosts {
+        let res = validate_safe_host(host, Some(25));
+        assert!(
+            res.is_err(),
+            "内网/保留地址应当被拦截: {}, 实际结果: {:?}",
+            host,
+            res
+        );
+    }
+
+    assert!(validate_safe_host("8.8.8.8", Some(53)).is_ok());
+}

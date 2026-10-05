@@ -183,6 +183,67 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
 ///
 /// # Errors
 /// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
+/// 校验外部目标主机（IP 或域名）的合法性，防御指向内网与云元数据的 SSRF 风险
+///
+/// # 设计原理
+/// - **实现初衷**: 统一验证外部主机或域名，防止指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
+/// - **核心优势**: 支持裸 IP 直接判定与域名解析穿透校验，防御 DNS 重绑定与内网穿透。
+///
+/// # Errors
+/// 当主机指向本地回环、私网 IP、localhost 或内部保留域名时返回错误。
+pub fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), String> {
+    let trimmed = host_str.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        if is_private_or_loopback(&ip) {
+            return Err(format!(
+                "出于安全策略，禁止配置或测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址",
+                ip
+            ));
+        }
+        return Ok(());
+    }
+
+    let lower_domain = trimmed.to_ascii_lowercase();
+    if lower_domain == "localhost"
+        || lower_domain.ends_with(".localhost")
+        || lower_domain.ends_with(".local")
+        || lower_domain.ends_with(".internal")
+        || lower_domain.ends_with(".localdomain")
+        || lower_domain.ends_with(".arpa")
+    {
+        return Err(
+            "出于安全策略，禁止配置或测试指向 localhost 及内部保留域名的目标地址".to_string(),
+        );
+    }
+
+    // 执行实际 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名
+    let check_port = port.unwrap_or(80);
+    if let Ok(addrs) = (trimmed, check_port).to_socket_addrs() {
+        for socket_addr in addrs {
+            let ip = socket_addr.ip();
+            if is_private_or_loopback(&ip) {
+                return Err(format!(
+                    "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
+                    trimmed, ip
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 校验外部网络请求 URL 端点的协议与目标地址合法性（防范 SSRF 攻击，覆盖保留网段及 DNS 重绑定）(S-1)
+///
+/// # 设计原理
+/// - **实现初衷**: 统一验证外部 URL 端点，防止将请求指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
+/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性；针对域名执行 DNS 解析校验，彻底防御通过自定义域名指向 127.0.0.1 或云元数据进行 DNS 重绑定绕过。
+///
+/// # Errors
+/// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
 pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
@@ -197,54 +258,11 @@ pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let parsed =
         Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
     match parsed.host() {
-        Some(Host::Ipv4(v4)) => {
-            if is_private_or_loopback(&IpAddr::V4(v4)) {
-                return Err(format!(
-                    "出于安全策略，禁止配置或测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址",
-                    v4
-                ));
-            }
-        }
-        Some(Host::Ipv6(v6)) => {
-            if is_private_or_loopback(&IpAddr::V6(v6)) {
-                return Err(format!(
-                    "出于安全策略，禁止配置或测试指向本地回环、局域网或内部保留 IP [{}] 的目标地址",
-                    v6
-                ));
-            }
-        }
-        Some(Host::Domain(domain)) => {
-            let lower_domain = domain.trim().to_ascii_lowercase();
-            if lower_domain == "localhost"
-                || lower_domain.ends_with(".localhost")
-                || lower_domain.ends_with(".local")
-                || lower_domain.ends_with(".internal")
-                || lower_domain.ends_with(".localdomain")
-                || lower_domain.ends_with(".arpa")
-            {
-                return Err(
-                    "出于安全策略，禁止配置或测试指向 localhost 及内部保留域名的目标地址"
-                        .to_string(),
-                );
-            }
-
-            // 执行实际 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名
-            let port = parsed.port_or_known_default().unwrap_or(80);
-            if let Ok(addrs) = (domain, port).to_socket_addrs() {
-                for socket_addr in addrs {
-                    let ip = socket_addr.ip();
-                    if is_private_or_loopback(&ip) {
-                        return Err(format!(
-                            "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
-                            domain, ip
-                        ));
-                    }
-                }
-            }
-        }
-        None => return Err("URL 端点缺少有效的主机地址".to_string()),
+        Some(Host::Ipv4(v4)) => validate_safe_host(&v4.to_string(), parsed.port()),
+        Some(Host::Ipv6(v6)) => validate_safe_host(&v6.to_string(), parsed.port()),
+        Some(Host::Domain(domain)) => validate_safe_host(domain, parsed.port()),
+        None => Err("URL 端点缺少有效的主机地址".to_string()),
     }
-    Ok(())
 }
 
 /// 从字符串文本中提取第一个合法的 IPv4 地址
