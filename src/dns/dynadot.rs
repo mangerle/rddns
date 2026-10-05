@@ -73,10 +73,7 @@ impl DnsProvider for DynadotProvider {
         let body_text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("Dynadot 请求失败: {}", body_text),
-            });
+            return Err(DnsProviderError::http_status(status, &body_text));
         }
 
         match serde_json::from_str::<DynadotResp>(&body_text) {

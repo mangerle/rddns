@@ -58,15 +58,10 @@ impl RemoteRecord {
     /// 判断当前值是否与目标 IP 一致
     ///
     /// # 设计原理
-    /// IPv6 文本存在多种等价写法（如 `2001:db8::1` 与 `2001:0db8::1`），
-    /// 故先做规范化解析再比较，避免因表示差异误判为「已变更」而触发
-    /// 无谓的更新请求。
+    /// 委托给 [`crate::dns::trait_def::ip_value_matches`]，统一支持 IPv6 标准化缩写等价比对，
+    /// 避免格式差异误判为变更。
     pub fn matches_target(&self, target: &IpAddr) -> bool {
-        match (self.value.trim().parse::<IpAddr>(), target) {
-            (Ok(parsed), _) => &parsed == target,
-            // 解析失败时退化为去除首尾空白的文本比较，保持与既有行为一致
-            _ => self.value.trim() == target.to_string(),
-        }
+        crate::dns::trait_def::ip_value_matches(&self.value, target)
     }
 }
 

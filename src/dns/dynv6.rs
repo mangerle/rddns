@@ -72,10 +72,7 @@ impl Dynv6Provider {
         let body_text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("Dynv6 API 响应异常: {}", body_text),
-            });
+            return Err(DnsProviderError::http_status(status, &body_text));
         }
 
         let parsed: T = serde_json::from_str(&body_text)?;
@@ -122,7 +119,7 @@ impl DnsProvider for Dynv6Provider {
                 DnsRecordType::AAAA => zone.ipv6_prefix.as_deref(),
             };
 
-            if cur_ip == Some(&target_ip_str) {
+            if cur_ip.is_some_and(|c| crate::dns::trait_def::ip_value_matches(c, ip)) {
                 return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
                     full_domain,
@@ -168,7 +165,11 @@ impl DnsProvider for Dynv6Provider {
             });
 
             if let Some(record) = matched_record {
-                if record.data.as_deref() == Some(&target_ip_str) {
+                if record
+                    .data
+                    .as_deref()
+                    .is_some_and(|c| crate::dns::trait_def::ip_value_matches(c, ip))
+                {
                     return Ok(SyncRecordResult::unchanged_log(
                         self.provider_name(),
                         full_domain,

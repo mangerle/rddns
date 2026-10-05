@@ -93,10 +93,7 @@ impl DnsProvider for PorkbunProvider {
         let query_status = query_resp.status();
         let query_text = query_resp.text().await?;
         if !query_status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: query_status.to_string(),
-                message: format!("Porkbun 查询记录 HTTP 错误: {}", query_text),
-            });
+            return Err(DnsProviderError::http_status(query_status, &query_text));
         }
 
         let query_result: PorkbunQueryResponse = serde_json::from_str(&query_text)?;
@@ -113,7 +110,11 @@ impl DnsProvider for PorkbunProvider {
 
         let existing_records = query_result.records.unwrap_or_default();
         if let Some(existing) = existing_records.first() {
-            if existing.content.as_deref() == Some(&target_ip_str) {
+            if existing
+                .content
+                .as_deref()
+                .is_some_and(|c| crate::dns::trait_def::ip_value_matches(c, ip))
+            {
                 return Ok(SyncRecordResult::unchanged_log(
                     self.provider_name(),
                     full_domain,
@@ -149,10 +150,7 @@ impl DnsProvider for PorkbunProvider {
             let edit_status = edit_resp.status();
             let edit_text = edit_resp.text().await?;
             if !edit_status.is_success() {
-                return Err(DnsProviderError::ApiError {
-                    code: edit_status.to_string(),
-                    message: format!("Porkbun 更新记录 HTTP 错误: {}", edit_text),
-                });
+                return Err(DnsProviderError::http_status(edit_status, &edit_text));
             }
 
             let edit_result: PorkbunBaseResponse = serde_json::from_str(&edit_text)?;
@@ -190,10 +188,7 @@ impl DnsProvider for PorkbunProvider {
             let create_status = create_resp.status();
             let create_text = create_resp.text().await?;
             if !create_status.is_success() {
-                return Err(DnsProviderError::ApiError {
-                    code: create_status.to_string(),
-                    message: format!("Porkbun 创建记录 HTTP 错误: {}", create_text),
-                });
+                return Err(DnsProviderError::http_status(create_status, &create_text));
             }
 
             let create_result: PorkbunBaseResponse = serde_json::from_str(&create_text)?;

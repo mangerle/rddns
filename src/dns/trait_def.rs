@@ -177,8 +177,14 @@ impl SyncRecordResult {
 /// # 逻辑不变性保证
 /// 正则表达式模式串为静态硬编码常量，符合标准正则语法，编译绝对安全且不会失败。
 static SENSITIVE_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(key|password|passwd|secret|signature|token|accesskeyid|auth)=([^&\s)]+)")
+    Regex::new(r"(?i)(key|password|passwd|pwd|secret|signature|token|accesskeyid|auth)=([^&\s)]+)")
         .expect("静态敏感参数正则表达式语法必定合法")
+});
+
+/// 匹配 Telegram Bot 路径中 Token 的正则表达式（如 /bot123456:ABC-DEF/）
+static TELEGRAM_BOT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)/bot([0-9]{5,}:[A-Za-z0-9_-]{20,})")
+        .expect("静态 Telegram Bot 正则表达式语法必定合法")
 });
 
 /// 匹配 JSON 文本中敏感字段的正则表达式
@@ -192,7 +198,7 @@ static SENSITIVE_PARAM_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// 正则表达式模式串为静态硬编码常量，符合标准正则语法，编译绝对安全且不会失败。
 static SENSITIVE_JSON_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)"(key|password|passwd|secret|signature|token|accesskeyid|auth|api_key|apiToken)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\s]+)"#,
+        r#"(?i)"(key|password|passwd|pwd|secret|signature|token|accesskeyid|auth|api_key|apiToken)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\s]+)"#,
     )
     .expect("静态敏感 JSON 正则表达式语法必定合法")
 });
@@ -212,8 +218,9 @@ const MASK_PLACEHOLDER: &str = "******";
 ///   脱敏日志输出时触发，不在高频同步热路径上。
 pub fn sanitize_sensitive_url_params(input: &str) -> String {
     let url_masked = SENSITIVE_PARAM_REGEX.replace_all(input, "$1=******");
+    let tg_masked = TELEGRAM_BOT_REGEX.replace_all(&url_masked, "/bot******");
     SENSITIVE_JSON_REGEX
-        .replace_all(&url_masked, &format!("\"$1\":\"{}\"", MASK_PLACEHOLDER))
+        .replace_all(&tg_masked, &format!("\"$1\":\"{}\"", MASK_PLACEHOLDER))
         .to_string()
 }
 
@@ -288,6 +295,28 @@ impl From<serde_json::Error> for DnsProviderError {
     }
 }
 
+/// 错误响应体最大保留字符数 (Q-4)
+pub const MAX_ERR_BODY_CHARS: usize = 1024;
+
+/// 截断过长响应体，防止内存放大与正则回溯失控 (Q-4)
+pub fn truncate_body(body: &str) -> &str {
+    match body.char_indices().nth(MAX_ERR_BODY_CHARS) {
+        Some((idx, _)) => &body[..idx],
+        None => body,
+    }
+}
+
+/// 统一比对远程 DNS 记录值与目标 IP 是否一致 (Q-3)
+///
+/// 核心优势：支持 IPv6 标准化缩写等价比较（如 2001:0db8::1 等价于 2001:db8::1），
+/// 杜绝格式差异引发的重复全量写操作。
+pub fn ip_value_matches(remote_value: &str, target: &std::net::IpAddr) -> bool {
+    match remote_value.trim().parse::<std::net::IpAddr>() {
+        Ok(parsed) => &parsed == target,
+        Err(_) => remote_value.trim() == target.to_string(),
+    }
+}
+
 impl DnsProviderError {
     /// 构造服务商 API 错误
     ///
@@ -298,6 +327,14 @@ impl DnsProviderError {
         Self::ApiError {
             code: code.into(),
             message: message.into(),
+        }
+    }
+
+    /// 统一的「HTTP 失败」构造器：自动截断过长响应体并携带状态码 (Q-4)
+    pub fn http_status(status: reqwest::StatusCode, body: &str) -> Self {
+        Self::ApiError {
+            code: status.to_string(),
+            message: truncate_body(body).to_string(),
         }
     }
 }
@@ -464,5 +501,34 @@ mod tests {
         // 仍可作为 Box<dyn Error> 使用
         let boxed: Box<dyn std::error::Error> = Box::new(err);
         assert!(boxed.to_string().contains("500"));
+    }
+
+    #[test]
+    fn test_truncate_body() {
+        let short = "短文本";
+        assert_eq!(truncate_body(short), short);
+
+        let long = "a".repeat(2000);
+        let truncated = truncate_body(&long);
+        assert_eq!(truncated.len(), MAX_ERR_BODY_CHARS);
+    }
+
+    #[test]
+    fn test_ip_value_matches() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let v4 = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
+        assert!(ip_value_matches("1.2.3.4", &v4));
+        assert!(ip_value_matches(" 1.2.3.4 ", &v4));
+        assert!(!ip_value_matches("1.2.3.5", &v4));
+
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        // 缩写与全写等价比对
+        assert!(ip_value_matches("2001:db8::1", &v6));
+        assert!(ip_value_matches(
+            "2001:0db8:0000:0000:0000:0000:0000:0001",
+            &v6
+        ));
+        assert!(!ip_value_matches("2001:db8::2", &v6));
     }
 }
