@@ -6,36 +6,83 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use log::warn;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-/// SSE 一次性 Ticket 存储映射表 (ticket -> 创建时间)
-static SSE_TICKETS: LazyLock<RwLock<HashMap<String, Instant>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+/// SSE Ticket 默认有效生命周期 (30 秒)
+const SSE_TICKET_TTL: Duration = Duration::from_secs(30);
+/// 批量清理过期 Ticket 的最小时间间隔 (10 秒)
+const SSE_CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
+/// Ticket 存储池容量硬上限，防止恶意请求导致内存无限膨胀
+const MAX_SSE_TICKETS: usize = 512;
+
+/// SSE Ticket 存储结构体
+struct TicketStore {
+    tickets: HashMap<String, Instant>,
+    last_cleanup: Instant,
+}
+
+/// SSE 一次性 Ticket 存储池
+static SSE_TICKETS: LazyLock<RwLock<TicketStore>> = LazyLock::new(|| {
+    RwLock::new(TicketStore {
+        tickets: HashMap::with_capacity(32),
+        last_cleanup: Instant::now(),
+    })
+});
 
 /// 生成并注册一个 30 秒有效的一次性 SSE Ticket
+///
+/// # 设计原理
+/// - **实现初衷**: 为避免每次生成时执行高成本的 O(N) 全量遍历清理，采用按时间间隔与容量阈值节流惰性淘汰。
+/// - **核心优势**: 减少持锁时间至微秒级；设置 512 条硬上限抵御高频调用导致的内存与 CPU 退化。
 pub fn issue_sse_ticket() -> String {
     let mut bytes = [0u8; 16];
     crate::util::crypto::fill_random_bytes(&mut bytes);
     let ticket = hex::encode(bytes);
 
     let now = Instant::now();
-    let mut guard = SSE_TICKETS.write();
-    // 清理过期 ticket (> 30s)
-    guard.retain(|_, created_at| now.duration_since(*created_at) < Duration::from_secs(30));
-    guard.insert(ticket.clone(), now);
+    let mut store = SSE_TICKETS.write();
+
+    // 节流淘汰：仅在达到清理间隔或容量达到 64 时执行全量清理
+    if now.duration_since(store.last_cleanup) >= SSE_CLEANUP_INTERVAL || store.tickets.len() >= 64 {
+        store
+            .tickets
+            .retain(|_, created_at| now.duration_since(*created_at) < SSE_TICKET_TTL);
+        store.last_cleanup = now;
+    }
+
+    // 防御性硬上限
+    if store.tickets.len() >= MAX_SSE_TICKETS {
+        store
+            .tickets
+            .retain(|_, created_at| now.duration_since(*created_at) < SSE_TICKET_TTL);
+    }
+    if store.tickets.len() < MAX_SSE_TICKETS {
+        store.tickets.insert(ticket.clone(), now);
+    } else {
+        warn!("SSE Ticket 存储池已达上限且无法通过过期回收释放空间，已拒绝本次缓存");
+    }
+
     ticket
 }
 
 /// 验证并消耗一次性 Ticket (一次性使用，用后即焚)
+///
+/// # 设计原理
+/// - **实现初衷**: 消费特定 Ticket 时只需 O(1) 精确删除，无需为了单个请求执行 O(N) 全表 retain 遍历。
+/// - **核心优势**: 消除消费时的写锁长时间争用，过期检查直接针对目标条目。
 pub fn consume_sse_ticket(ticket: &str) -> bool {
     let now = Instant::now();
-    let mut guard = SSE_TICKETS.write();
-    guard.retain(|_, created_at| now.duration_since(*created_at) < Duration::from_secs(30));
-    guard.remove(ticket).is_some()
+    let mut store = SSE_TICKETS.write();
+    if let Some(created_at) = store.tickets.remove(ticket) {
+        now.duration_since(created_at) <= SSE_TICKET_TTL
+    } else {
+        false
+    }
 }
 
 /// Basic Auth 鉴权中间件
@@ -240,5 +287,27 @@ mod tests {
             .unwrap();
         let res_reuse = app.oneshot(req_reuse).await.unwrap();
         assert_eq!(res_reuse.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_sse_ticket_consume_and_cleanup_behavior() {
+        // 1. 正常生成与消费
+        let ticket = issue_sse_ticket();
+        assert!(consume_sse_ticket(&ticket));
+        // 再次消费应失败
+        assert!(!consume_sse_ticket(&ticket));
+        // 消费不存在的 ticket 应失败
+        assert!(!consume_sse_ticket("nonexistent_ticket"));
+
+        // 2. 模拟过期 ticket
+        {
+            let mut store = SSE_TICKETS.write();
+            store.tickets.insert(
+                "expired_ticket".to_string(),
+                Instant::now() - Duration::from_secs(60),
+            );
+        }
+        // 消费过期 ticket 判定为 false 且已被销毁
+        assert!(!consume_sse_ticket("expired_ticket"));
     }
 }
