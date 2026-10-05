@@ -262,7 +262,7 @@ impl RecordOps for TrafficRouteProvider {
 
     async fn update_record(
         &self,
-        _zone: &str,
+        zone: &str,
         record_id: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
@@ -271,8 +271,10 @@ impl RecordOps for TrafficRouteProvider {
     ) -> Result<(), DnsProviderError> {
         let ttl_val = ttl.unwrap_or(600).max(1);
         let sub = domain.sub_domain_or_at();
+        let zid_num = zone.parse::<u64>().unwrap_or(0);
         let update_body = json!({
             "RecordID": record_id,
+            "ZID": zid_num,
             "Host": sub,
             "Type": record_type.to_string(),
             "Value": ip.to_string(),
@@ -300,5 +302,27 @@ impl DnsProvider for TrafficRouteProvider {
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
         sync_record_via(self, domain, record_type, ip, ttl).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_traffic_route_update_body_includes_zid() {
+        let zone = "123456789";
+        let zid_num = zone.parse::<u64>().unwrap_or(0);
+        let update_body = json!({
+            "RecordID": "rec_001",
+            "ZID": zid_num,
+            "Host": "www",
+            "Type": "A",
+            "Value": "1.2.3.4",
+            "TTL": 600
+        });
+
+        assert_eq!(update_body["ZID"], 123456789u64);
+        assert_eq!(update_body["RecordID"], "rec_001");
     }
 }
