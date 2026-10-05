@@ -363,8 +363,17 @@ pub fn url_encode_if(s: &str, should_encode: bool) -> String {
 mod tests {
     use super::*;
 
+    /// 缓存测试与全局 TLS 状态测试专用的互斥锁
+    ///
+    /// # 并发说明
+    /// Rust 测试默认多线程并行执行，而 `CLIENT_CACHE` 与 `SKIP_VERIFY` 是进程级全局状态，
+    /// 多个用例并行断言其条目数或状态会相互干扰。故用一把测试级互斥锁将
+    /// 涉及全局缓存与证书策略的用例强制串行执行。
+    static TEST_CACHE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     #[test]
     fn test_skip_verify_flag() {
+        let _guard = TEST_CACHE_LOCK.lock();
         set_skip_verify(true);
         assert!(is_skip_verify());
         set_skip_verify(false);
@@ -387,15 +396,6 @@ mod tests {
         assert_eq!(url_encode_if(raw, false), raw);
         assert_eq!(url_encode_if(raw, true), "%E6%B5%8B%E8%AF%95+abc+123");
     }
-
-    /// 缓存测试专用的全局互斥锁
-    ///
-    /// # 并发说明
-    /// Rust 测试默认多线程并行执行，而 `CLIENT_CACHE` 是进程级全局状态，
-    /// 多个用例并行断言其条目数会相互干扰。故用一把测试级互斥锁将
-    /// 涉及缓存的用例强制串行执行。此处刻意复用项目既有的 `parking_lot`，
-    /// 以避免测试锁在 panic 场景下中毒。
-    static TEST_CACHE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     #[test]
     fn test_client_cache_reuses_same_entry() {

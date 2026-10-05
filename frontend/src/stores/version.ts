@@ -4,7 +4,7 @@
 
 import type { VersionInfo } from '@/types/config'
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { systemApi } from '@/api'
 import { i18n } from '@/i18n'
 import { useLogStore } from './log'
@@ -35,6 +35,25 @@ export const useVersionStore = defineStore('version', () => {
   const showManualReload = ref<boolean>(false)
 
   let reconnectTimer: ReturnType<typeof setInterval> | null = null
+  let installFallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearInstallFallbackTimer() {
+    if (installFallbackTimer) {
+      clearTimeout(installFallbackTimer)
+      installFallbackTimer = null
+    }
+  }
+
+  // 状态流转：切入重启重连探测
+  function transitionToRestart() {
+    clearInstallFallbackTimer()
+    if (upgradeStep.value === 'restart')
+      return
+    upgradeStep.value = 'restart'
+    progressPercent.value = 100
+    transferredText.value = '准备就绪'
+    startRestartPolling()
+  }
 
   // 注册 SSE 日志监听器解析自更新进度
   logStore.onLogReceived((entry) => {
@@ -59,26 +78,42 @@ export const useVersionStore = defineStore('version', () => {
       transferredText.value = '校验完成'
       statusTitle.value = t('update.installing')
       statusSub.value = '安装包哈希与签名通过，正在安全执行热替换...'
+
+      clearInstallFallbackTimer()
+      // 防御性兜底：若 3 秒内后端未推送重启日志（可能服务已快速停机断开 SSE），自动切入重启探测
+      installFallbackTimer = setTimeout(() => {
+        if (isUpgrading.value && upgradeStep.value === 'install') {
+          transitionToRestart()
+        }
+      }, 3000)
       return
     }
 
     // 3. 替换完成，调度平滑重启
     if (msg.includes('自动更新完成，正在平滑重启服务') || msg.includes('正在调度平滑重启服务')) {
-      upgradeStep.value = 'restart'
-      progressPercent.value = 100
-      transferredText.value = '准备就绪'
-      startRestartPolling()
+      transitionToRestart()
       return
     }
 
     // 4. 异常提示
     if (msg.includes('在线自动更新失败') || msg.includes('执行程序替换失败')) {
+      clearInstallFallbackTimer()
       isUpgrading.value = false
       statusTitle.value = '升级遇到异常'
       statusSub.value = msg
       toast.error(msg)
     }
   })
+
+  // 监听 SSE 连接状态：若在安装阶段连接突然断开，说明后端服务已关闭开始重启流程，立即无缝切入重启探测
+  watch(
+    () => logStore.isConnected,
+    (connected) => {
+      if (isUpgrading.value && upgradeStep.value === 'install' && !connected) {
+        transitionToRestart()
+      }
+    },
+  )
 
   // 启动重启探测并在新服务拉起后自动刷新
   function startRestartPolling() {
@@ -118,7 +153,7 @@ export const useVersionStore = defineStore('version', () => {
         clearTimeout(timeoutId)
       }
 
-      if (pollAttempts >= 5) {
+      if (pollAttempts >= 4) {
         showManualReload.value = true
         statusSub.value = '正在等待新版本服务就绪...'
       }
@@ -165,6 +200,8 @@ export const useVersionStore = defineStore('version', () => {
   async function startUpgrade() {
     if (isUpgrading.value)
       return
+    clearInstallFallbackTimer()
+    showManualReload.value = false
     isUpgrading.value = true
     upgradeStep.value = 'download'
     progressPercent.value = 0

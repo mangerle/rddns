@@ -64,6 +64,115 @@ pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
+fn clean_windows_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
+/// 将命令输出字节流解码为 UTF-8 字符串。
+///
+/// # 设计原理
+/// Windows 控制台实用程序默认使用系统本地 OEM/ANSI 代码页（如 CP936/GBK）输出。
+/// 优先尝试标准 UTF-8；若校验失败则利用 Windows 原生系统 API `MultiByteToWideChar`
+/// 无依赖地转换为宽字符再转为 UTF-8，彻底消除控制台乱码。
+#[cfg(any(windows, test))]
+fn decode_output(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    #[cfg(windows)]
+    {
+        unsafe extern "system" {
+            fn MultiByteToWideChar(
+                code_page: u32,
+                flags: u32,
+                multi_byte_str: *const u8,
+                multi_byte_len: i32,
+                wide_char_str: *mut u16,
+                wide_char_len: i32,
+            ) -> i32;
+        }
+
+        const MB_ERR_INVALID_CHARS: u32 = 0x0000_0008;
+
+        // 非 UTF-8 输出在 Windows 下极大概率来自中文本地控制台（CP936/GBK）。
+        // 优先使用 CP936 结合严格无效字符校验 (MB_ERR_INVALID_CHARS) 进行判定，
+        // 杜绝英文 Windows 系统（如 CI Runner ACP=1252 单字节代码页）错误将多字节字符识别为西欧拉丁符号；
+        // 若非合法 GBK，再依序回退尝试系统默认 ANSI (0)、控制台 OEM (1) 以及宽松 GBK。
+        for &(cp, flags) in &[
+            (936u32, MB_ERR_INVALID_CHARS),
+            (0u32, 0u32),
+            (1u32, 0u32),
+            (936u32, 0u32),
+        ] {
+            let len = unsafe {
+                MultiByteToWideChar(
+                    cp,
+                    flags,
+                    bytes.as_ptr(),
+                    bytes.len() as i32,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            if len > 0 {
+                let mut wide = vec![0u16; len as usize];
+                let written = unsafe {
+                    MultiByteToWideChar(
+                        cp,
+                        flags,
+                        bytes.as_ptr(),
+                        bytes.len() as i32,
+                        wide.as_mut_ptr(),
+                        len,
+                    )
+                };
+                if written > 0 {
+                    return String::from_utf16_lossy(&wide);
+                }
+            }
+        }
+    }
+    String::from_utf8_lossy(bytes).to_string()
+}
+
+/// 构造用于注册 Windows 服务的 sc.exe create 命令。
+///
+/// # 设计原理
+/// Windows 原生 `sc.exe` 命令行解析器遵循特殊的选项解析规则：
+/// 1. 每个配置项的键与值在命令行参数数组中必须分别独立传递（例如 `"binPath="` 与路径值分开，`"start="` 与 `"auto"` 分开），
+///    不可将键值拼接到单个参数中（如 `"binPath= ..."`），否则会导致内部参数解析错位并报错（如 `: 4 start=`）。
+/// 2. 当可执行文件或配置文件路径包含空格时（如 `C:\Program Files\...`），
+///    必须将整个启动命令行用双引号整体包裹，且可执行文件与参数内部各自使用双引号，
+///    确保 SCM 在拉起服务时能精准界定带空格的可执行程序路径。
+#[cfg(any(windows, test))]
+pub(crate) fn build_sc_create_command(
+    service_name: &str,
+    exe_path: &Path,
+    config_path: &Path,
+) -> Command {
+    let exe_str = clean_windows_path(exe_path);
+    let cfg_str = clean_windows_path(config_path);
+    let bin_path_val = format!(r#""{}" -c "{}" --windows-service"#, exe_str, cfg_str);
+
+    let mut cmd = Command::new("sc.exe");
+    cmd.args([
+        "create",
+        service_name,
+        "binPath=",
+        &bin_path_val,
+        "start=",
+        "auto",
+        "DisplayName=",
+        "RDDNS Dynamic DNS Service",
+    ]);
+    cmd
+}
+
 #[cfg(windows)]
 fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
     info!("正在配置 Windows NT 原生自愈服务 [{}]...", SERVICE_NAME);
@@ -87,24 +196,14 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
         .output();
 
     // 2. 构造 SCM 原生系统服务创建指令
-    let exe_str = exe_path.to_string_lossy();
-    let cfg_str = config_path.to_string_lossy();
-    let bin_path_arg = format!("\"{}\" -c \"{}\" --windows-service", exe_str, cfg_str);
-
-    let create_out = Command::new("sc.exe")
-        .args([
-            "create",
-            SERVICE_NAME,
-            &format!("binPath= {}", bin_path_arg),
-            "start= auto",
-            "DisplayName= RDDNS Dynamic DNS Service",
-        ])
+    let mut create_cmd = build_sc_create_command(SERVICE_NAME, exe_path, config_path);
+    let create_out = create_cmd
         .output()
         .context("调用 sc.exe 创建系统服务失败")?;
 
     if !create_out.status.success() {
-        let out_msg = String::from_utf8_lossy(&create_out.stdout);
-        let err_msg = String::from_utf8_lossy(&create_out.stderr);
+        let out_msg = decode_output(&create_out.stdout);
+        let err_msg = decode_output(&create_out.stderr);
         bail!(
             "创建 Windows 服务失败：\n{}\n{}\n提示：注册 Windows 系统服务需要管理员权限，请以管理员身份运行终端后重试。",
             out_msg.trim(),
@@ -121,13 +220,15 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
         ])
         .output();
 
-    // 4. 配置 SCM 故障恢复策略：异常崩溃或任务管理器强杀后 3 秒自动拉活重启，永远重置失败计数
+    // 4. 配置 SCM 故障恢复策略：异常崩溃或任务管理器强杀后 2 秒自动拉活重启，稳定运行 60 秒后自动清零重置失败计数
     let failure_out = Command::new("sc.exe")
         .args([
             "failure",
             SERVICE_NAME,
-            "reset= 0",
-            "actions= restart/3000/restart/3000/restart/3000",
+            "reset=",
+            "60",
+            "actions=",
+            "restart/2000/restart/2000/restart/2000",
         ])
         .output();
     if let Ok(ref f) = failure_out
@@ -135,7 +236,7 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
     {
         warn!(
             "配置服务故障恢复策略告警: {}",
-            String::from_utf8_lossy(&f.stdout).trim()
+            decode_output(&f.stdout).trim()
         );
     }
     let _ = Command::new("sc.exe")
@@ -148,7 +249,7 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
         .args(["start", SERVICE_NAME])
         .output()
         .context("启动 Windows 服务失败")?;
-    let start_msg = String::from_utf8_lossy(&start_out.stdout);
+    let start_msg = decode_output(&start_out.stdout);
 
     info!("==========================================");
     info!("RDDNS 已成功安装为 Windows NT 原生系统服务！");
@@ -189,7 +290,7 @@ fn uninstall_windows_service() -> Result<()> {
         .output();
 
     if !delete_out.status.success() {
-        let msg = String::from_utf8_lossy(&delete_out.stdout);
+        let msg = decode_output(&delete_out.stdout);
         warn!("删除服务输出: {}", msg.trim());
     } else {
         info!("[{}] Windows NT 系统服务已成功卸载！", SERVICE_NAME);
@@ -204,7 +305,7 @@ fn start_windows_service() -> Result<()> {
         .args(["start", SERVICE_NAME])
         .output()
         .context("调用 sc.exe 启动服务失败")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = decode_output(&out.stdout);
     info!("启动服务输出:\n{}", stdout.trim());
     Ok(())
 }
@@ -216,7 +317,7 @@ fn stop_windows_service() -> Result<()> {
         .args(["stop", SERVICE_NAME])
         .output()
         .context("调用 sc.exe 停止服务失败")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = decode_output(&out.stdout);
     info!("停止服务输出:\n{}", stdout.trim());
     Ok(())
 }
@@ -230,7 +331,7 @@ fn restart_windows_service() -> Result<()> {
         .args(["start", SERVICE_NAME])
         .output()
         .context("调用 sc.exe 重启服务失败")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = decode_output(&out.stdout);
     info!("重启服务输出:\n{}", stdout.trim());
     Ok(())
 }
@@ -242,10 +343,7 @@ fn status_windows_service() -> Result<()> {
         .args(["query", SERVICE_NAME])
         .output()
         .context("查询 Windows 服务状态失败")?;
-    info!(
-        "服务状态查询结果:\n{}",
-        String::from_utf8_lossy(&out.stdout).trim()
-    );
+    info!("服务状态查询结果:\n{}", decode_output(&out.stdout).trim());
     Ok(())
 }
 
@@ -472,5 +570,91 @@ mod tests {
         let dummy_path = Path::new("dummy.yaml");
         let res = handle_service_command("invalid_action_xyz", dummy_path);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_clean_windows_path() {
+        let unc_path = Path::new(r"\\?\C:\Program Files\rddns\rddns.exe");
+        assert_eq!(
+            clean_windows_path(unc_path),
+            r"C:\Program Files\rddns\rddns.exe"
+        );
+
+        let normal_path = Path::new(r"C:\rddns\rddns.exe");
+        assert_eq!(clean_windows_path(normal_path), r"C:\rddns\rddns.exe");
+    }
+
+    #[test]
+    fn test_decode_output() {
+        // 1. 空字节测试
+        assert_eq!(decode_output(b""), "");
+
+        // 2. 标准 UTF-8 中文测试
+        let utf8_bytes = "RDDNS 服务运行正常".as_bytes();
+        assert_eq!(decode_output(utf8_bytes), "RDDNS 服务运行正常");
+
+        // 3. GBK 编码转换测试
+        #[cfg(windows)]
+        {
+            unsafe extern "system" {
+                fn WideCharToMultiByte(
+                    code_page: u32,
+                    flags: u32,
+                    wide_char_str: *const u16,
+                    wide_char_len: i32,
+                    multi_byte_str: *mut u8,
+                    multi_byte_len: i32,
+                    default_char: *const u8,
+                    used_default_char: *mut i32,
+                ) -> i32;
+            }
+            let original = "拒绝访问。提示：注册 Windows 系统服务需要管理员权限。";
+            let wide: Vec<u16> = original.encode_utf16().collect();
+            let len = unsafe {
+                WideCharToMultiByte(
+                    936,
+                    0,
+                    wide.as_ptr(),
+                    wide.len() as i32,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert!(len > 0);
+            let mut gbk_bytes = vec![0u8; len as usize];
+            unsafe {
+                WideCharToMultiByte(
+                    936,
+                    0,
+                    wide.as_ptr(),
+                    wide.len() as i32,
+                    gbk_bytes.as_mut_ptr(),
+                    len,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                );
+            }
+            assert_eq!(decode_output(&gbk_bytes), original);
+        }
+    }
+
+    #[test]
+    fn test_build_sc_create_command() {
+        let exe = Path::new(r"C:\Program Files\rddns\rddns.exe");
+        let cfg = Path::new(r"C:\Program Files\rddns\config.json");
+        let cmd = build_sc_create_command("rddns", exe, cfg);
+        let cmd_str = format!("{:?}", cmd);
+
+        // 验证 sc.exe 指令结构与独立键值参数
+        assert!(cmd_str.contains("\"sc.exe\""));
+        assert!(cmd_str.contains("\"create\""));
+        assert!(cmd_str.contains("\"rddns\""));
+        assert!(cmd_str.contains("\"binPath=\""));
+        assert!(cmd_str.contains("\"start=\""));
+        assert!(cmd_str.contains("\"auto\""));
+        assert!(cmd_str.contains("\"DisplayName=\""));
+        assert!(cmd_str.contains(r#""C:\\Program Files\\rddns\\rddns.exe\" -c \"C:\\Program Files\\rddns\\config.json\" --windows-service"#));
     }
 }
