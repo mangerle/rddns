@@ -13,10 +13,18 @@ const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
-/// 全局雨云 Domain ID 缓存池 ((api_key, root_domain) -> domain_id)，实现多账号隔离与跨周期缓存复用
-static GLOBAL_RAINYUN_DOMAIN_CACHE: LazyLock<RwLock<HashMap<(String, String), String>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+/// 雨云 Domain ID 缓存生存期（2 小时）
+const RAINYUN_DOMAIN_CACHE_TTL: Duration = Duration::from_secs(7200);
+
+type RainyunDomainKey = (String, String);
+type RainyunCachedDomain = (Instant, String);
+
+/// 全局雨云 Domain ID 缓存池 ((api_key_hash, root_domain) -> (created_at, domain_id))
+static GLOBAL_RAINYUN_DOMAIN_CACHE: LazyLock<
+    RwLock<HashMap<RainyunDomainKey, RainyunCachedDomain>>,
+> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// 雨云 (RainYun) DNS 提供商
 pub struct RainYunProvider {
@@ -88,7 +96,10 @@ impl RainYunProvider {
             crate::util::crypto::sha256_hex(self.api_key.as_bytes()),
             root_domain.to_string(),
         );
-        if let Some(cached_id) = GLOBAL_RAINYUN_DOMAIN_CACHE.read().get(&cache_key).cloned() {
+        if let Some((created_at, cached_id)) =
+            GLOBAL_RAINYUN_DOMAIN_CACHE.read().get(&cache_key).cloned()
+            && created_at.elapsed() < RAINYUN_DOMAIN_CACHE_TTL
+        {
             return Ok(cached_id);
         }
 
@@ -133,7 +144,7 @@ impl RainYunProvider {
                     if guard.len() >= 128 {
                         guard.clear();
                     }
-                    guard.insert(cache_key, did_str.clone());
+                    guard.insert(cache_key, (Instant::now(), did_str.clone()));
                     return Ok(did_str);
                 }
 

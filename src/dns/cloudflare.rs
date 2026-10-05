@@ -11,11 +11,15 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
 /// Cloudflare 以TTL=1 表示「自动 TTL」，与用户未指定时的语义一致
 const CF_AUTO_TTL: u32 = 1;
+
+/// Cloudflare Zone ID 缓存生存期（2 小时）
+const CF_ZONE_CACHE_TTL: Duration = Duration::from_secs(7200);
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 struct ZoneCacheKey {
@@ -23,8 +27,8 @@ struct ZoneCacheKey {
     root_domain: String,
 }
 
-/// 全局 Cloudflare Zone ID 缓存池 ((auth_identity, root_domain) -> zone_id)，实现多账号隔离与跨周期缓存复用
-static GLOBAL_CF_ZONE_CACHE: LazyLock<RwLock<HashMap<ZoneCacheKey, String>>> =
+/// 全局 Cloudflare Zone ID 缓存池 ((auth_identity, root_domain) -> (created_at, zone_id))
+static GLOBAL_CF_ZONE_CACHE: LazyLock<RwLock<HashMap<ZoneCacheKey, (Instant, String)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub struct CloudflareProvider {
@@ -137,7 +141,9 @@ impl CloudflareProvider {
             root_domain: root_domain.to_string(),
         };
 
-        if let Some(cached_id) = GLOBAL_CF_ZONE_CACHE.read().get(&cache_key).cloned() {
+        if let Some((created_at, cached_id)) = GLOBAL_CF_ZONE_CACHE.read().get(&cache_key).cloned()
+            && created_at.elapsed() < CF_ZONE_CACHE_TTL
+        {
             return Ok(cached_id);
         }
 
@@ -159,7 +165,7 @@ impl CloudflareProvider {
         if guard.len() >= 128 {
             guard.clear();
         }
-        guard.insert(cache_key, zone.id.clone());
+        guard.insert(cache_key, (Instant::now(), zone.id.clone()));
 
         Ok(zone.id)
     }
