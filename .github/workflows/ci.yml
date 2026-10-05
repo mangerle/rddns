@@ -19,6 +19,18 @@ env:
   CARGO_NET_OFFLINE: "false"
 
 jobs:
+  security-audit:
+    name: 依赖安全与协议审计 (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 运行 cargo-deny 审计
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
   build-frontend:
     name: 构建前端静态资源 (Build Frontend)
     runs-on: ubuntu-latest

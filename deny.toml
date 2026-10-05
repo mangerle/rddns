@@ -1,0 +1,52 @@
+# cargo-deny 配置文件
+# 遵循通用 Rust 质量规范：自动检测安全漏洞、开源协议合规性与依赖供应链安全
+
+[graph]
+targets = []
+
+[advisories]
+# 发现已知 CVE/RUSTSEC 漏洞直接报错阻断流水线
+vulnerability = "deny"
+# 未维护警告
+unmaintained = "warn"
+# 被 crates.io 撤回的包直接报错阻断
+yanked = "deny"
+# 一般预警
+notice = "warn"
+# 临时忽略的 Advisory 列表 (必须附带技术原因与跟踪链接)
+ignore = []
+
+[licenses]
+# 允许的开源协议白名单 (允许主流宽松开源协议)
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+# 针对同名依赖多版本共存发出警告
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# 仅允许官方 crates.io 注册表，阻断未知来源
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
