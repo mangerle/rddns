@@ -139,6 +139,42 @@ fn split_sub_and_root_by_psl(domain_ascii: &str) -> (String, String) {
     }
 }
 
+/// 校验子域名是否包含非法或破坏性字符（防路径穿越与 URL 注入）
+///
+/// # 设计原理
+/// - **实现初衷**: 许多 DNS 服务商的 API 直接将子域名拼接入请求 URL 路径或 Query 参数中。
+///   若子域名包含 `../`、`/`、`?`、`#`、`&` 等破坏性字符，将导致路径穿越或参数污染 (P1-13)。
+/// - **核心优势**: 严格校验子域名字符集，只允许字母、数字、连字符 `-`、下划线 `_`、点号 `.`，以及特殊的 `@` 与 `*`。
+fn is_valid_sub_domain(sub: &str) -> bool {
+    if sub.is_empty() {
+        return false;
+    }
+    if sub == "@" || sub == "*" {
+        return true;
+    }
+    // 禁止以点号开头或结尾，禁止连续点号（防 .. 路径穿越）
+    if sub.starts_with('.') || sub.ends_with('.') || sub.contains("..") {
+        return false;
+    }
+    // 逐字符白名单校验：只能由 a-z, A-Z, 0-9, '-', '_', '.' 构成，严禁包含 / \ ? # & 等
+    sub.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// 校验根域名格式合法性
+fn is_valid_root_domain(root: &str) -> bool {
+    if root.is_empty()
+        || !root.contains('.')
+        || root.starts_with('.')
+        || root.ends_with('.')
+        || root.contains("..")
+    {
+        return false;
+    }
+    root.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+}
+
 /// 解析用户配置的单个域名字符串
 ///
 /// # 设计原理
@@ -151,13 +187,13 @@ fn split_sub_and_root_by_psl(domain_ascii: &str) -> (String, String) {
 ///   - `sub:example.com?line=telecom` -> 提取扩展参数
 pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     let (domain_raw, custom_params) = clean_url_and_extract_params(raw_input)?;
+    if domain_raw.contains("..") {
+        return None;
+    }
     let (cleaned_domain_opt, explicit_sub_root) = parse_explicit_sub_root(domain_raw);
 
     if let Some((sub, root)) = explicit_sub_root {
         let root_ascii = to_ascii_domain(root);
-        if root_ascii.is_empty() {
-            return None;
-        }
         let sub_trimmed = sub.trim();
         let sub_ascii = if sub_trimmed.is_empty() || sub_trimmed == "@" {
             "@".to_string()
@@ -166,6 +202,9 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
         } else {
             to_ascii_domain(sub_trimmed)
         };
+        if !is_valid_sub_domain(&sub_ascii) || !is_valid_root_domain(&root_ascii) {
+            return None;
+        }
         return Some(ParsedDomain {
             raw: raw_input.to_string(),
             root_domain: root_ascii,
@@ -180,6 +219,9 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     }
 
     let (sub_domain, root_domain) = split_sub_and_root_by_psl(&domain_ascii);
+    if !is_valid_sub_domain(&sub_domain) || !is_valid_root_domain(&root_domain) {
+        return None;
+    }
 
     Some(ParsedDomain {
         raw: raw_input.to_string(),
@@ -438,5 +480,28 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].full_domain(), "example.com");
         assert_eq!(parsed[1].full_domain(), "sub.test.org");
+    }
+
+    #[test]
+    fn test_parse_domain_path_traversal_and_injection_blocked() {
+        // 1. 冒号语法中的路径穿越攻击
+        assert!(parse_domain("../../evil:example.com").is_none());
+        assert!(parse_domain("sub/test:example.com").is_none());
+        assert!(parse_domain("sub\\test:example.com").is_none());
+
+        // 2. 连续点号 (..)
+        assert!(parse_domain("sub..name:example.com").is_none());
+        assert!(parse_domain("sub..example.com").is_none());
+
+        // 3. 非法 URL 控制字符注入
+        assert!(parse_domain("sub?query=evil:example.com").is_none());
+        assert!(parse_domain("sub#anchor:example.com").is_none());
+        assert!(parse_domain("sub&arg=1:example.com").is_none());
+
+        // 4. 合法字符（下划线、短横线、多级子域名、泛域名、根域@）正常放行
+        assert!(parse_domain("_acme-challenge:example.com").is_some());
+        assert!(parse_domain("my-host.sub:example.com").is_some());
+        assert!(parse_domain("*.example.com").is_some());
+        assert!(parse_domain("@:example.com").is_some());
     }
 }
