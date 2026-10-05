@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "web-ui/"]
+#[folder = "frontend/dist/"]
 pub struct WebAssets;
 
 #[derive(RustEmbed)]
