@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use log::info;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use shipup::{DownloadedUpdate, RestartOptions, Update, UpdateEvent, Updater, schedule_restart};
-use std::time::Duration;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 
 /// 版本检查结果信息
@@ -48,46 +50,80 @@ fn build_updater(timeout: Duration) -> Result<Updater> {
     builder.build().context("构建自更新器实例失败")
 }
 
-/// 检查 GitHub Releases 最新版本信息
+/// 远端版本检查缓存生存时间（5 分钟）
+///
+/// # 设计原理
+/// - **实现初衷**: 避免前端高频请求版本接口触发 GitHub 频控限制或引入请求等待延迟。
+/// - **核心优势**: 内存级命中返回，毫秒级响应，并在远端网络抖动时提供已缓存结果降级。
+const VERSION_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static VERSION_CACHE: LazyLock<RwLock<Option<(Instant, VersionInfo)>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+/// 检查 GitHub Releases 最新版本信息 (支持 5 分钟内存缓存与优雅降级)
 ///
 /// # 设计原理
 /// - **实现初衷**：通过 shipup 统一接口检查远端发布清单，获取最新版本号、发布日志与升级状态。
-/// - **核心优势**：直接拉取 Release 静态清单，免受 GitHub API Rate Limit 限流影响；异步非阻塞探测。
+/// - **核心优势**：直接拉取 Release 静态清单，配合本地 5 分钟缓存杜绝频繁出站请求；异步非阻塞探测。
 ///
 /// # Errors
-/// 当网络通信中断或清单解析异常时返回错误。
+/// 当网络通信中断或清单解析异常且无旧缓存可用时返回错误。
 pub async fn check_version() -> Result<VersionInfo> {
+    // 1. 尝试从缓存中命中有效结果
+    {
+        let cache = VERSION_CACHE.read();
+        if let Some((cached_at, ref info)) = *cache
+            && cached_at.elapsed() < VERSION_CACHE_TTL
+        {
+            return Ok(info.clone());
+        }
+    }
+
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let updater = build_updater(Duration::from_secs(15))?;
 
-    match updater.check_async().await? {
-        Some(update) => {
+    let check_res = updater.check_async().await;
+    match check_res {
+        Ok(Some(update)) => {
             let latest_version = format!("v{}", update.version());
             let release_url = format!(
                 "https://github.com/mangerle/rddns/releases/tag/{}",
                 latest_version
             );
-            Ok(VersionInfo {
+            let info = VersionInfo {
                 current_version,
                 latest_version,
                 has_update: true,
                 release_url,
                 release_notes: update.notes().unwrap_or("").to_string(),
-            })
+            };
+            *VERSION_CACHE.write() = Some((Instant::now(), info.clone()));
+            Ok(info)
         }
-        None => {
+        Ok(None) => {
             let latest_version = format!("v{}", current_version);
             let release_url = format!(
                 "https://github.com/mangerle/rddns/releases/tag/{}",
                 latest_version
             );
-            Ok(VersionInfo {
+            let info = VersionInfo {
                 current_version,
                 latest_version,
                 has_update: false,
                 release_url,
                 release_notes: String::new(),
-            })
+            };
+            *VERSION_CACHE.write() = Some((Instant::now(), info.clone()));
+            Ok(info)
+        }
+        Err(e) => {
+            // 网络异常时，若缓存中存在旧数据，降级返回旧数据
+            let cache = VERSION_CACHE.read();
+            if let Some((_, ref info)) = *cache {
+                log::debug!("获取 GitHub 版本失败，降级使用旧缓存: {:#}", e);
+                return Ok(info.clone());
+            }
+            Err(e).context("检查远端版本信息失败")
         }
     }
 }
@@ -223,5 +259,25 @@ mod tests {
         let dummy_digest = [1u8; 32];
         let verify_result = verify_ed25519(&dummy_digest, &dummy_sig, OFFICIAL_UPDATE_PUBLIC_KEY);
         assert!(verify_result.is_err(), "伪造签名必须被拒绝");
+    }
+
+    #[tokio::test]
+    async fn test_version_cache_flow() {
+        let cached_info = VersionInfo {
+            current_version: "v9.9.9".to_string(),
+            latest_version: "v9.9.9".to_string(),
+            has_update: false,
+            release_url: "https://example.com".to_string(),
+            release_notes: "测试备注".to_string(),
+        };
+        *VERSION_CACHE.write() = Some((Instant::now(), cached_info.clone()));
+
+        let result = check_version().await;
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert_eq!(info.current_version, "v9.9.9");
+        assert_eq!(info.release_notes, "测试备注");
+
+        *VERSION_CACHE.write() = None;
     }
 }
