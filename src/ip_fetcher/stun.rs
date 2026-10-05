@@ -217,9 +217,19 @@ impl StunIpFetcher {
         }
     }
 
+    /// STUN 服务器地址字符串最大合法长度 (255 字符)
+    const MAX_STUN_SERVER_LEN: usize = 255;
+
     /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP (支持多解析候选地址遍历与 Anycast 兼容)
     async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
-        let norm_server = Self::normalize_server_addr(server);
+        let trimmed = server.trim();
+        if trimmed.is_empty() || trimmed.len() > Self::MAX_STUN_SERVER_LEN {
+            return Err(FetchError::Other(format!(
+                "STUN 服务器地址非法或超出最大允许长度 (255 字符): [{}]",
+                server
+            )));
+        }
+        let norm_server = Self::normalize_server_addr(trimmed);
         let target_addrs = Self::resolve_stun_target_addrs(&norm_server, is_ipv6).await?;
         let bind_addr = Self::determine_bind_addr(self.http_interface.as_deref(), is_ipv6);
 
@@ -423,6 +433,19 @@ mod tests {
         assert_eq!(
             StunIpFetcher::normalize_server_addr("[2400:cb00::1]:3478"),
             "[2400:cb00::1]:3478"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stun_server_addr_len_limit() {
+        let fetcher = StunIpFetcher::new(None, None);
+        assert!(fetcher.probe_single_server("   ", false).await.is_err());
+        let oversized = format!("{}.com", "a".repeat(260));
+        assert!(
+            fetcher
+                .probe_single_server(&oversized, false)
+                .await
+                .is_err()
         );
     }
 }
