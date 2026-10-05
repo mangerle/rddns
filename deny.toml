@@ -5,25 +5,22 @@
 targets = []
 
 [advisories]
-# 发现已知 CVE/RUSTSEC 漏洞直接报错阻断流水线
-vulnerability = "deny"
-# 未维护警告
-unmaintained = "warn"
-# 被 crates.io 撤回的包直接报错阻断
+# 被 crates.io 撤回的包直接报错阻断 (yanked crates)
 yanked = "deny"
-# 一般预警
-notice = "warn"
 # 临时忽略的 Advisory 列表 (必须附带技术原因与跟踪链接)
 ignore = []
 
 [licenses]
-# 允许的开源协议白名单 (允许主流宽松开源协议)
+# 忽略未使用的白名单协议预警
+unused-allowed-license = "allow"
+# 允许的开源协议白名单 (允许主流宽松开源协议及根证书数据许可)
 allow = [
     "0BSD",
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",
