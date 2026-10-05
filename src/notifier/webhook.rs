@@ -80,7 +80,17 @@ impl Notifier for CustomWebhookNotifier {
 
         let body =
             crate::notifier::trait_def::execute_notify_request(req, self.channel_name()).await?;
-        info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
+        let truncated_body = if body.chars().count() > 256 {
+            let s: String = body.chars().take(256).collect();
+            format!("{}... (已截断)", s)
+        } else {
+            body
+        };
+        info!(
+            "[{}] Webhook 执行成功: {}",
+            self.channel_name(),
+            truncated_body
+        );
         Ok(())
     }
 }

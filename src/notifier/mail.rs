@@ -176,6 +176,23 @@ impl EmailNotifier {
     }
 }
 
+/// 对邮箱地址进行安全脱敏（保留首尾字符，遮蔽中间用户名，杜绝日志泄露 PII 个人隐私）
+pub fn mask_email(email: &str) -> String {
+    let trimmed = email.trim();
+    if let Some((user, domain)) = trimmed.split_once('@') {
+        let chars: Vec<char> = user.chars().collect();
+        let masked_user = match chars.len() {
+            0 => "***".to_string(),
+            1 => format!("{}***", chars[0]),
+            2 => format!("{}***{}", chars[0], chars[1]),
+            _ => format!("{}***{}", chars[0], chars[chars.len() - 1]),
+        };
+        format!("{}@{}", masked_user, domain)
+    } else {
+        "***".to_string()
+    }
+}
+
 #[async_trait]
 impl Notifier for EmailNotifier {
     fn channel_name(&self) -> &'static str {
@@ -212,7 +229,11 @@ impl Notifier for EmailNotifier {
                     valid_to_count += 1;
                 }
                 Err(e) => {
-                    warn!("收件人邮箱地址 [{}] 格式不合法，已跳过: {}", clean, e);
+                    warn!(
+                        "收件人邮箱地址 [{}] 格式不合法，已跳过: {}",
+                        mask_email(clean),
+                        e
+                    );
                 }
             }
         }
@@ -287,5 +308,14 @@ mod tests {
         assert!(html.contains("&lt;任务&amp;危险&gt;"));
         assert!(!html.contains("<script>"));
         assert!(!html.contains("<任务&危险>"));
+    }
+
+    #[test]
+    fn test_mask_email() {
+        assert_eq!(mask_email("alice@example.com"), "a***e@example.com");
+        assert_eq!(mask_email("a@example.com"), "a***@example.com");
+        assert_eq!(mask_email("ab@example.com"), "a***b@example.com");
+        assert_eq!(mask_email("invalid_email"), "***");
+        assert_eq!(mask_email(""), "***");
     }
 }
