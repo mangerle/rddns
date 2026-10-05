@@ -308,7 +308,7 @@ impl DdnsEngine {
             match res {
                 Ok(r) => sync_results.push(r),
                 Err(join_err) => {
-                    panicked_domains += 1;
+                    panicked_domains = panicked_domains.saturating_add(1);
                     error!(
                         "[{}] 域名同步子任务异常终止 (panic={}): {}",
                         task.name,
