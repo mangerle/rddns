@@ -110,7 +110,23 @@ impl DdnsEngine {
             });
         }
 
-        while join_set.join_next().await.is_some() {}
+        let mut panicked_tasks = 0usize;
+        while let Some(res) = join_set.join_next().await {
+            if let Err(join_err) = res {
+                panicked_tasks += 1;
+                error!(
+                    "任务子协程异常终止 (panic={}): {}",
+                    join_err.is_panic(),
+                    join_err
+                );
+            }
+        }
+        if panicked_tasks > 0 {
+            error!(
+                "本轮共有 {} 个任务子协程异常终止，其状态未正常更新",
+                panicked_tasks
+            );
+        }
     }
 
     /// 处理单个 DNS 任务
@@ -129,19 +145,30 @@ impl DdnsEngine {
         let mut current_state = state_manager.get_task_state(&task.name);
 
         let (ipv4_opt, ipv6_opt) = sync::probe_task_ips(task).await;
+        let mut ip_fetch_failed = false;
         if task.ipv4.enabled {
-            current_state.ipv4_fail_count = if ipv4_opt.is_some() {
-                0
+            if ipv4_opt.is_some() {
+                current_state.ipv4_fail_count = 0;
             } else {
-                current_state.ipv4_fail_count + 1
-            };
+                current_state.ipv4_fail_count = current_state.ipv4_fail_count.saturating_add(1);
+                ip_fetch_failed = true;
+                current_state.last_error = Some(format!(
+                    "[{}] 公网 IPv4 获取失败（连续 {} 次），本轮跳过云端同步",
+                    task.name, current_state.ipv4_fail_count
+                ));
+            }
         }
         if task.ipv6.enabled {
-            current_state.ipv6_fail_count = if ipv6_opt.is_some() {
-                0
+            if ipv6_opt.is_some() {
+                current_state.ipv6_fail_count = 0;
             } else {
-                current_state.ipv6_fail_count + 1
-            };
+                current_state.ipv6_fail_count = current_state.ipv6_fail_count.saturating_add(1);
+                ip_fetch_failed = true;
+                current_state.last_error = Some(format!(
+                    "[{}] 公网 IPv6 获取失败（连续 {} 次），本轮跳过云端同步",
+                    task.name, current_state.ipv6_fail_count
+                ));
+            }
         }
 
         let parsed_v4 = if task.ipv4.enabled {
@@ -156,6 +183,16 @@ impl DdnsEngine {
         };
 
         current_state.check_counter = current_state.check_counter.saturating_add(1);
+        if !force_sync && decision::should_backoff(&current_state, cache_times, ip_fetch_failed) {
+            debug!(
+                "[{}] IP 探测连续失败且处于指数退避期 (计数: {})，跳过云端请求",
+                task.name, current_state.check_counter
+            );
+            current_state.last_sync_time =
+                Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            state_manager.update_task_state(&task.name, |s| *s = current_state);
+            return;
+        }
         let reach_cache_limit = current_state.check_counter >= cache_times;
         let should_sync = decision::evaluate_sync_necessity(&SyncEvaluationParams {
             task,

@@ -441,3 +441,18 @@ fn test_update_runtime_state_resets_counter_on_cache_limit() {
 
     assert_eq!(state.check_counter, 0);
 }
+
+#[tokio::test]
+async fn test_run_loop_graceful_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_file = dir.path().join(".rddns.toml");
+    let manager = Arc::new(ConfigManager::load_or_create(config_file).unwrap());
+    let state_mgr = StateManager::new();
+
+    let (engine, _tx) = DdnsEngine::new(manager, state_mgr);
+    let cancel_token = tokio_util::sync::CancellationToken::new();
+
+    // 预设取消状态，验证 run_loop 立即平滑退出
+    cancel_token.cancel();
+    engine.run_loop(cancel_token).await;
+}

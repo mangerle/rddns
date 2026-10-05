@@ -169,6 +169,27 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
         }
     }
 
+    // 裁剪已从当前任务配置中移除的废弃域名记录，防止内存持续膨胀 (F-6)
+    let mut valid_keys = std::collections::HashSet::new();
+    if params.task.ipv4.enabled {
+        for d in &params.task.ipv4.domains {
+            if let Some(parsed) = crate::core::domain::parse_domain(d) {
+                valid_keys.insert(format!("{}:A", parsed.full_domain()));
+            }
+        }
+    }
+    if params.task.ipv6.enabled {
+        for d in &params.task.ipv6.domains {
+            if let Some(parsed) = crate::core::domain::parse_domain(d) {
+                valid_keys.insert(format!("{}:AAAA", parsed.full_domain()));
+            }
+        }
+    }
+    params
+        .current_state
+        .synced_domains
+        .retain(|k, _| valid_keys.contains(k));
+
     let ipv4_all_ok = is_protocol_all_ok(
         params.task.ipv4.enabled,
         params.ipv4_opt.is_some(),
@@ -252,4 +273,126 @@ pub(crate) fn dispatch_sync_notification(
         results: sync_results,
         timestamp: Local::now(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::NotificationConfig;
+    use crate::core::domain::{ParsedDomain, parse_domain};
+    use crate::dns::trait_def::DnsProvider;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    struct DummyProvider;
+    #[async_trait::async_trait]
+    impl DnsProvider for DummyProvider {
+        fn provider_name(&self) -> &'static str {
+            "Dummy"
+        }
+        async fn sync_record(
+            &self,
+            domain: &ParsedDomain,
+            record_type: DnsRecordType,
+            ip: &IpAddr,
+            _ttl: Option<u32>,
+        ) -> Result<SyncRecordResult, crate::dns::trait_def::DnsProviderError> {
+            Ok(SyncRecordResult::updated(
+                domain.full_domain(),
+                record_type,
+                ip.to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_protocol_sync_tasks_no_ip() {
+        let mut join_set = JoinSet::new();
+        let domain = parse_domain("test.example.com").unwrap();
+        let sem = Arc::new(Semaphore::new(1));
+        let synced = HashMap::new();
+
+        spawn_protocol_sync_tasks(
+            &mut join_set,
+            ProtocolSyncParams {
+                enabled: true,
+                task_name: "test_task".to_string(),
+                record_type: DnsRecordType::A,
+                ip_opt: None,
+                domains: &[domain],
+                provider: Arc::new(DummyProvider),
+                ttl: None,
+                synced_domains: &synced,
+                force_sync_all: false,
+                semaphore: sem,
+            },
+        );
+
+        let res = join_set.join_next().await.unwrap().unwrap();
+        assert_eq!(res.status, SyncStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_protocol_sync_tasks_short_circuit_and_force() {
+        let mut join_set = JoinSet::new();
+        let domain = parse_domain("test.example.com").unwrap();
+        let sem = Arc::new(Semaphore::new(1));
+        let mut synced = HashMap::new();
+        synced.insert("test.example.com:A".to_string(), "1.2.3.4".to_string());
+
+        // 1. 本地 IP 未变且已同步短路
+        spawn_protocol_sync_tasks(
+            &mut join_set,
+            ProtocolSyncParams {
+                enabled: true,
+                task_name: "test_task".to_string(),
+                record_type: DnsRecordType::A,
+                ip_opt: Some(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))),
+                domains: std::slice::from_ref(&domain),
+                provider: Arc::new(DummyProvider),
+                ttl: None,
+                synced_domains: &synced,
+                force_sync_all: false,
+                semaphore: sem.clone(),
+            },
+        );
+        let res = join_set.join_next().await.unwrap().unwrap();
+        assert_eq!(res.status, SyncStatus::Unchanged);
+
+        // 2. force_sync_all 强制同步
+        spawn_protocol_sync_tasks(
+            &mut join_set,
+            ProtocolSyncParams {
+                enabled: true,
+                task_name: "test_task".to_string(),
+                record_type: DnsRecordType::A,
+                ip_opt: Some(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))),
+                domains: std::slice::from_ref(&domain),
+                provider: Arc::new(DummyProvider),
+                ttl: None,
+                synced_domains: &synced,
+                force_sync_all: true,
+                semaphore: sem,
+            },
+        );
+        let res2 = join_set.join_next().await.unwrap().unwrap();
+        assert_eq!(res2.status, SyncStatus::Updated);
+    }
+
+    #[test]
+    fn test_dispatch_sync_notification_statuses() {
+        let dispatcher = NotificationDispatcher::new(NotificationConfig::default());
+
+        // 验证空列表安全跳过
+        dispatch_sync_notification("task", &dispatcher, None, None, Vec::new());
+
+        // 构造三态结果验证
+        let s1 = SyncRecordResult::unchanged("a.com", DnsRecordType::A, "1.1.1.1");
+        let s2 = SyncRecordResult::failed("b.com", DnsRecordType::A, "1.1.1.1", "err");
+        dispatch_sync_notification("task", &dispatcher, None, None, vec![s1.clone()]);
+        dispatch_sync_notification("task", &dispatcher, None, None, vec![s2.clone()]);
+        dispatch_sync_notification("task", &dispatcher, None, None, vec![s1, s2]);
+    }
 }

@@ -90,3 +90,92 @@ pub(crate) fn is_protocol_all_ok(
         .count();
     success_count == domain_count
 }
+
+/// 判定是否因 IP 获取连续失败而需要按退避周期跳过当前轮次 (P-2, F-5)
+///
+/// # 设计原理
+/// - **实现初衷**: 当外部探测网络或本地网卡离线导致连续失败时，避免每一轮高频空转并降低告警日志噪音。
+/// - **核心优势**: 连续失败达到 3 次后进入指数退避阶梯（1/2/4/8 倍 `cache_times` 周期），自适应平抑风暴。
+pub(crate) fn should_backoff(
+    state: &crate::core::state::TaskRuntimeState,
+    cache_times: u32,
+    ip_fetch_failed: bool,
+) -> bool {
+    if !ip_fetch_failed {
+        return false;
+    }
+    let fail = state.ipv4_fail_count.max(state.ipv6_fail_count);
+    if fail < 3 {
+        return false;
+    }
+    let rounds = 1u32 << ((fail.saturating_sub(3)).min(3));
+    state.check_counter < cache_times.saturating_mul(rounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::TaskRuntimeState;
+
+    #[test]
+    fn test_should_backoff_thresholds() {
+        // 失败次数未达到 3，不退避
+        let mut state = TaskRuntimeState {
+            ipv4_fail_count: 2,
+            ..Default::default()
+        };
+        assert!(!should_backoff(&state, 5, true));
+        assert!(!should_backoff(&state, 5, false));
+
+        // 连续失败 3 次，rounds = 1 (1 << 0)，阈值 = 5
+        state.ipv4_fail_count = 3;
+        state.check_counter = 4;
+        assert!(should_backoff(&state, 5, true));
+        state.check_counter = 5;
+        assert!(!should_backoff(&state, 5, true));
+
+        // 连续失败 4 次，rounds = 2 (1 << 1)，阈值 = 10
+        state.ipv4_fail_count = 4;
+        state.check_counter = 9;
+        assert!(should_backoff(&state, 5, true));
+        state.check_counter = 10;
+        assert!(!should_backoff(&state, 5, true));
+    }
+
+    #[test]
+    fn test_validate_task_preconditions() {
+        use crate::config::model::dns::DnsTaskConfig;
+        use crate::config::model::provider::ProviderConfig;
+
+        // 1. 禁用状态
+        let mut task = DnsTaskConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(!validate_task_preconditions(&task));
+        task.enabled = true;
+
+        // 2. 未配置凭据
+        task.provider = ProviderConfig::Cloudflare {
+            api_token: None,
+            api_key: None,
+            email: None,
+        };
+        assert!(!validate_task_preconditions(&task));
+
+        // 3. 配置了凭据但未配置域名
+        task.provider = ProviderConfig::Cloudflare {
+            api_token: Some("token123".to_string()),
+            api_key: None,
+            email: None,
+        };
+        task.ipv4.domains.clear();
+        task.ipv6.domains.clear();
+        assert!(!validate_task_preconditions(&task));
+
+        // 4. 合法配置
+        task.ipv4.enabled = true;
+        task.ipv4.domains.push("example.com".to_string());
+        assert!(validate_task_preconditions(&task));
+    }
+}
