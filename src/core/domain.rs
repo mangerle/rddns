@@ -189,6 +189,44 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
     })
 }
 
+/// 批量解析域名列表，同时收集格式非法的域名条目作为同步失败记录
+///
+/// # 设计原理
+/// - **实现初衷**: 当用户配置的域名存在语法错误或根域名解析失败时，显式生成失败记录汇入同步结果。
+/// - **核心优势**: 杜绝配置错误域名被静默忽略导致引擎判定为全绿健康（P1-17 缺陷）。
+pub fn parse_domain_list_with_invalid(
+    raw_list: &[String],
+    record_type: crate::dns::trait_def::DnsRecordType,
+) -> (
+    Vec<ParsedDomain>,
+    Vec<crate::dns::trait_def::SyncRecordResult>,
+) {
+    let mut parsed = Vec::with_capacity(raw_list.len());
+    let mut invalid = Vec::new();
+    for raw in raw_list {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        match parse_domain(trimmed) {
+            Some(domain) => parsed.push(domain),
+            None => {
+                warn!(
+                    "配置的域名 [{}] 格式非法或无法识别根域名，已被跳过，请检查任务域名配置",
+                    raw
+                );
+                invalid.push(crate::dns::trait_def::SyncRecordResult::failed(
+                    raw.to_string(),
+                    record_type,
+                    "未知/解析失败",
+                    "域名格式非法或无法识别有效根域名",
+                ));
+            }
+        }
+    }
+    (parsed, invalid)
+}
+
 /// 批量解析域名列表
 ///
 /// 遇到格式非法或无法识别根域名的输入时，打印警告日志提醒用户核对配置，并安全跳过该项。

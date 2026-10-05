@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::model::{AppConfig, DnsTaskConfig, IpFetchConfig, IpSourceType, ProviderConfig};
-use crate::core::domain::ParsedDomain;
+use crate::core::domain::{ParsedDomain, parse_domain_list, parse_domain_list_with_invalid};
 use crate::core::state::TaskRuntimeState;
-use crate::dns::trait_def::{DnsRecordType, SyncRecordResult};
+use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[tokio::test]
@@ -290,6 +290,21 @@ fn test_is_protocol_all_ok_boundaries() {
         &[]
     ));
 
+    // 协议启用、即使无有效域名但存在失败记录 -> 必须判定为异常 (P1-17)
+    let failed_with_zero_count = vec![SyncRecordResult::failed(
+        "invalid..domain",
+        DnsRecordType::A,
+        "0.0.0.0",
+        "格式错误",
+    )];
+    assert!(!DdnsEngine::is_protocol_all_ok(
+        true,
+        true,
+        0,
+        DnsRecordType::A,
+        &failed_with_zero_count
+    ));
+
     // 全部成功
     let ok_results = vec![
         SyncRecordResult::unchanged("a.example.com", DnsRecordType::A, "1.2.3.4"),
@@ -482,4 +497,20 @@ async fn test_run_loop_cancelled_via_token_when_running() {
         .await
         .expect("调度循环未在规定时间内平滑退出")
         .expect("调度任务执行异常");
+}
+
+#[test]
+fn test_parse_domain_list_with_invalid_captures_errors() {
+    let raw = vec![
+        "valid.example.com".to_string(),
+        "localhost".to_string(),
+        "".to_string(),
+        "# 这是注释".to_string(),
+    ];
+    let (parsed, invalid) = parse_domain_list_with_invalid(&raw, DnsRecordType::A);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].full_domain(), "valid.example.com");
+    assert_eq!(invalid.len(), 1);
+    assert_eq!(invalid[0].domain, "localhost");
+    assert_eq!(invalid[0].status, SyncStatus::Failed);
 }

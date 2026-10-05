@@ -67,7 +67,7 @@ pub(crate) fn evaluate_sync_necessity(params: &SyncEvaluationParams<'_>) -> bool
 ///
 /// # 设计原理
 /// - **实现初衷**: 精确评估单个协议（IPv4 或 IPv6）的整体同步完整性，决定是否可更新对应的全局 `last_ipv4` / `last_ipv6` 指针。
-/// - **核心优势**: 严格校验成功条目数与任务域名总数相等，杜绝部分子任务失败被误判为全量成功。
+/// - **核心优势**: 严格校验成功条目数与任务域名总数相等，且只要存在失败项即判为异常，杜绝部分子任务失败或全解析失败被误判为全量成功 (P1-17)。
 pub(crate) fn is_protocol_all_ok(
     enabled: bool,
     has_ip: bool,
@@ -78,9 +78,18 @@ pub(crate) fn is_protocol_all_ok(
     if !enabled {
         return true;
     }
+    // 若协议已启用但未探测到 IP，则判定该协议同步失败
     if !has_ip {
         return false;
     }
+    // 检查是否存在属于本协议的失败记录，若存在则绝对不能判定为成功 (P1-17)
+    let has_failures = results
+        .iter()
+        .any(|r| r.record_type == record_type && r.status == SyncStatus::Failed);
+    if has_failures {
+        return false;
+    }
+    // 若协议启用且未探测失败但配置的域名列表确实为空，不参与失败阻断
     if domain_count == 0 {
         return true;
     }

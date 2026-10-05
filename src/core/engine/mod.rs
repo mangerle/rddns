@@ -6,7 +6,7 @@ pub(crate) mod sync;
 mod tests;
 
 use crate::config::storage::ConfigManager;
-use crate::core::domain::parse_domain_list;
+use crate::core::domain::parse_domain_list_with_invalid;
 use crate::core::state::StateManager;
 use crate::dns::create_dns_provider;
 use crate::dns::trait_def::DnsRecordType;
@@ -178,16 +178,17 @@ impl DdnsEngine {
             }
         }
 
-        let parsed_v4 = if task.ipv4.enabled {
-            parse_domain_list(&task.ipv4.domains)
+        let (parsed_v4, invalid_v4) = if task.ipv4.enabled {
+            parse_domain_list_with_invalid(&task.ipv4.domains, DnsRecordType::A)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
-        let parsed_v6 = if task.ipv6.enabled {
-            parse_domain_list(&task.ipv6.domains)
+        let (parsed_v6, invalid_v6) = if task.ipv6.enabled {
+            parse_domain_list_with_invalid(&task.ipv6.domains, DnsRecordType::AAAA)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
+        let has_invalid_domains = !invalid_v4.is_empty() || !invalid_v6.is_empty();
 
         current_state.check_counter = current_state.check_counter.saturating_add(1);
         if !force_sync && decision::should_backoff(&current_state, cache_times, ip_fetch_failed) {
@@ -201,16 +202,17 @@ impl DdnsEngine {
             return;
         }
         let reach_cache_limit = current_state.check_counter >= cache_times;
-        let should_sync = decision::evaluate_sync_necessity(&SyncEvaluationParams {
-            task,
-            cache_times,
-            current_state: &current_state,
-            v4_domains: &parsed_v4,
-            v6_domains: &parsed_v6,
-            ipv4_opt,
-            ipv6_opt,
-            force_sync,
-        });
+        let should_sync = has_invalid_domains
+            || decision::evaluate_sync_necessity(&SyncEvaluationParams {
+                task,
+                cache_times,
+                current_state: &current_state,
+                v4_domains: &parsed_v4,
+                v6_domains: &parsed_v6,
+                ipv4_opt,
+                ipv6_opt,
+                force_sync,
+            });
 
         if !should_sync {
             debug!(
@@ -297,11 +299,16 @@ impl DdnsEngine {
             }
         }
 
+        let v4_invalid_count = invalid_v4.len();
+        let v6_invalid_count = invalid_v6.len();
+        sync_results.extend(invalid_v4);
+        sync_results.extend(invalid_v6);
+
         sync::update_runtime_state_after_sync(SyncStateUpdateParams {
             task,
             current_state: &mut current_state,
-            v4_count: parsed_v4.len(),
-            v6_count: parsed_v6.len(),
+            v4_count: parsed_v4.len() + v4_invalid_count,
+            v6_count: parsed_v6.len() + v6_invalid_count,
             ipv4_opt,
             ipv6_opt,
             sync_results: &sync_results,
