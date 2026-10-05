@@ -248,35 +248,50 @@ pub enum DnsProviderError {
 }
 
 impl fmt::Display for DnsProviderError {
-    /// 统一在错误文本出口处执行脱敏
+    /// 统一在错误文本出口处执行脱敏与长度截断 (P2-17)
     ///
     /// # 设计原理
-    /// 各服务商在返回非预期响应时，往往把**完整响应体**塞入错误上下文，
-    /// 而调用点分散在 27 个 provider 中逐个改造既易漏、也难评审。
-    /// 本实现将脱敏收敛到 `Display` 这一唯一出口：无论错误由何处构造、
-    /// 经由何种路径传播（`e.to_string()` -> `SyncRecordResult.message` ->
-    /// 日志 / Web 状态面板 / 第三方通知渠道），呈现给外部的文本都必然
-    /// 已脱敏，从根本上消除凭据外泄路径。
-    ///
-    /// 代价是每次格式化多一次正则扫描，但该路径仅在错误发生时触发，
-    /// 不在同步热路径上。
+    /// 各服务商在返回非预期响应时，往往把完整响应体塞入错误上下文。
+    /// 本实现将脱敏与最大 1024 字符的截断同时收敛到 `Display` 唯一出口：
+    /// 无论错误由 40 多个构造点的何处产生，呈现给外部、日志与通知的文本
+    /// 都必然经过脱敏并受到长度上限保护，彻底消除长报文引起的内存放大与正则回溯失控。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Http(msg) => write!(f, "HTTP 通信错误: {}", sanitize_sensitive_url_params(msg)),
-            Self::Json(err) => write!(f, "JSON 序列化/反序列化错误: {}", err),
+            Self::Http(msg) => write!(
+                f,
+                "HTTP 通信错误: {}",
+                truncate_body(&sanitize_sensitive_url_params(msg))
+            ),
+            Self::Json(err) => write!(
+                f,
+                "JSON 序列化/反序列化错误: {}",
+                truncate_body(&err.to_string())
+            ),
             Self::ZoneNotFound(domain) => {
-                write!(f, "DNS 服务商未找到根域名对应的 Zone: {}", domain)
+                write!(
+                    f,
+                    "DNS 服务商未找到根域名对应的 Zone: {}",
+                    truncate_body(domain)
+                )
             }
             Self::ApiError { code, message } => write!(
                 f,
                 "服务商 API 错误 [{}]: {}",
                 code,
-                sanitize_sensitive_url_params(message)
+                truncate_body(&sanitize_sensitive_url_params(message))
             ),
             Self::MissingCredentials(msg) => {
-                write!(f, "缺少认证凭据: {}", sanitize_sensitive_url_params(msg))
+                write!(
+                    f,
+                    "缺少认证凭据: {}",
+                    truncate_body(&sanitize_sensitive_url_params(msg))
+                )
             }
-            Self::Other(msg) => write!(f, "其他服务商错误: {}", sanitize_sensitive_url_params(msg)),
+            Self::Other(msg) => write!(
+                f,
+                "其他服务商错误: {}",
+                truncate_body(&sanitize_sensitive_url_params(msg))
+            ),
         }
     }
 }
@@ -324,9 +339,10 @@ impl DnsProviderError {
     /// 错误文本的脱敏已由 [`fmt::Display`] 实现统一兜底，本构造器仅负责
     /// 结构化组装，保留调用点原有的可读构造方式。
     pub fn api(code: impl Into<String>, message: impl Into<String>) -> Self {
+        let msg = message.into();
         Self::ApiError {
             code: code.into(),
-            message: message.into(),
+            message: truncate_body(&msg).to_string(),
         }
     }
 
@@ -539,6 +555,10 @@ mod tests {
         let long = "a".repeat(2000);
         let truncated = truncate_body(&long);
         assert_eq!(truncated.len(), MAX_ERR_BODY_CHARS);
+
+        let err = DnsProviderError::api("500", "x".repeat(3000));
+        let err_str = err.to_string();
+        assert!(err_str.len() <= MAX_ERR_BODY_CHARS + 60);
     }
 
     #[test]
