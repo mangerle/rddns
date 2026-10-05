@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
@@ -182,24 +183,18 @@ impl NowcnProvider {
 }
 
 #[async_trait]
-impl DnsProvider for NowcnProvider {
+impl RecordOps for NowcnProvider {
     fn provider_name(&self) -> &'static str {
         self.provider_name
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
-
-        // 1. 查询解析记录
         let mut list_params = BTreeMap::new();
         list_params.insert("Domain".to_string(), domain.root_domain.clone());
         list_params.insert("Type".to_string(), record_type.to_string());
@@ -217,76 +212,99 @@ impl DnsProvider for NowcnProvider {
         }
 
         let records = list_resp.data.unwrap_or_default();
-        let matched = records.into_iter().find(|r| {
-            r.record_type
-                .as_deref()
-                .unwrap_or("")
-                .eq_ignore_ascii_case(&record_type.to_string())
-                && r.host.as_deref().unwrap_or("").eq_ignore_ascii_case(sub)
-        });
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                r.record_type
+                    .as_deref()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case(&record_type.to_string())
+                    && r.host.as_deref().unwrap_or("").eq_ignore_ascii_case(sub)
+            })
+            .map(|r| RemoteRecord::new(r.id.to_string(), r.value.unwrap_or_default()))
+            .collect();
 
-        if let Some(existing) = matched {
-            if existing.value.as_deref() == Some(&target_ip_str) {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        Ok(matched)
+    }
 
-            // 更新记录 (UpdateDomainRecord)
-            let mut mod_params = BTreeMap::new();
-            mod_params.insert("Id".to_string(), existing.id.to_string());
-            mod_params.insert("Domain".to_string(), domain.root_domain.clone());
-            mod_params.insert("Host".to_string(), sub.to_string());
-            mod_params.insert("Type".to_string(), record_type.to_string());
-            mod_params.insert("Value".to_string(), target_ip_str.clone());
-            mod_params.insert("Ttl".to_string(), ttl_val.to_string());
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
 
-            let act_resp: NowcnActionResp = self
-                .request_api("/api/Dns/UpdateDomainRecord", mod_params)
-                .await?;
+        let mut add_params = BTreeMap::new();
+        add_params.insert("Domain".to_string(), domain.root_domain.clone());
+        add_params.insert("Host".to_string(), sub.to_string());
+        add_params.insert("Type".to_string(), record_type.to_string());
+        add_params.insert("Value".to_string(), ip.to_string());
+        add_params.insert("Ttl".to_string(), ttl_val.to_string());
 
-            if let Some(err) = act_resp.error.filter(|e| !e.trim().is_empty()) {
-                return Err(DnsProviderError::ApiError {
-                    code: "NowcnUpdateError".to_string(),
-                    message: format!("{} 更新记录失败: {}", self.provider_name, err),
-                });
-            }
+        let act_resp: NowcnActionResp = self
+            .request_api("/api/Dns/AddDomainRecord", add_params)
+            .await?;
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 创建记录 (AddDomainRecord)
-            let mut add_params = BTreeMap::new();
-            add_params.insert("Domain".to_string(), domain.root_domain.clone());
-            add_params.insert("Host".to_string(), sub.to_string());
-            add_params.insert("Type".to_string(), record_type.to_string());
-            add_params.insert("Value".to_string(), target_ip_str.clone());
-            add_params.insert("Ttl".to_string(), ttl_val.to_string());
-
-            let act_resp: NowcnActionResp = self
-                .request_api("/api/Dns/AddDomainRecord", add_params)
-                .await?;
-
-            if let Some(err) = act_resp.error.filter(|e| !e.trim().is_empty()) {
-                return Err(DnsProviderError::ApiError {
-                    code: "NowcnCreateError".to_string(),
-                    message: format!("{} 创建记录失败: {}", self.provider_name, err),
-                });
-            }
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+        if let Some(err) = act_resp.error.filter(|e| !e.trim().is_empty()) {
+            return Err(DnsProviderError::ApiError {
+                code: "NowcnCreateError".to_string(),
+                message: format!("{} 创建记录失败: {}", self.provider_name, err),
+            });
         }
+        Ok(())
+    }
+
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+
+        let mut mod_params = BTreeMap::new();
+        mod_params.insert("Id".to_string(), record_id.to_string());
+        mod_params.insert("Domain".to_string(), domain.root_domain.clone());
+        mod_params.insert("Host".to_string(), sub.to_string());
+        mod_params.insert("Type".to_string(), record_type.to_string());
+        mod_params.insert("Value".to_string(), ip.to_string());
+        mod_params.insert("Ttl".to_string(), ttl_val.to_string());
+
+        let act_resp: NowcnActionResp = self
+            .request_api("/api/Dns/UpdateDomainRecord", mod_params)
+            .await?;
+
+        if let Some(err) = act_resp.error.filter(|e| !e.trim().is_empty()) {
+            return Err(DnsProviderError::ApiError {
+                code: "NowcnUpdateError".to_string(),
+                message: format!("{} 更新记录失败: {}", self.provider_name, err),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DnsProvider for NowcnProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

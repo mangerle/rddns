@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use log::warn;
@@ -58,22 +59,17 @@ impl SpaceshipProvider {
 }
 
 #[async_trait]
-impl DnsProvider for SpaceshipProvider {
+impl RecordOps for SpaceshipProvider {
     fn provider_name(&self) -> &'static str {
         "Spaceship"
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(60);
-
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
             ""
         } else {
@@ -82,7 +78,6 @@ impl DnsProvider for SpaceshipProvider {
 
         let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
 
-        // 1. 查询现有解析记录列表
         let list_resp = self
             .client
             .get(&domain_url)
@@ -108,72 +103,42 @@ impl DnsProvider for SpaceshipProvider {
         let list_data: SpaceshipListResponse = serde_json::from_str(&body_text)?;
         let items = list_data.items.unwrap_or_default();
 
-        let mut existing_ips = Vec::new();
-        for item in &items {
+        let mut remotes = Vec::new();
+        for item in items {
             if item
                 .record_type
                 .eq_ignore_ascii_case(&record_type.to_string())
                 && (item.name.eq_ignore_ascii_case(sub_name)
                     || (sub_name.is_empty() && item.name == "@"))
             {
-                existing_ips.push(item.address.clone());
+                remotes.push(RemoteRecord::new(item.address.clone(), item.address));
             }
         }
+        Ok(remotes)
+    }
 
-        if existing_ips.as_slice() == [target_ip_str.as_str()] {
-            return Ok(SyncRecordResult::unchanged_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ));
-        }
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(60);
+        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+            ""
+        } else {
+            &domain.sub_domain
+        };
+        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
 
-        // 2. 如果存在旧的其它 IP，先调用 DELETE 清理旧记录
-        let old_ips: Vec<String> = existing_ips
-            .into_iter()
-            .filter(|ip_item| ip_item != &target_ip_str)
-            .collect();
-
-        if !old_ips.is_empty() {
-            let del_payload: Vec<serde_json::Value> = old_ips
-                .into_iter()
-                .map(|old_ip| {
-                    json!({
-                        "type": record_type.to_string(),
-                        "address": old_ip,
-                        "name": sub_name
-                    })
-                })
-                .collect();
-
-            match self
-                .client
-                .delete(&domain_url)
-                .headers(self.build_headers())
-                .json(&del_payload)
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    if !resp.status().is_success() {
-                        let text = resp.text().await.unwrap_or_default();
-                        warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
-                    }
-                }
-                Err(e) => {
-                    warn!("Spaceship 删除旧解析记录网络请求失败: {}", e);
-                }
-            }
-        }
-
-        // 3. 调用 PUT 创建/覆盖新记录
         let put_payload = json!({
             "force": true,
             "items": [
                 {
                     "type": record_type.to_string(),
-                    "address": target_ip_str,
+                    "address": ip.to_string(),
                     "name": sub_name,
                     "ttl": ttl_val
                 }
@@ -190,12 +155,7 @@ impl DnsProvider for SpaceshipProvider {
 
         let put_status = put_resp.status();
         if put_status.is_success() {
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+            Ok(())
         } else {
             let put_body = put_resp.text().await.unwrap_or_default();
             Err(DnsProviderError::ApiError {
@@ -203,5 +163,63 @@ impl DnsProvider for SpaceshipProvider {
                 message: format!("Spaceship 记录写入失败: {}", put_body),
             })
         }
+    }
+
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+            ""
+        } else {
+            &domain.sub_domain
+        };
+        let domain_url = format!("{}/{}", SPACESHIP_API_BASE, domain.root_domain);
+
+        // 先清理旧记录
+        if !record_id.is_empty() && record_id != ip.to_string() {
+            let del_payload = json!([{
+                "type": record_type.to_string(),
+                "address": record_id,
+                "name": sub_name
+            }]);
+
+            if let Ok(resp) = self
+                .client
+                .delete(&domain_url)
+                .headers(self.build_headers())
+                .json(&del_payload)
+                .send()
+                .await
+                && !resp.status().is_success()
+            {
+                let text = resp.text().await.unwrap_or_default();
+                warn!("Spaceship 删除旧解析记录响应非成功状态: {}", text);
+            }
+        }
+
+        self.create_record(zone, domain, record_type, ip, ttl).await
+    }
+}
+
+#[async_trait]
+impl DnsProvider for SpaceshipProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

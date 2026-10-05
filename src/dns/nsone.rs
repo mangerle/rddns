@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -137,9 +138,139 @@ impl NsOneProvider {
 }
 
 #[async_trait]
-impl DnsProvider for NsOneProvider {
+impl RecordOps for NsOneProvider {
     fn provider_name(&self) -> &'static str {
         "IBM NS1 Connect"
+    }
+
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        self.check_zone(root_domain).await?;
+        Ok(root_domain.to_string())
+    }
+
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let existing = self
+            .get_record(zone, &full_domain, &record_type.to_string())
+            .await?;
+
+        let mut remotes = Vec::new();
+        if let Some(record) = existing {
+            let current_ip = record
+                .answers
+                .as_ref()
+                .and_then(|ans| ans.first())
+                .and_then(|a| a.answer.first());
+            if let Some(ip_str) = current_ip {
+                remotes.push(RemoteRecord::new(full_domain, ip_str));
+            }
+        }
+        Ok(remotes)
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let ttl_val = ttl.unwrap_or(60).max(1);
+        let answers = vec![NsOneAnswer {
+            answer: vec![ip.to_string()],
+        }];
+
+        let req_payload = NsOneRecordReq {
+            zone,
+            domain: &full_domain,
+            record_type: &record_type.to_string(),
+            ttl: ttl_val,
+            answers,
+        };
+
+        let url = format!(
+            "{}/{}/{}/{}",
+            NSONE_API_ENDPOINT, zone, full_domain, record_type
+        );
+
+        let resp = self
+            .client
+            .put(&url)
+            .headers(self.build_headers())
+            .json(&req_payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("NS1 创建记录失败: {}", body),
+            });
+        }
+        Ok(())
+    }
+
+    async fn update_record(
+        &self,
+        zone: &str,
+        _record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let ttl_val = ttl.unwrap_or(60).max(1);
+        let answers = vec![NsOneAnswer {
+            answer: vec![ip.to_string()],
+        }];
+
+        let req_payload = NsOneRecordReq {
+            zone,
+            domain: &full_domain,
+            record_type: &record_type.to_string(),
+            ttl: ttl_val,
+            answers,
+        };
+
+        let url = format!(
+            "{}/{}/{}/{}",
+            NSONE_API_ENDPOINT, zone, full_domain, record_type
+        );
+
+        let resp = self
+            .client
+            .post(&url)
+            .headers(self.build_headers())
+            .json(&req_payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("NS1 更新记录失败: {}", body),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DnsProvider for NsOneProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
     }
 
     async fn sync_record(
@@ -149,105 +280,6 @@ impl DnsProvider for NsOneProvider {
         ip: &IpAddr,
         ttl: Option<u32>,
     ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(60).max(1);
-
-        // 1. 检查 Zone
-        self.check_zone(&domain.root_domain).await?;
-
-        // 2. 查询已有记录
-        let existing = self
-            .get_record(&domain.root_domain, &full_domain, &record_type.to_string())
-            .await?;
-
-        let answers = vec![NsOneAnswer {
-            answer: vec![target_ip_str.clone()],
-        }];
-
-        let req_payload = NsOneRecordReq {
-            zone: &domain.root_domain,
-            domain: &full_domain,
-            record_type: &record_type.to_string(),
-            ttl: ttl_val,
-            answers,
-        };
-
-        if let Some(record) = existing {
-            let current_ip = record
-                .answers
-                .as_ref()
-                .and_then(|ans| ans.first())
-                .and_then(|a| a.answer.first());
-
-            if current_ip == Some(&target_ip_str) {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录 (POST)
-            let url = format!(
-                "{}/{}/{}/{}",
-                NSONE_API_ENDPOINT, domain.root_domain, full_domain, record_type
-            );
-
-            let resp = self
-                .client
-                .post(&url)
-                .headers(self.build_headers())
-                .json(&req_payload)
-                .send()
-                .await?;
-            let status = resp.status();
-            let body = resp.text().await?;
-
-            if !status.is_success() {
-                return Err(DnsProviderError::ApiError {
-                    code: status.to_string(),
-                    message: format!("NS1 更新记录失败: {}", body),
-                });
-            }
-
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 创建记录 (PUT)
-            let url = format!(
-                "{}/{}/{}/{}",
-                NSONE_API_ENDPOINT, domain.root_domain, full_domain, record_type
-            );
-
-            let resp = self
-                .client
-                .put(&url)
-                .headers(self.build_headers())
-                .json(&req_payload)
-                .send()
-                .await?;
-            let status = resp.status();
-            let body = resp.text().await?;
-
-            if !status.is_success() {
-                return Err(DnsProviderError::ApiError {
-                    code: status.to_string(),
-                    message: format!("NS1 创建记录失败: {}", body),
-                });
-            }
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

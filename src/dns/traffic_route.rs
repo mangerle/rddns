@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
@@ -178,42 +179,40 @@ impl TrafficRouteProvider {
 }
 
 #[async_trait]
-impl DnsProvider for TrafficRouteProvider {
+impl RecordOps for TrafficRouteProvider {
     fn provider_name(&self) -> &'static str {
         "火山引擎 (TrafficRoute)"
     }
 
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
-
-        // 1. 查询 Zone ID
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
         let zones_result = self
-            .request_volc("ListZones", vec![("Key", domain.root_domain.clone())], None)
+            .request_volc("ListZones", vec![("Key", root_domain.to_string())], None)
             .await?;
 
         let zones = zones_result.zones.unwrap_or_default();
         let zone = zones
             .into_iter()
-            .find(|z| z.zone_name.eq_ignore_ascii_case(&domain.root_domain))
+            .find(|z| z.zone_name.eq_ignore_ascii_case(root_domain))
             .ok_or_else(|| {
                 DnsProviderError::ZoneNotFound(format!(
                     "在火山引擎中未找到根域名 [{}] 对应的 Zone",
-                    domain.root_domain
+                    root_domain
                 ))
             })?;
 
-        // 2. 查询现有解析记录
+        Ok(zone.zid.to_string())
+    }
+
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let zid_num = zone.parse::<u64>().unwrap_or(0);
         let list_records_body = json!({
-            "ZID": zone.zid,
+            "ZID": zid_num,
             "Host": sub,
             "Type": record_type.to_string()
         });
@@ -223,60 +222,82 @@ impl DnsProvider for TrafficRouteProvider {
             .await?;
 
         let records = records_result.records.unwrap_or_default();
-        let matched = records.into_iter().find(|r| {
-            r.host.eq_ignore_ascii_case(sub)
-                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                r.host.eq_ignore_ascii_case(sub)
+                    && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+            })
+            .map(|r| RemoteRecord::new(r.record_id, r.value))
+            .collect();
+
+        Ok(matched)
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let zid_num = zone.parse::<u64>().unwrap_or(0);
+        let create_body = json!({
+            "ZID": zid_num,
+            "Host": sub,
+            "Type": record_type.to_string(),
+            "Value": ip.to_string(),
+            "TTL": ttl_val
         });
 
-        if let Some(existing) = matched {
-            if existing.value == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        let _ = self
+            .request_volc("CreateRecord", vec![], Some(create_body))
+            .await?;
+        Ok(())
+    }
 
-            // 更新记录
-            let update_body = json!({
-                "RecordID": existing.record_id,
-                "Host": sub,
-                "Type": record_type.to_string(),
-                "Value": target_ip_str,
-                "TTL": ttl_val
-            });
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let update_body = json!({
+            "RecordID": record_id,
+            "Host": sub,
+            "Type": record_type.to_string(),
+            "Value": ip.to_string(),
+            "TTL": ttl_val
+        });
 
-            let _ = self
-                .request_volc("UpdateRecord", vec![], Some(update_body))
-                .await?;
+        let _ = self
+            .request_volc("UpdateRecord", vec![], Some(update_body))
+            .await?;
+        Ok(())
+    }
+}
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 创建记录
-            let create_body = json!({
-                "ZID": zone.zid,
-                "Host": sub,
-                "Type": record_type.to_string(),
-                "Value": target_ip_str,
-                "TTL": ttl_val
-            });
+#[async_trait]
+impl DnsProvider for TrafficRouteProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
+    }
 
-            let _ = self
-                .request_volc("CreateRecord", vec![], Some(create_body))
-                .await?;
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

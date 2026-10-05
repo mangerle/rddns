@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -39,7 +40,8 @@ impl VercelProvider {
 
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        if let Ok(hv) = HeaderValue::from_str(&format!("Bearer {}", self.token)) {
+        if let Ok(mut hv) = HeaderValue::from_str(&format!("Bearer {}", self.token)) {
+            hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
         }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -60,29 +62,17 @@ impl VercelProvider {
 }
 
 #[async_trait]
-impl DnsProvider for VercelProvider {
+impl RecordOps for VercelProvider {
     fn provider_name(&self) -> &'static str {
         "Vercel DNS"
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string().to_lowercase();
-        let ttl_val = ttl.unwrap_or(60).max(60); // Vercel 规定 TTL 必须 >= 60
-
-        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
-            ""
-        } else {
-            &domain.sub_domain
-        };
-
-        // 1. 查询现有解析记录 (带 limit=100 参数)
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let list_url = self.append_team_id(&format!(
             "https://api.vercel.com/v4/domains/{}/records?limit=100",
             domain.root_domain
@@ -108,94 +98,121 @@ impl DnsProvider for VercelProvider {
         let parsed: VercelRecordsResp = serde_json::from_str(&body_text)?;
         let records = parsed.records.unwrap_or_default();
 
-        let matched = records.into_iter().find(|r| {
-            r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-                && domain.matches_record_name(&r.name)
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+                    && domain.matches_record_name(&r.name)
+            })
+            .map(|r| RemoteRecord::new(r.id, r.value))
+            .collect();
+
+        Ok(matched)
+    }
+
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(60).max(60);
+        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+            ""
+        } else {
+            &domain.sub_domain
+        };
+
+        let create_url = self.append_team_id(&format!(
+            "https://api.vercel.com/v2/domains/{}/records",
+            domain.root_domain
+        ));
+
+        let create_payload = json!({
+            "name": sub_name,
+            "type": record_type.to_string(),
+            "value": ip.to_string(),
+            "ttl": ttl_val,
+            "comment": "Created by rddns"
         });
 
-        if let Some(existing) = matched {
-            if existing.value.to_lowercase() == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        let post_resp = self
+            .client
+            .post(&create_url)
+            .headers(self.build_headers())
+            .json(&create_payload)
+            .send()
+            .await?;
 
-            // 更新记录
-            let update_url = self.append_team_id(&format!(
-                "https://api.vercel.com/v1/domains/records/{}",
-                existing.id
-            ));
-
-            let update_payload = json!({
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "ttl": ttl_val
-            });
-
-            let patch_resp = self
-                .client
-                .patch(&update_url)
-                .headers(self.build_headers())
-                .json(&update_payload)
-                .send()
-                .await?;
-
-            let patch_status = patch_resp.status();
-            if patch_status.is_success() {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = patch_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: patch_status.to_string(),
-                    message: format!("Vercel 更新记录失败: {}", err_text),
-                })
-            }
+        let post_status = post_resp.status();
+        if post_status.is_success() {
+            Ok(())
         } else {
-            // 创建记录
-            let create_url = self.append_team_id(&format!(
-                "https://api.vercel.com/v2/domains/{}/records",
-                domain.root_domain
-            ));
-
-            let create_payload = json!({
-                "name": sub_name,
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "ttl": ttl_val,
-                "comment": "Created by rddns"
-            });
-
-            let post_resp = self
-                .client
-                .post(&create_url)
-                .headers(self.build_headers())
-                .json(&create_payload)
-                .send()
-                .await?;
-
-            let post_status = post_resp.status();
-            if post_status.is_success() {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = post_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: post_status.to_string(),
-                    message: format!("Vercel 创建记录失败: {}", err_text),
-                })
-            }
+            let err_text = post_resp.text().await.unwrap_or_default();
+            Err(DnsProviderError::ApiError {
+                code: post_status.to_string(),
+                message: format!("Vercel 创建记录失败: {}", err_text),
+            })
         }
+    }
+
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        _domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(60).max(60);
+        let update_url = self.append_team_id(&format!(
+            "https://api.vercel.com/v1/domains/records/{}",
+            record_id
+        ));
+
+        let update_payload = json!({
+            "type": record_type.to_string(),
+            "value": ip.to_string(),
+            "ttl": ttl_val
+        });
+
+        let patch_resp = self
+            .client
+            .patch(&update_url)
+            .headers(self.build_headers())
+            .json(&update_payload)
+            .send()
+            .await?;
+
+        let patch_status = patch_resp.status();
+        if patch_status.is_success() {
+            Ok(())
+        } else {
+            let err_text = patch_resp.text().await.unwrap_or_default();
+            Err(DnsProviderError::ApiError {
+                code: patch_status.to_string(),
+                message: format!("Vercel 更新记录失败: {}", err_text),
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl DnsProvider for VercelProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }

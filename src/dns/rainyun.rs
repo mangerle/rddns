@@ -1,4 +1,5 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord, sync_record_via};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -133,29 +134,25 @@ impl RainYunProvider {
 }
 
 #[async_trait]
-impl DnsProvider for RainYunProvider {
+impl RecordOps for RainYunProvider {
     fn provider_name(&self) -> &'static str {
         "雨云 (RainYun)"
     }
 
-    async fn sync_record(
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        self.get_domain_id(root_domain).await
+    }
+
+    async fn list_records(
         &self,
+        zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
-
-        let domain_id = self.get_domain_id(&domain.root_domain).await?;
-
-        // 1. 查询现有解析记录
         let list_url = format!(
             "{}/product/domain/{}/dns/?limit=100&page_no=1",
-            RAINYUN_ENDPOINT, domain_id
+            RAINYUN_ENDPOINT, zone
         );
 
         let list_resp = self
@@ -177,106 +174,128 @@ impl DnsProvider for RainYunProvider {
             });
         }
 
-        let mut matched: Option<RainyunRecord> = None;
+        let mut remotes = Vec::new();
         if let Some(data_val) = res.data {
             let rec_list = serde_json::from_value::<RainyunRecordList>(data_val).ok();
-            matched = rec_list
+            let matched = rec_list
                 .and_then(|r| r.records)
                 .unwrap_or_default()
                 .into_iter()
-                .find(|r| {
+                .filter(|r| {
                     r.host.eq_ignore_ascii_case(sub)
                         && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-                });
+                })
+                .map(|r| RemoteRecord::new(r.record_id.to_string(), r.value));
+            remotes.extend(matched);
         }
 
-        if let Some(existing) = matched {
-            if existing.value == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        Ok(remotes)
+    }
 
-            // 更新记录
-            let update_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, domain_id);
-            let update_payload = json!({
-                "host": sub,
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "line": "DEFAULT",
-                "ttl": ttl_val,
-                "level": 10,
-                "record_id": existing.record_id
-            });
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let create_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, zone);
+        let create_payload = json!({
+            "host": sub,
+            "type": record_type.to_string(),
+            "value": ip.to_string(),
+            "line": "DEFAULT",
+            "ttl": ttl_val,
+            "level": 10,
+            "record_id": 0
+        });
 
-            let patch_resp = self
-                .client
-                .patch(&update_url)
-                .headers(self.build_headers())
-                .json(&update_payload)
-                .send()
-                .await?;
+        let post_resp = self
+            .client
+            .post(&create_url)
+            .headers(self.build_headers())
+            .json(&create_payload)
+            .send()
+            .await?;
 
-            let patch_text = patch_resp.text().await?;
-            let patch_res: RainyunResp = serde_json::from_str(&patch_text)?;
+        let post_text = post_resp.text().await?;
+        let post_res: RainyunResp = serde_json::from_str(&post_text)?;
 
-            if patch_res.code == 200 {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                Err(DnsProviderError::ApiError {
-                    code: patch_res.code.to_string(),
-                    message: patch_res
-                        .message
-                        .unwrap_or_else(|| "更新雨云记录失败".to_string()),
-                })
-            }
+        if post_res.code == 200 {
+            Ok(())
         } else {
-            // 创建记录
-            let create_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, domain_id);
-            let create_payload = json!({
-                "host": sub,
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "line": "DEFAULT",
-                "ttl": ttl_val,
-                "level": 10,
-                "record_id": 0
-            });
-
-            let post_resp = self
-                .client
-                .post(&create_url)
-                .headers(self.build_headers())
-                .json(&create_payload)
-                .send()
-                .await?;
-
-            let post_text = post_resp.text().await?;
-            let post_res: RainyunResp = serde_json::from_str(&post_text)?;
-
-            if post_res.code == 200 {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                Err(DnsProviderError::ApiError {
-                    code: post_res.code.to_string(),
-                    message: post_res
-                        .message
-                        .unwrap_or_else(|| "创建雨云记录失败".to_string()),
-                })
-            }
+            Err(DnsProviderError::ApiError {
+                code: post_res.code.to_string(),
+                message: post_res
+                    .message
+                    .unwrap_or_else(|| "创建雨云记录失败".to_string()),
+            })
         }
+    }
+
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let rid = record_id.parse::<i64>().unwrap_or(0);
+        let update_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, zone);
+        let update_payload = json!({
+            "host": sub,
+            "type": record_type.to_string(),
+            "value": ip.to_string(),
+            "line": "DEFAULT",
+            "ttl": ttl_val,
+            "level": 10,
+            "record_id": rid
+        });
+
+        let patch_resp = self
+            .client
+            .patch(&update_url)
+            .headers(self.build_headers())
+            .json(&update_payload)
+            .send()
+            .await?;
+
+        let patch_text = patch_resp.text().await?;
+        let patch_res: RainyunResp = serde_json::from_str(&patch_text)?;
+
+        if patch_res.code == 200 {
+            Ok(())
+        } else {
+            Err(DnsProviderError::ApiError {
+                code: patch_res.code.to_string(),
+                message: patch_res
+                    .message
+                    .unwrap_or_else(|| "更新雨云记录失败".to_string()),
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl DnsProvider for RainYunProvider {
+    fn provider_name(&self) -> &'static str {
+        <Self as RecordOps>::provider_name(self)
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, DnsProviderError> {
+        sync_record_via(self, domain, record_type, ip, ttl).await
     }
 }
