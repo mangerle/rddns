@@ -49,11 +49,22 @@ pub fn trigger_service_shutdown() {
     }
 }
 
+/// 构造 Windows NT 服务平滑重启后台脚本
+///
+/// 通过循环探测 SCM 服务状态是否变为 `STOPPED`，避免固定延时造成的竞态或启动失败。
+pub(crate) fn build_restart_command_script(service_name: &str) -> String {
+    format!(
+        "for /l %i in (1,1,30) do @(sc.exe query {svc} | findstr /i \"STOPPED\" >nul && (sc.exe start {svc} & exit /b 0) || ping 127.0.0.1 -n 2 >nul) & sc.exe start {svc}",
+        svc = service_name
+    )
+}
+
 /// 自更新完成后调度 Windows NT 服务平滑重启
 ///
 /// # 设计原理
 /// - **实现初衷**：Windows NT 服务受 SCM 纳管，不能直接以普通控制台子进程形式裸拉起。
-/// - **核心优势**：先派生独立后台进程，延迟等待当前旧服务完全停机并释放 9876 端口后，通过 `sc.exe start rddns` 唤醒新版本；
+/// - **核心优势**：派生独立后台轮询进程，通过 `sc.exe query` 循环探测服务状态，一旦旧版本完全停止（`STOPPED`）
+///   立即调用 `sc.exe start` 唤醒新版本，避免固定延时造成的启动竞态或无谓等待；
 ///   同时主动触发当前服务停机，确保新旧版本交接零冲突、不产生孤儿进程并继续受 SCM 秒级崩溃拉活保护。
 ///
 /// # Errors
@@ -62,8 +73,9 @@ pub fn restart_windows_service_after_update() -> Result<()> {
     #[cfg(windows)]
     {
         info!("正在调度 Windows NT 服务自更新平滑重启任务...");
+        let script = build_restart_command_script(SERVICE_NAME);
         let mut cmd = Command::new("cmd.exe");
-        cmd.args(["/c", "ping 127.0.0.1 -n 4 > nul & sc.exe start rddns"]);
+        cmd.args(["/c", &script]);
         configure_daemon_command(&mut cmd);
         cmd.spawn().context("派生 Windows 服务后台重启指令失败")?;
 
@@ -87,5 +99,13 @@ mod tests {
         set_running_as_service(true);
         assert!(is_running_as_service());
         set_running_as_service(false);
+    }
+
+    #[test]
+    fn test_build_restart_command_script() {
+        let script = build_restart_command_script("rddns");
+        assert!(script.contains("sc.exe query rddns"));
+        assert!(script.contains("STOPPED"));
+        assert!(script.contains("sc.exe start rddns"));
     }
 }
