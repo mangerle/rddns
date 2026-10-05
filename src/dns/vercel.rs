@@ -36,6 +36,44 @@ struct VercelRecordsResp {
     pagination: Option<VercelPagination>,
 }
 
+#[derive(Debug, Deserialize)]
+struct VercelApiErrorDetail {
+    code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VercelErrorEnvelope {
+    error: Option<VercelApiErrorDetail>,
+}
+
+/// 统一校验 Vercel API 响应，杜绝 HTTP 200 + {"error": ...} 静默误判成功
+fn check_vercel_error(
+    body_text: &str,
+    status: reqwest::StatusCode,
+) -> Result<(), DnsProviderError> {
+    if let Ok(env) = serde_json::from_str::<VercelErrorEnvelope>(body_text)
+        && let Some(err) = env.error
+    {
+        return Err(DnsProviderError::ApiError {
+            code: err.code.unwrap_or_else(|| status.to_string()),
+            message: format!(
+                "Vercel API 业务失败: {}",
+                err.message.unwrap_or_else(|| body_text.to_string())
+            ),
+        });
+    }
+
+    if !status.is_success() {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("Vercel API 请求失败: {}", body_text),
+        });
+    }
+
+    Ok(())
+}
+
 impl VercelProvider {
     pub fn new(token: String, team_id: Option<String>, http_interface: Option<&str>) -> Self {
         Self {
@@ -104,13 +142,7 @@ impl RecordOps for VercelProvider {
 
             let status = list_resp.status();
             let body_text = list_resp.text().await?;
-
-            if !status.is_success() {
-                return Err(DnsProviderError::ApiError {
-                    code: status.to_string(),
-                    message: format!("Vercel 查询记录失败: {}", body_text),
-                });
-            }
+            check_vercel_error(&body_text, status)?;
 
             let parsed: VercelRecordsResp = serde_json::from_str(&body_text)?;
             let records = parsed.records.unwrap_or_default();
@@ -176,15 +208,9 @@ impl RecordOps for VercelProvider {
             .await?;
 
         let post_status = post_resp.status();
-        if post_status.is_success() {
-            Ok(())
-        } else {
-            let err_text = post_resp.text().await.unwrap_or_default();
-            Err(DnsProviderError::ApiError {
-                code: post_status.to_string(),
-                message: format!("Vercel 创建记录失败: {}", err_text),
-            })
-        }
+        let body_text = post_resp.text().await.unwrap_or_default();
+        check_vercel_error(&body_text, post_status)?;
+        Ok(())
     }
 
     async fn update_record(
@@ -217,15 +243,9 @@ impl RecordOps for VercelProvider {
             .await?;
 
         let patch_status = patch_resp.status();
-        if patch_status.is_success() {
-            Ok(())
-        } else {
-            let err_text = patch_resp.text().await.unwrap_or_default();
-            Err(DnsProviderError::ApiError {
-                code: patch_status.to_string(),
-                message: format!("Vercel 更新记录失败: {}", err_text),
-            })
-        }
+        let body_text = patch_resp.text().await.unwrap_or_default();
+        check_vercel_error(&body_text, patch_status)?;
+        Ok(())
     }
 }
 

@@ -37,6 +37,7 @@ struct BaiduRecordsResp {
 
 #[derive(Debug, Deserialize)]
 struct BaiduBaseResp {
+    code: Option<String>,
     message: Option<String>,
 }
 
@@ -100,6 +101,18 @@ impl BaiduCloudProvider {
 
         let status = resp.status();
         let body_text = resp.text().await?;
+
+        if let Ok(base) = serde_json::from_str::<BaiduBaseResp>(&body_text)
+            && let Some(c) = base.code
+        {
+            return Err(DnsProviderError::ApiError {
+                code: c,
+                message: format!(
+                    "百度云 API 业务失败: {}",
+                    base.message.unwrap_or_else(|| body_text.clone())
+                ),
+            });
+        }
 
         if !status.is_success() {
             let msg = serde_json::from_str::<BaiduBaseResp>(&body_text)

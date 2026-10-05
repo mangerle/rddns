@@ -157,10 +157,22 @@ impl RecordOps for SpaceshipProvider {
             .await?;
 
         let put_status = put_resp.status();
+        let put_body = put_resp.text().await.unwrap_or_default();
+        if let Ok(err_resp) = serde_json::from_str::<SpaceshipErrorResponse>(&put_body)
+            && err_resp.detail.is_some()
+        {
+            return Err(DnsProviderError::ApiError {
+                code: put_status.to_string(),
+                message: format!(
+                    "Spaceship 记录写入失败: {}",
+                    err_resp.detail.unwrap_or(put_body)
+                ),
+            });
+        }
+
         if put_status.is_success() {
             Ok(())
         } else {
-            let put_body = put_resp.text().await.unwrap_or_default();
             Err(DnsProviderError::ApiError {
                 code: put_status.to_string(),
                 message: format!("Spaceship 记录写入失败: {}", put_body),

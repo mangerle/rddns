@@ -34,6 +34,12 @@ struct Dynv6Record {
     data: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct Dynv6ErrorResp {
+    error: Option<String>,
+    message: Option<String>,
+}
+
 impl Dynv6Provider {
     pub fn new(token: String, http_interface: Option<&str>) -> Self {
         Self {
@@ -71,6 +77,17 @@ impl Dynv6Provider {
         let resp = req.send().await?;
         let status = resp.status();
         let body_text = resp.text().await?;
+
+        if let Ok(err) = serde_json::from_str::<Dynv6ErrorResp>(&body_text)
+            && (err.error.is_some() || err.message.is_some())
+        {
+            let code = err.error.unwrap_or_else(|| status.to_string());
+            let msg = err.message.unwrap_or_else(|| body_text.clone());
+            return Err(DnsProviderError::ApiError {
+                code,
+                message: format!("Dynv6 响应错误: {}", msg),
+            });
+        }
 
         if !status.is_success() {
             return Err(DnsProviderError::http_status(status, &body_text));

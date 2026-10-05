@@ -44,6 +44,40 @@ struct GcoreRRSetListResponse {
     rrsets: Option<Vec<GcoreRRSet>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GcoreErrorResp {
+    error: Option<String>,
+    message: Option<String>,
+}
+
+fn check_gcore_error(
+    body_text: &str,
+    status: reqwest::StatusCode,
+    action: &str,
+) -> Result<(), DnsProviderError> {
+    if let Ok(err) = serde_json::from_str::<GcoreErrorResp>(body_text)
+        && (err.error.is_some() || err.message.is_some())
+    {
+        let msg = err
+            .message
+            .or(err.error)
+            .unwrap_or_else(|| body_text.to_string());
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("Gcore {}业务失败: {}", action, msg),
+        });
+    }
+
+    if !status.is_success() {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("Gcore {}: {}", action, body_text),
+        });
+    }
+
+    Ok(())
+}
+
 impl GcoreProvider {
     pub fn new(api_key: String, http_interface: Option<&str>) -> Self {
         Self {
@@ -97,13 +131,7 @@ impl DnsProvider for GcoreProvider {
 
         let zone_status = zone_resp.status();
         let zone_text = zone_resp.text().await?;
-
-        if !zone_status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: zone_status.to_string(),
-                message: format!("查询 Gcore Zone 失败: {}", zone_text),
-            });
-        }
+        check_gcore_error(&zone_text, zone_status, "查询 Zone 失败")?;
 
         let zone_data: GcoreZoneResponse = serde_json::from_str(&zone_text)?;
         let zones = zone_data.zones.unwrap_or_default();
@@ -128,12 +156,7 @@ impl DnsProvider for GcoreProvider {
 
         let status = rrset_resp.status();
         let rrset_text = rrset_resp.text().await?;
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("Gcore 查询 RRSet 失败: {}", rrset_text),
-            });
-        }
+        check_gcore_error(&rrset_text, status, "查询 RRSet 失败")?;
         let rrset_data: GcoreRRSetListResponse = serde_json::from_str(&rrset_text)?;
         let rrsets = rrset_data.rrsets.unwrap_or_default();
 
@@ -202,20 +225,15 @@ impl DnsProvider for GcoreProvider {
                 .await?;
 
             let put_status = put_resp.status();
-            if put_status.is_success() {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = put_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: put_status.to_string(),
-                    message: format!("Gcore 更新记录失败: {}", err_text),
-                })
-            }
+            let put_text = put_resp.text().await.unwrap_or_default();
+            check_gcore_error(&put_text, put_status, "更新记录失败")?;
+
+            Ok(SyncRecordResult::updated_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         } else {
             // 创建记录 (POST)
             let post_resp = self
@@ -227,20 +245,15 @@ impl DnsProvider for GcoreProvider {
                 .await?;
 
             let post_status = post_resp.status();
-            if post_status.is_success() {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = post_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: post_status.to_string(),
-                    message: format!("Gcore 创建记录失败: {}", err_text),
-                })
-            }
+            let post_text = post_resp.text().await.unwrap_or_default();
+            check_gcore_error(&post_text, post_status, "创建记录失败")?;
+
+            Ok(SyncRecordResult::created_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         }
     }
 }

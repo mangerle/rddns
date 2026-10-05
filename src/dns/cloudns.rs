@@ -71,7 +71,28 @@ impl DnsProvider for ClouDnsProvider {
         ];
 
         let list_resp = self.client.post(&list_url).form(&list_form).send().await?;
+        let status = list_resp.status();
         let list_text = list_resp.text().await?;
+
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: format!("ClouDNS 查询记录失败: {}", list_text),
+            });
+        }
+
+        if let Ok(action_resp) = serde_json::from_str::<ClouDnsActionResp>(&list_text)
+            && (action_resp.status.as_deref() == Some("Failed")
+                || action_resp.status_description.is_some())
+        {
+            let err_msg = action_resp
+                .status_description
+                .unwrap_or_else(|| list_text.clone());
+            return Err(DnsProviderError::ApiError {
+                code: "ClouDnsQueryError".to_string(),
+                message: format!("ClouDNS 查询记录业务失败: {}", err_msg),
+            });
+        }
 
         // 鲁棒解析字典或数组格式
         let mut matched: Option<ClouDnsRecordItem> = None;

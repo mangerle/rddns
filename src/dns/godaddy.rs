@@ -22,6 +22,12 @@ struct GoDaddyRecord {
     data: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GoDaddyErrorResp {
+    code: Option<String>,
+    message: Option<String>,
+}
+
 impl GoDaddyProvider {
     pub fn new(api_key: String, api_secret: String, http_interface: Option<&str>) -> Self {
         Self {
@@ -74,10 +80,19 @@ impl GoDaddyProvider {
             .await?;
 
         let status = put_resp.status();
+        let body_text = put_resp.text().await.unwrap_or_default();
+        if let Ok(err) = serde_json::from_str::<GoDaddyErrorResp>(&body_text)
+            && (err.code.is_some() || err.message.is_some())
+        {
+            return Err(DnsProviderError::ApiError {
+                code: err.code.unwrap_or_else(|| status.to_string()),
+                message: format!("GoDaddy 响应错误: {}", err.message.unwrap_or(body_text)),
+            });
+        }
+
         if status.is_success() {
             Ok(())
         } else {
-            let body_text = put_resp.text().await.unwrap_or_default();
             Err(DnsProviderError::ApiError {
                 code: status.to_string(),
                 message: format!("GoDaddy 响应错误: {}", body_text),
@@ -116,16 +131,26 @@ impl RecordOps for GoDaddyProvider {
             return Ok(Vec::new());
         }
 
-        if !query_resp.status().is_success() {
-            let status = query_resp.status();
-            let body = query_resp.text().await.unwrap_or_default();
+        let status = query_resp.status();
+        let body = query_resp.text().await.unwrap_or_default();
+
+        if let Ok(err) = serde_json::from_str::<GoDaddyErrorResp>(&body)
+            && (err.code.is_some() || err.message.is_some())
+        {
+            return Err(DnsProviderError::ApiError {
+                code: err.code.unwrap_or_else(|| status.to_string()),
+                message: format!("GoDaddy 查询记录失败: {}", err.message.unwrap_or(body)),
+            });
+        }
+
+        if !status.is_success() {
             return Err(DnsProviderError::ApiError {
                 code: status.to_string(),
                 message: format!("GoDaddy 查询记录失败: {}", body),
             });
         }
 
-        let records = query_resp.json::<Vec<GoDaddyRecord>>().await?;
+        let records = serde_json::from_str::<Vec<GoDaddyRecord>>(&body)?;
         let matched = records
             .into_iter()
             .filter_map(|r| r.data.map(|d| RemoteRecord::new(sub, d)))

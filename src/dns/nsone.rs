@@ -33,6 +33,35 @@ struct NsOneRecordResp {
     answers: Option<Vec<NsOneAnswer>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NsOneErrorResp {
+    message: Option<String>,
+}
+
+fn check_nsone_error(
+    body_text: &str,
+    status: StatusCode,
+    action: &str,
+) -> Result<(), DnsProviderError> {
+    if let Ok(err) = serde_json::from_str::<NsOneErrorResp>(body_text)
+        && let Some(msg) = err.message
+    {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("NS1 {}业务失败: {}", action, msg),
+        });
+    }
+
+    if !status.is_success() {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("NS1 {}: {}", action, body_text),
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 struct NsOneRecordReq<'a> {
     zone: &'a str,
@@ -83,22 +112,18 @@ impl NsOneProvider {
             .send()
             .await?;
 
-        if resp.status() == StatusCode::NOT_FOUND {
+        let status = resp.status();
+        if status == StatusCode::NOT_FOUND {
             return Err(DnsProviderError::ZoneNotFound(format!(
                 "在 IBM NS1 Connect 中未找到根域名 [{}]",
                 root_domain
             )));
         }
 
-        if !resp.status().is_success() {
-            let body = resp.text().await?;
-            return Err(DnsProviderError::ApiError {
-                code: "ZoneCheckFailed".to_string(),
-                message: format!("查询 Zone 失败: {}", body),
-            });
-        }
+        let body = resp.text().await?;
+        check_nsone_error(&body, status, "查询 Zone 失败")?;
 
-        let _zone: NsOneZone = resp.json().await?;
+        let _zone: NsOneZone = serde_json::from_str(&body)?;
         Ok(())
     }
 
@@ -125,15 +150,10 @@ impl NsOneProvider {
             return Ok(None);
         }
 
-        if !status.is_success() {
-            let body = resp.text().await?;
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("查询 NS1 记录失败: {}", body),
-            });
-        }
+        let body = resp.text().await?;
+        check_nsone_error(&body, status, "查询记录失败")?;
 
-        let parsed: NsOneRecordResp = resp.json().await?;
+        let parsed: NsOneRecordResp = serde_json::from_str(&body)?;
         Ok(Some(parsed))
     }
 }
@@ -213,13 +233,7 @@ impl RecordOps for NsOneProvider {
             .await?;
         let status = resp.status();
         let body = resp.text().await?;
-
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("NS1 创建记录失败: {}", body),
-            });
-        }
+        check_nsone_error(&body, status, "创建记录失败")?;
         Ok(())
     }
 
@@ -261,12 +275,7 @@ impl RecordOps for NsOneProvider {
         let status = resp.status();
         let body = resp.text().await?;
 
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("NS1 更新记录失败: {}", body),
-            });
-        }
+        check_nsone_error(&body, status, "更新记录失败")?;
         Ok(())
     }
 }

@@ -32,6 +32,40 @@ struct NameComListResp {
     records: Option<Vec<NameComRecordItem>>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NameComErrorResp {
+    message: Option<String>,
+    details: Option<String>,
+}
+
+fn check_namecom_error(
+    body_text: &str,
+    status: reqwest::StatusCode,
+    action: &str,
+) -> Result<(), DnsProviderError> {
+    if let Ok(err) = serde_json::from_str::<NameComErrorResp>(body_text)
+        && (err.message.is_some() || err.details.is_some())
+    {
+        let msg = err
+            .message
+            .or(err.details)
+            .unwrap_or_else(|| body_text.to_string());
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("Name.com {}业务失败: {}", action, msg),
+        });
+    }
+
+    if !status.is_success() {
+        return Err(DnsProviderError::ApiError {
+            code: status.to_string(),
+            message: format!("Name.com {}: {}", action, body_text),
+        });
+    }
+
+    Ok(())
+}
+
 impl NameComProvider {
     pub fn new(username: String, api_token: String, http_interface: Option<&str>) -> Self {
         Self {
@@ -90,12 +124,7 @@ impl DnsProvider for NameComProvider {
         let status = list_resp.status();
         let body_text = list_resp.text().await?;
 
-        if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("Name.com 查询解析记录失败: {}", body_text),
-            });
-        }
+        check_namecom_error(&body_text, status, "查询解析记录失败")?;
 
         let parsed: NameComListResp = serde_json::from_str(&body_text)?;
         let records = parsed.records.unwrap_or_default();
@@ -142,20 +171,15 @@ impl DnsProvider for NameComProvider {
                 .await?;
 
             let put_status = put_resp.status();
-            if put_status.is_success() {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = put_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: put_status.to_string(),
-                    message: format!("Name.com 更新记录失败: {}", err_text),
-                })
-            }
+            let put_text = put_resp.text().await.unwrap_or_default();
+            check_namecom_error(&put_text, put_status, "更新记录失败")?;
+
+            Ok(SyncRecordResult::updated_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         } else {
             // 创建记录 (POST)
             let create_url = format!("{}/{}/records", NAME_COM_ENDPOINT, domain.root_domain);
@@ -176,20 +200,15 @@ impl DnsProvider for NameComProvider {
                 .await?;
 
             let post_status = post_resp.status();
-            if post_status.is_success() {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_text = post_resp.text().await.unwrap_or_default();
-                Err(DnsProviderError::ApiError {
-                    code: post_status.to_string(),
-                    message: format!("Name.com 创建记录失败: {}", err_text),
-                })
-            }
+            let post_text = post_resp.text().await.unwrap_or_default();
+            check_namecom_error(&post_text, post_status, "创建记录失败")?;
+
+            Ok(SyncRecordResult::created_log(
+                self.provider_name(),
+                full_domain,
+                record_type,
+                target_ip_str,
+            ))
         }
     }
 }
