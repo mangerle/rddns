@@ -56,8 +56,9 @@ impl NetInterfaceIpFetcher {
             .await
             .unwrap_or(None)?;
 
-        let mut stable = Vec::new();
-        let mut temp = Vec::new();
+        let entries_count = entries.len();
+        let mut stable = Vec::with_capacity(entries_count);
+        let mut temp = Vec::with_capacity(entries_count);
         for entry in entries {
             if entry.is_stable_global() {
                 stable.push(entry.ip);
@@ -70,7 +71,7 @@ impl NetInterfaceIpFetcher {
             }
         }
 
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(stable.len() + temp.len());
         if let Some(best) = select_best_ipv6(&stable) {
             candidates.push(best);
             for ip in stable {
@@ -92,7 +93,7 @@ impl NetInterfaceIpFetcher {
 
     /// 跨平台从网卡绑定地址列表中提取并优选全球单播 IPv6 候选集
     fn collect_fallback_ipv6_candidates(target_if: &NetworkInterface) -> Vec<Ipv6Addr> {
-        let mut raw_addrs = Vec::new();
+        let mut raw_addrs = Vec::with_capacity(target_if.addr.len());
         for addr in &target_if.addr {
             if let Addr::V6(v6_addr) = addr {
                 let ip = v6_addr.ip;
@@ -122,7 +123,7 @@ impl IpFetcher for NetInterfaceIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         let target_if = self.get_target_interface().await?;
 
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(target_if.addr.len());
         for addr in target_if.addr {
             if let Addr::V4(v4_addr) = addr {
                 let ip = v4_addr.ip;
@@ -234,8 +235,9 @@ fn build_interface_info(
     iface: NetworkInterface,
     linux_entries: Option<&[LinuxIfInet6Entry]>,
 ) -> InterfaceInfo {
-    let mut ipv4s = Vec::new();
-    let mut ipv6s = Vec::new();
+    let addr_count = iface.addr.len();
+    let mut ipv4s = Vec::with_capacity(addr_count);
+    let mut ipv6s = Vec::with_capacity(addr_count);
     for addr in &iface.addr {
         match addr {
             Addr::V4(v4) => {
@@ -257,7 +259,7 @@ fn build_interface_info(
         ipv6s = sort_linux_interface_ipv6s(&iface.name, ipv6s, all_entries);
     }
 
-    let mut desc_parts = Vec::new();
+    let mut desc_parts = Vec::with_capacity(2);
     if !ipv4s.is_empty() {
         desc_parts.push(format!("IPv4: {}", ipv4s.join(", ")));
     }
