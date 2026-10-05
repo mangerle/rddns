@@ -1,14 +1,14 @@
 use crate::config::model::WechatOfficialConfig;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError};
+use crate::util::http::create_notifier_client;
 use async_trait::async_trait;
 use log::{info, warn};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Duration;
 
 use parking_lot::RwLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// 微信 Access Token 响应实体
 #[derive(Debug, Deserialize)]
@@ -50,10 +50,7 @@ pub struct WechatOfficialNotifier {
 
 impl WechatOfficialNotifier {
     pub fn new(config: WechatOfficialConfig) -> Self {
-        let client = crate::util::http::create_http_client_builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let client = create_notifier_client();
         Self { config, client }
     }
 
