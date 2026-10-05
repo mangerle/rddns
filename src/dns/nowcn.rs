@@ -120,7 +120,11 @@ impl NowcnProvider {
         mut params: BTreeMap<String, String>,
     ) -> Result<T, DnsProviderError> {
         let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let nonce = format!("{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let nonce = format!(
+            "{}-{}",
+            Utc::now().timestamp_millis(),
+            crate::util::crypto::random_u32()
+        );
 
         params.insert(
             "AccessInstanceID".to_string(),
