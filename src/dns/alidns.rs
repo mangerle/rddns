@@ -4,8 +4,9 @@ use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRe
 use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
@@ -100,22 +101,38 @@ impl AliDnsProvider {
         let status = resp.status();
         let body_text = resp.text().await?;
 
-        if !status.is_success() {
-            if let Ok(err_resp) = serde_json::from_str::<AliErrorResponse>(&body_text) {
-                let mut msg = err_resp.message;
-                append_ntp_hint_if_expired(&mut msg, &err_resp.code);
-                return Err(DnsProviderError::ApiError {
-                    code: err_resp.code,
-                    message: msg,
-                });
-            }
+        Self::parse_pop_response(status, &body_text)
+    }
+
+    /// 解析阿里云 POP RPC 接口返回的响应体
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：统一对阿里云 POP 接口的 HTTP 状态码与响应体业务错误码进行双重校验。
+    /// - **核心优势**：杜绝服务端在业务失败时返回 HTTP 200 伴随错误 JSON 导致的静默误判成功。
+    /// - **代价与局限**：对每个响应体先尝试轻量解析业务错误码，存在微小反序列化开销，但在 DDNS 调度频次下可忽略不计。
+    pub(crate) fn parse_pop_response<T: DeserializeOwned>(
+        status: StatusCode,
+        body_text: &str,
+    ) -> Result<T, DnsProviderError> {
+        if let Ok(biz) = serde_json::from_str::<AliBizError>(body_text)
+            && let Some(err_code) = biz.code
+        {
+            let mut msg = biz.message.unwrap_or_default();
+            append_ntp_hint_if_expired(&mut msg, &err_code);
             return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: body_text,
+                code: err_code,
+                message: msg,
             });
         }
 
-        let parsed: T = serde_json::from_str(&body_text)?;
+        if !status.is_success() {
+            return Err(DnsProviderError::ApiError {
+                code: status.to_string(),
+                message: body_text.to_string(),
+            });
+        }
+
+        let parsed: T = serde_json::from_str(body_text)?;
         Ok(parsed)
     }
 
@@ -286,9 +303,9 @@ struct AliRecordItem {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct AliErrorResponse {
-    code: String,
-    message: String,
+struct AliBizError {
+    code: Option<String>,
+    message: Option<String>,
 }
 
 #[cfg(test)]
@@ -360,5 +377,60 @@ mod tests {
             .custom_params
             .insert("line".to_string(), "unicom".to_string());
         assert_eq!(AliDnsProvider::resolve_line(&domain), "unicom");
+    }
+
+    #[test]
+    fn test_parse_pop_response_intercepts_http200_biz_error() {
+        let err_json = r#"{
+            "RequestId": "5F3C2809-58D6-4275-B948-4C8E0C4F6211",
+            "HostId": "alidns.aliyuncs.com",
+            "Code": "InvalidDomainName.NoExist",
+            "Message": "The specified domain name does not exist."
+        }"#;
+
+        let res = AliDnsProvider::parse_pop_response::<serde_json::Value>(StatusCode::OK, err_json);
+
+        match res {
+            Err(DnsProviderError::ApiError { code, message }) => {
+                assert_eq!(code, "InvalidDomainName.NoExist");
+                assert!(message.contains("The specified domain name does not exist."));
+            }
+            other => panic!("预期返回 ApiError，实际为: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_pop_response_intercepts_http400_biz_error() {
+        let err_json = r#"{
+            "Code": "MissingParameter",
+            "Message": "The input parameter RR that is mandatory for processing this request is not supplied."
+        }"#;
+
+        let res = AliDnsProvider::parse_pop_response::<serde_json::Value>(
+            StatusCode::BAD_REQUEST,
+            err_json,
+        );
+
+        match res {
+            Err(DnsProviderError::ApiError { code, message }) => {
+                assert_eq!(code, "MissingParameter");
+                assert!(message.contains("mandatory"));
+            }
+            other => panic!("预期返回 ApiError，实际为: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_pop_response_success_when_no_error_code() {
+        let ok_json = r#"{
+            "RecordId": "123456789",
+            "RequestId": "TEST-REQ-ID"
+        }"#;
+
+        let res = AliDnsProvider::parse_pop_response::<serde_json::Value>(StatusCode::OK, ok_json);
+
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val["RecordId"], "123456789");
     }
 }
