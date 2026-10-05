@@ -3,7 +3,7 @@ use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
 use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
-use log::info;
+use log::{debug, info};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
@@ -308,7 +308,7 @@ impl TencentEoProvider {
             Self::compute_updated_origin_records(&current_records, target_ip_str, weight_val);
 
         if is_unchanged {
-            info!(
+            debug!(
                 "[{}] EdgeOne 源站组 [{}] 记录未变化 ({}), 跳过更新",
                 self.provider_name(),
                 matched_group.name,

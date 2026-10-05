@@ -8,7 +8,7 @@ use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus, N
 use crate::notifier::webhook::CustomWebhookNotifier;
 use crate::notifier::wechat_official::WechatOfficialNotifier;
 use crate::notifier::wecom::WeComNotifier;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,7 +129,7 @@ impl NotificationDispatcher {
             && !event.ip_changed
             && event.overall_status == NotificationOverallStatus::Success
         {
-            info!(
+            debug!(
                 "[{}] 域名解析记录未发生实际变动，静默跳过成功通知",
                 event.task_name
             );
