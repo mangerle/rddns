@@ -24,6 +24,7 @@ static SYSTEM_INTERFACES_CACHE: LazyLock<RwLock<Option<InterfacesCacheEntry>>> =
 /// - **核心优势**：通过短期 TTL 缓存，在突发密集查询时实现纳秒级内存读取；TTL 过期后自动刷新，且网络状态变化能在 3 秒内平滑同步。
 /// - **代价与局限**：物理网卡拔插或 IP 变更在最长 3 秒的 TTL 窗口内存在微小感知延迟，对 DDNS 周期（通常 >= 10 秒）完全无负面影响。
 pub fn get_cached_system_interfaces() -> Vec<NetworkInterface> {
+    // 1. 快速路径：读锁快照检查
     {
         let read_guard = SYSTEM_INTERFACES_CACHE.read();
         if let Some(ref entry) = *read_guard
@@ -33,19 +34,24 @@ pub fn get_cached_system_interfaces() -> Vec<NetworkInterface> {
         }
     }
 
+    // 2. 缓存过期或为空：在无锁状态下执行耗时的底层系统调用 (P2-1)
+    let fresh_interfaces = NetworkInterface::show().unwrap_or_default();
+    let now = Instant::now();
+
+    // 3. 极小化临界区：仅在纯内存指针更新时短暂持有写锁（微秒级）
     let mut write_guard = SYSTEM_INTERFACES_CACHE.write();
+    // 双重检查：若并发线程已在此期间写入更新且未过期，优先复用已缓存数据
     if let Some(ref entry) = *write_guard
         && entry.last_updated.elapsed() < IFACE_CACHE_TTL
     {
         return entry.interfaces.clone();
     }
 
-    let interfaces = NetworkInterface::show().unwrap_or_default();
     *write_guard = Some(InterfacesCacheEntry {
-        last_updated: Instant::now(),
-        interfaces: interfaces.clone(),
+        last_updated: now,
+        interfaces: fresh_interfaces.clone(),
     });
-    interfaces
+    fresh_interfaces
 }
 
 /// 清理系统网卡列表缓存 (在网络重置或测试断言时调用)
