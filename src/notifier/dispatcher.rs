@@ -16,6 +16,15 @@ use std::time::{Duration, Instant};
 use tokio::spawn;
 use tokio::task::JoinSet;
 
+/// 错误追踪表触发过期清理的软阈值条数
+const TRACKER_SOFT_LIMIT: usize = 256;
+/// 错误追踪表绝对硬上限，防止内存无限膨胀
+const TRACKER_HARD_LIMIT: usize = 512;
+/// 错误记录最长留存时间（1 小时），超时条目自动清理
+const ERROR_TRACKER_TTL: Duration = Duration::from_secs(3600);
+/// 相同错误防风暴告警冷却窗口（30 分钟）
+const ERROR_SUPPRESSION_TTL: Duration = Duration::from_secs(1800);
+
 /// 错误告警状态跟踪（用于防风暴抑制）
 #[derive(Debug, Clone)]
 pub struct ErrorTracker {
@@ -147,15 +156,32 @@ impl NotificationDispatcher {
     }
 
     /// 检查并更新错误冷却状态，返回 true 表示需被抑制
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 避免任务持续失败时高频推送告警造成通知风暴，并在短时间内大量新错误涌入时防止内存无限膨胀。
+    /// - **核心优势**: 软限制 (256 条) 触发过期数据清理，硬限制 (512 条) 采用 LRU 淘汰最旧条目，确保内存恒定有界。
     fn check_and_update_error_throttle(&self, task_name: &str, error_summary: String) -> bool {
         let mut trackers = self.error_trackers.write();
-        if trackers.len() >= 256 {
-            trackers.retain(|_, t| t.last_notified_at.elapsed() < Duration::from_secs(3600));
+
+        // 1. 达到软阈值时淘汰过期项
+        if trackers.len() >= TRACKER_SOFT_LIMIT {
+            trackers.retain(|_, t| t.last_notified_at.elapsed() < ERROR_TRACKER_TTL);
+        }
+
+        // 2. 若依然达到硬上限且当前任务不在表中，淘汰最早通知的条目 (LRU)
+        if !trackers.contains_key(task_name)
+            && trackers.len() >= TRACKER_HARD_LIMIT
+            && let Some(oldest_key) = trackers
+                .iter()
+                .min_by_key(|(_, t)| t.last_notified_at)
+                .map(|(k, _)| k.clone())
+        {
+            trackers.remove(&oldest_key);
         }
 
         if let Some(tracker) = trackers.get_mut(task_name) {
             if tracker.last_error_summary == error_summary
-                && tracker.last_notified_at.elapsed() < Duration::from_secs(1800)
+                && tracker.last_notified_at.elapsed() < ERROR_SUPPRESSION_TTL
             {
                 tracker.suppressed_count = tracker.suppressed_count.saturating_add(1);
                 warn!(
@@ -300,5 +326,18 @@ mod tests {
         NotificationDispatcher::send_with_retry(mock_notifier, event).await;
         // 初始 1 次 + 重试 2 次 = 3 次调用后成功
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_error_throttle_capacity_hard_limit() {
+        let dispatcher = NotificationDispatcher::new(NotificationConfig::default());
+        // 瞬间写入 600 个不同名称的任务错误
+        for i in 0..600 {
+            dispatcher
+                .check_and_update_error_throttle(&format!("task_{}", i), "连接超时".to_string());
+        }
+        let trackers = dispatcher.error_trackers.read();
+        // 验证不会无限膨胀，数量严格不超过硬上限 512
+        assert_eq!(trackers.len(), TRACKER_HARD_LIMIT);
     }
 }
