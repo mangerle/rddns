@@ -138,7 +138,7 @@ chmod +x rddns
 ```
 
 - **Linux**：自动创建并管理 `/etc/systemd/system/rddns.service`，通过 `systemd` 守护；
-- **Windows**：自动注册 Windows 高权限计划任务与服务守护，开机或登录后无黑框静默常驻；
+- **Windows**：自动注册 Windows NT 原生系统服务（SCM），支持开机无需登录静默常驻，并具备进程崩溃或被任务管理器强杀 3 秒自动拉活自愈能力；
 - **macOS**：自动生成 `/Library/LaunchDaemons/com.mangerle.rddns.plist`，由 `launchd` 托管。
 
 ---

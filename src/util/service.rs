@@ -13,9 +13,6 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::fs;
 
-#[cfg(windows)]
-use crate::util::daemon::configure_daemon_command;
-
 const SERVICE_NAME: &str = "rddns";
 #[cfg(unix)]
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
@@ -24,7 +21,7 @@ const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (D
 ///
 /// # 设计原理
 /// - **实现初衷**：为用户提供统一的跨平台 CLI 接口（`rddns service <action>`），一键注册为系统级常驻服务，无需手写复杂的服务脚本。
-/// - **核心优势**：自动解析二进制与配置文件的绝对路径、Windows 下智能优先使用 schtasks 计划任务并降级注册表 Run 键、Linux 下生成标准 systemd unit、macOS 下生成 launchd plist。
+/// - **核心优势**：自动解析二进制与配置文件的绝对路径、Windows 下注册原生 NT 服务并配置 SCM 秒级崩溃/强杀故障自愈、Linux 下生成标准 systemd unit、macOS 下生成 launchd plist。
 ///
 /// # Errors
 /// 当路径解析失败、无管理员权限导致注册失败或传入不支持的操作动作时返回错误。
@@ -68,66 +65,98 @@ pub fn handle_service_command(action: &str, config_path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -> Result<()> {
-    info!("正在配置 Windows 开机自启服务 [{}]...", SERVICE_NAME);
-    let sch_out = Command::new("schtasks.exe")
+fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
+    info!("正在配置 Windows NT 原生自愈服务 [{}]...", SERVICE_NAME);
+
+    // 1. 迁移清理旧版本可能残留的计划任务与注册表自启项
+    let _ = Command::new("schtasks.exe")
+        .args(["/delete", "/tn", SERVICE_NAME, "/f"])
+        .output();
+    let _ = Command::new("reg.exe")
         .args([
-            "/create",
-            "/tn",
+            "delete",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
             SERVICE_NAME,
-            "/tr",
-            run_cmd,
-            "/sc",
-            "onlogon",
-            "/rl",
-            "highest",
             "/f",
         ])
         .output();
+    let _ = Command::new("sc.exe").args(["stop", SERVICE_NAME]).output();
+    let _ = Command::new("sc.exe")
+        .args(["delete", SERVICE_NAME])
+        .output();
 
-    let sch_success = match sch_out {
-        Ok(ref out) => out.status.success(),
-        Err(_) => false,
-    };
+    // 2. 构造 SCM 原生系统服务创建指令
+    let exe_str = exe_path.to_string_lossy();
+    let cfg_str = config_path.to_string_lossy();
+    let bin_path_arg = format!("\"{}\" -c \"{}\" --windows-service", exe_str, cfg_str);
 
-    if sch_success {
-        let _ = Command::new("reg.exe")
-            .args([
-                "delete",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                SERVICE_NAME,
-                "/f",
-            ])
-            .output();
-    } else {
-        let _ = Command::new("reg.exe")
-            .args([
-                "add",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                SERVICE_NAME,
-                "/t",
-                "REG_SZ",
-                "/d",
-                run_cmd,
-                "/f",
-            ])
-            .output();
-        warn!("计划任务受权限限制，已通过用户注册表 Run 键配置开机自启");
+    let create_out = Command::new("sc.exe")
+        .args([
+            "create",
+            SERVICE_NAME,
+            &format!("binPath= {}", bin_path_arg),
+            "start= auto",
+            "DisplayName= RDDNS Dynamic DNS Service",
+        ])
+        .output()
+        .context("调用 sc.exe 创建系统服务失败")?;
+
+    if !create_out.status.success() {
+        let out_msg = String::from_utf8_lossy(&create_out.stdout);
+        let err_msg = String::from_utf8_lossy(&create_out.stderr);
+        bail!(
+            "创建 Windows 服务失败：\n{}\n{}\n提示：注册 Windows 系统服务需要管理员权限，请以管理员身份运行终端后重试。",
+            out_msg.trim(),
+            err_msg.trim()
+        );
     }
 
-    info!("正在启动后台守护进程...");
-    let mut spawn_cmd = Command::new(exe_path);
-    spawn_cmd.args(["-c", &config_path.to_string_lossy(), "-d"]);
-    configure_daemon_command(&mut spawn_cmd);
-    spawn_cmd.spawn().context("启动后台守护进程失败")?;
+    // 3. 配置服务中文描述
+    let _ = Command::new("sc.exe")
+        .args([
+            "description",
+            SERVICE_NAME,
+            "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启与故障自愈守护服务",
+        ])
+        .output();
+
+    // 4. 配置 SCM 故障恢复策略：异常崩溃或任务管理器强杀后 3 秒自动拉活重启，永远重置失败计数
+    let failure_out = Command::new("sc.exe")
+        .args([
+            "failure",
+            SERVICE_NAME,
+            "reset= 0",
+            "actions= restart/3000/restart/3000/restart/3000",
+        ])
+        .output();
+    if let Ok(ref f) = failure_out
+        && !f.status.success()
+    {
+        warn!(
+            "配置服务故障恢复策略告警: {}",
+            String::from_utf8_lossy(&f.stdout).trim()
+        );
+    }
+    let _ = Command::new("sc.exe")
+        .args(["failureflag", SERVICE_NAME, "1"])
+        .output();
+
+    // 5. 立即启动服务
+    info!("正在启动 [{}] Windows 系统服务...", SERVICE_NAME);
+    let start_out = Command::new("sc.exe")
+        .args(["start", SERVICE_NAME])
+        .output()
+        .context("启动 Windows 服务失败")?;
+    let start_msg = String::from_utf8_lossy(&start_out.stdout);
 
     info!("==========================================");
-    info!("RDDNS 已成功安装并设置为 Windows 开机自启！");
-    info!("服务名称: {}", SERVICE_NAME);
-    info!("运行程序: {}", exe_path.display());
-    info!("配置文件: {}", config_path.display());
+    info!("RDDNS 已成功安装为 Windows NT 原生系统服务！");
+    info!("服务名称:   {}", SERVICE_NAME);
+    info!("运行程序:   {}", exe_path.display());
+    info!("配置文件:   {}", config_path.display());
+    info!("自愈能力:   已启用 (异常崩溃或任务管理器强杀 3 秒自动拉起)");
+    info!("启动输出:   {}", start_msg.trim());
     info!("Web 控制台: http://localhost:9876");
     info!("==========================================");
     Ok(())
@@ -135,7 +164,14 @@ fn install_windows_service(exe_path: &Path, config_path: &Path, run_cmd: &str) -
 
 #[cfg(windows)]
 fn uninstall_windows_service() -> Result<()> {
-    info!("正在停止并卸载 Windows 自启服务 [{}]...", SERVICE_NAME);
+    info!("正在停止并卸载 Windows 系统服务 [{}]...", SERVICE_NAME);
+    let _ = Command::new("sc.exe").args(["stop", SERVICE_NAME]).output();
+    let delete_out = Command::new("sc.exe")
+        .args(["delete", SERVICE_NAME])
+        .output()
+        .context("调用 sc.exe 删除系统服务失败")?;
+
+    // 清理历史残留计划任务与注册表
     let _ = Command::new("schtasks.exe")
         .args(["/delete", "/tn", SERVICE_NAME, "/f"])
         .output();
@@ -151,86 +187,76 @@ fn uninstall_windows_service() -> Result<()> {
     let _ = Command::new("taskkill.exe")
         .args(["/f", "/im", "rddns.exe"])
         .output();
-    info!("[{}] Windows 自启服务与运行实例已成功清除！", SERVICE_NAME);
-    Ok(())
-}
 
-#[cfg(windows)]
-fn start_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
-    info!("正在启动 [{}] 后台守护进程...", SERVICE_NAME);
-    let mut spawn_cmd = Command::new(exe_path);
-    spawn_cmd.args(["-c", cfg_str, "-d"]);
-    configure_daemon_command(&mut spawn_cmd);
-    spawn_cmd.spawn().context("启动后台守护进程失败")?;
-    info!("[{}] 后台进程已成功启动！", SERVICE_NAME);
-    Ok(())
-}
-
-#[cfg(windows)]
-fn stop_windows_service() -> Result<()> {
-    info!("正在停止 [{}] 后台守护进程...", SERVICE_NAME);
-    let out = Command::new("taskkill.exe")
-        .args(["/f", "/im", "rddns.exe"])
-        .output()
-        .context("执行 taskkill 停止进程失败")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    info!("停止进程输出: {}", stdout.trim());
-    Ok(())
-}
-
-#[cfg(windows)]
-fn restart_windows_service(exe_path: &Path, cfg_str: &str) -> Result<()> {
-    let _ = Command::new("taskkill.exe")
-        .args(["/f", "/im", "rddns.exe"])
-        .output();
-    sleep(Duration::from_millis(800));
-    let mut spawn_cmd = Command::new(exe_path);
-    spawn_cmd.args(["-c", cfg_str, "-d"]);
-    configure_daemon_command(&mut spawn_cmd);
-    spawn_cmd.spawn().context("重启后台守护进程失败")?;
-    info!("[{}] 后台守护进程已完成重启！", SERVICE_NAME);
-    Ok(())
-}
-
-#[cfg(windows)]
-fn status_windows_service() -> Result<()> {
-    info!("正在查询 [{}] 进程与自启状态...", SERVICE_NAME);
-    let out = Command::new("tasklist.exe")
-        .args(["/fi", "IMAGENAME eq rddns.exe"])
-        .output()
-        .context("查询进程列表失败")?;
-    info!("当前进程列表:\n{}", String::from_utf8_lossy(&out.stdout));
-
-    let reg_out = Command::new("reg.exe")
-        .args([
-            "query",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-            "/v",
-            SERVICE_NAME,
-        ])
-        .output();
-    if let Ok(r) = reg_out {
-        if r.status.success() {
-            info!("开机自启注册表: 已启用");
-        } else {
-            info!("开机自启注册表: 未启用");
-        }
+    if !delete_out.status.success() {
+        let msg = String::from_utf8_lossy(&delete_out.stdout);
+        warn!("删除服务输出: {}", msg.trim());
+    } else {
+        info!("[{}] Windows NT 系统服务已成功卸载！", SERVICE_NAME);
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
-    let exe_str = exe_path.to_string_lossy();
-    let cfg_str = config_path.to_string_lossy();
-    let run_cmd = format!("\"{}\" -c \"{}\" -d", exe_str, cfg_str);
+fn start_windows_service() -> Result<()> {
+    info!("正在启动 [{}] Windows 系统服务...", SERVICE_NAME);
+    let out = Command::new("sc.exe")
+        .args(["start", SERVICE_NAME])
+        .output()
+        .context("调用 sc.exe 启动服务失败")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    info!("启动服务输出:\n{}", stdout.trim());
+    Ok(())
+}
 
+#[cfg(windows)]
+fn stop_windows_service() -> Result<()> {
+    info!("正在停止 [{}] Windows 系统服务...", SERVICE_NAME);
+    let out = Command::new("sc.exe")
+        .args(["stop", SERVICE_NAME])
+        .output()
+        .context("调用 sc.exe 停止服务失败")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    info!("停止服务输出:\n{}", stdout.trim());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restart_windows_service() -> Result<()> {
+    info!("正在重启 [{}] Windows 系统服务...", SERVICE_NAME);
+    let _ = Command::new("sc.exe").args(["stop", SERVICE_NAME]).output();
+    sleep(Duration::from_millis(1500));
+    let out = Command::new("sc.exe")
+        .args(["start", SERVICE_NAME])
+        .output()
+        .context("调用 sc.exe 重启服务失败")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    info!("重启服务输出:\n{}", stdout.trim());
+    Ok(())
+}
+
+#[cfg(windows)]
+fn status_windows_service() -> Result<()> {
+    info!("正在查询 [{}] Windows 系统服务状态...", SERVICE_NAME);
+    let out = Command::new("sc.exe")
+        .args(["query", SERVICE_NAME])
+        .output()
+        .context("查询 Windows 服务状态失败")?;
+    info!(
+        "服务状态查询结果:\n{}",
+        String::from_utf8_lossy(&out.stdout).trim()
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
     match action {
-        "install" => install_windows_service(exe_path, config_path, &run_cmd),
+        "install" => install_windows_service(exe_path, config_path),
         "uninstall" => uninstall_windows_service(),
-        "start" => start_windows_service(exe_path, &cfg_str),
+        "start" => start_windows_service(),
         "stop" => stop_windows_service(),
-        "restart" => restart_windows_service(exe_path, &cfg_str),
+        "restart" => restart_windows_service(),
         "status" => status_windows_service(),
         _ => bail!(
             "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",

@@ -138,7 +138,7 @@ chmod +x rddns
 ```
 
 - **Linux**: Automatically creates and manages `/etc/systemd/system/rddns.service` via `systemd`;
-- **Windows**: Registers a background scheduled task/service with high privileges;
+- **Windows**: Automatically registers a native Windows NT Service (SCM) running on boot without login, featuring 3-second automatic recovery on crash or taskkill;
 - **macOS**: Generates `/Library/LaunchDaemons/com.mangerle.rddns.plist` managed by `launchd`.
 
 ---

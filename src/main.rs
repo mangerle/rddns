@@ -16,7 +16,7 @@ use rddns::core::state::StateManager;
 use rddns::util::daemon::{is_daemon_child, run_as_daemon};
 use rddns::util::dns_resolver::set_custom_dns_server;
 use rddns::util::http::set_skip_verify;
-use rddns::util::logging::init_logger;
+use rddns::util::logging::{LogBuffer, init_logger};
 use rddns::util::service::handle_service_command;
 use rddns::util::update::upgrade_self;
 use rddns::web::server::WebServer;
@@ -29,7 +29,7 @@ use tokio::signal::ctrl_c;
 use tokio::spawn;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "rddns", author, version, about = "基于 Rust 的高性能动态域名解析 (DDNS) 服务端工具", long_about = None)]
 struct CliArgs {
     /// 自定义配置文件路径
@@ -67,6 +67,11 @@ struct CliArgs {
     /// 系统自启服务管理 (install | uninstall | start | stop | restart | status)
     #[arg(short = 's', long = "service")]
     service: Option<String>,
+
+    /// 内部参数：以 Windows NT 服务调度模式运行 (由 SCM 调起)
+    #[cfg(windows)]
+    #[arg(long = "windows-service", hide = true, default_value_t = false)]
+    windows_service: bool,
 
     /// 检查并自动升级至最新版本
     #[arg(short = 'u', long = "upgrade", default_value_t = false)]
@@ -181,49 +186,125 @@ fn spawn_signal_listener(cancel_token: CancellationToken) -> tokio::task::JoinHa
     })
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
-    // 1. 初始化全局日志系统
-    let logging_handle = init_logger().context("初始化全局日志系统失败")?;
-    let log_buffer = logging_handle.log_buffer;
-    let _log_guard = logging_handle._guard;
+#[cfg(windows)]
+mod win_svc {
+    use super::*;
+    use rddns::util::windows_service::{
+        SERVICE_NAME, set_running_as_service, set_service_cancel_token,
+    };
+    use std::ffi::OsString;
+    use std::time::Duration;
+    use windows_service::{
+        define_windows_service,
+        service::{
+            ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+            ServiceType,
+        },
+        service_control_handler::{self, ServiceControlHandlerResult},
+        service_dispatcher,
+    };
 
-    // 0. 执行自更新健康检查与崩溃自愈（连续崩溃超阈值自动回滚）
-    if let Err(e) = check_and_recover_current(2) {
-        warn!("自更新健康状态检查异常: {}", e);
+    static GLOBAL_ARGS: parking_lot::RwLock<Option<CliArgs>> = parking_lot::RwLock::new(None);
+    static GLOBAL_LOG_BUFFER: parking_lot::RwLock<Option<LogBuffer>> =
+        parking_lot::RwLock::new(None);
+
+    define_windows_service!(ffi_service_main, rddns_service_main);
+
+    /// 启动 Windows NT 系统服务分发器 (由 Windows SCM 调起)
+    pub fn start_service_dispatcher(args: CliArgs, log_buffer: LogBuffer) -> Result<()> {
+        set_running_as_service(true);
+        *GLOBAL_ARGS.write() = Some(args);
+        *GLOBAL_LOG_BUFFER.write() = Some(log_buffer);
+
+        info!(
+            "正在启动 Windows SCM 系统服务分发调度器 [{}]...",
+            SERVICE_NAME
+        );
+        service_dispatcher::start(SERVICE_NAME, ffi_service_main)
+            .context("启动 Windows 服务分发调度器失败，请确认本程序是否由 Windows SCM 调起")
     }
 
-    let args = CliArgs::parse();
-
-    info!("==========================================");
-    info!(
-        "rddns 动态域名解析系统 v{} 正在启动",
-        env!("CARGO_PKG_VERSION")
-    );
-
-    if args.skip_verify {
-        set_skip_verify(true);
-    }
-
-    if args.upgrade {
-        if let Err(e) = upgrade_self().await {
-            error!("自动升级失败: {:#}", e);
-            exit(1);
+    fn rddns_service_main(_arguments: Vec<OsString>) {
+        if let Err(e) = run_service_lifecycle() {
+            error!("Windows NT 系统服务生命周期异常终止: {:#}", e);
         }
-        return Ok(());
     }
 
-    if args.daemon && !is_daemon_child() {
-        run_as_daemon().context("启动守护进程失败")?;
-        return Ok(());
-    }
+    fn run_service_lifecycle() -> Result<()> {
+        let cancel_token = CancellationToken::new();
+        set_service_cancel_token(cancel_token.clone());
 
+        let token_clone = cancel_token.clone();
+        let event_handler = move |control_event| -> ServiceControlHandlerResult {
+            match control_event {
+                ServiceControl::Stop | ServiceControl::Shutdown => {
+                    info!("收到 Windows 服务控制停止信号 (Stop/Shutdown)，开始平滑停机...");
+                    token_clone.cancel();
+                    ServiceControlHandlerResult::NoError
+                }
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+                _ => ServiceControlHandlerResult::NotImplemented,
+            }
+        };
+
+        let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)
+            .context("注册 SCM 控制处理器句柄失败")?;
+
+        // 向 SCM 上报 Running 状态
+        status_handle
+            .set_service_status(ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Running,
+                controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+                exit_code: ServiceExitCode::NO_ERROR,
+                checkpoint: 0,
+                wait_hint: Duration::default(),
+                process_id: None,
+            })
+            .context("向 SCM 上报 Running 状态失败")?;
+
+        let args = GLOBAL_ARGS.read().clone().context("未获取到服务启动参数")?;
+        let log_buffer = GLOBAL_LOG_BUFFER
+            .read()
+            .clone()
+            .context("未获取到服务日志缓冲区")?;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("创建服务内部 Tokio 运行时失败")?;
+
+        let res = rt.block_on(run_core_app(args, cancel_token, log_buffer));
+
+        let exit_code = match res {
+            Ok(()) => ServiceExitCode::NO_ERROR,
+            Err(e) => {
+                error!("服务核心业务运行出错: {:#}", e);
+                ServiceExitCode::ServiceSpecific(1)
+            }
+        };
+
+        let _ = status_handle.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::Stopped,
+            controls_accepted: ServiceControlAccept::empty(),
+            exit_code,
+            checkpoint: 0,
+            wait_hint: Duration::default(),
+            process_id: None,
+        });
+
+        Ok(())
+    }
+}
+
+/// 运行核心 DDNS 引擎与 Web 服务业务
+async fn run_core_app(
+    args: CliArgs,
+    cancel_token: CancellationToken,
+    log_buffer: LogBuffer,
+) -> Result<()> {
     let config_path = resolve_config_path(&args.config);
-    if let Some(ref action) = args.service {
-        handle_service_command(action, &config_path).context("执行系统服务管理指令失败")?;
-        return Ok(());
-    }
-
     let config_manager =
         Arc::new(ConfigManager::load_or_create(config_path).context("加载或初始化配置文件失败")?);
 
@@ -251,10 +332,7 @@ async fn main() -> Result<()> {
         config_manager.update_runtime_config(conf);
     }
 
-    let cancel_token = CancellationToken::new();
-
-    // 2. 初始化 DDNS 调度引擎
-    // 运行时状态管理器由外部创建并与引擎、Web 层共享，使前端可读取结构化状态
+    // 初始化 DDNS 调度引擎
     let state_manager = StateManager::new();
     let (engine, trigger_tx) = DdnsEngine::new(config_manager.clone(), state_manager.clone());
     let engine_token = cancel_token.clone();
@@ -262,7 +340,7 @@ async fn main() -> Result<()> {
         engine.run_loop(engine_token).await;
     });
 
-    // 3. 初始化 Web 管理服务器
+    // 初始化 Web 管理服务器
     let web_handle = if !args.no_web {
         let web_server = WebServer::new(
             config_manager.clone(),
@@ -282,18 +360,78 @@ async fn main() -> Result<()> {
         None
     };
 
-    // 4. 监听系统退出信号
-    let signal_handle = spawn_signal_listener(cancel_token.clone());
-
     // 收割引擎与 Web 任务：显式识别 panic，避免核心常驻任务崩溃时静默退出
     report_task_exit("DDNS 调度引擎", engine_handle.await).await;
     if let Some(wh) = web_handle {
         report_task_exit("Web 管理服务", wh.await).await;
     }
-    drop(signal_handle);
 
-    info!("rddns 已完全停止运行");
+    info!("rddns 核心业务已平滑退场");
     Ok(())
+}
+
+/// 常规控制台或后台守护进程执行入口
+async fn async_main(args: CliArgs, log_buffer: LogBuffer) -> Result<()> {
+    if args.upgrade {
+        if let Err(e) = upgrade_self().await {
+            error!("自动升级失败: {:#}", e);
+            exit(1);
+        }
+        return Ok(());
+    }
+
+    if args.daemon && !is_daemon_child() {
+        run_as_daemon().context("启动守护进程失败")?;
+        return Ok(());
+    }
+
+    let config_path = resolve_config_path(&args.config);
+    if let Some(ref action) = args.service {
+        handle_service_command(action, &config_path).context("执行系统服务管理指令失败")?;
+        return Ok(());
+    }
+
+    let cancel_token = CancellationToken::new();
+    let signal_handle = spawn_signal_listener(cancel_token.clone());
+
+    let res = run_core_app(args, cancel_token, log_buffer).await;
+    drop(signal_handle);
+    res
+}
+
+fn main() -> Result<()> {
+    // 0. 执行自更新健康检查与崩溃自愈（连续崩溃超阈值自动回滚）
+    if let Err(e) = check_and_recover_current(2) {
+        warn!("自更新健康状态检查异常: {}", e);
+    }
+
+    let logging_handle = init_logger().context("初始化全局日志系统失败")?;
+    let log_buffer = logging_handle.log_buffer;
+    let _log_guard = logging_handle._guard;
+
+    let args = CliArgs::parse();
+
+    info!("==========================================");
+    info!(
+        "rddns 动态域名解析系统 v{} 正在启动",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    if args.skip_verify {
+        set_skip_verify(true);
+    }
+
+    #[cfg(windows)]
+    if args.windows_service {
+        return win_svc::start_service_dispatcher(args, log_buffer);
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("创建 Tokio 运行时失败")?;
+
+    rt.block_on(async_main(args, log_buffer))
 }
 
 /// 等待常驻任务结束并输出其退出状态

@@ -169,13 +169,18 @@ async fn install_package(downloaded: DownloadedUpdate) -> Result<()> {
 /// # 设计原理
 /// - **实现初衷**：在热替换二进制文件后平滑拉起新版本进程，避免网络端口冲突与 Web 响应截断。
 /// - **核心优势**：
-///   - 委托 shipup 0.5.0 内置跨平台平滑交接引擎，Windows 下采用轻量稳健的 cmd/ping 守护，Unix 下采用 sh 守护；
-///   - 自动预留 1000ms 启动缓冲释放 9876 端口与系统锁，预留 300ms 退出缓冲保障 Web 响应完整发送；
-///   - 自动剔除 `-u` 与 `--upgrade` 单次触发参数，彻底根除新版本无限自更新死循环与异常秒退。
+///   - 若处于 Windows NT 服务模式，优先委托 SCM 服务调度器协调重启，确保新进程依然受系统自愈拉活保护；
+///   - 普通运行模式下委托 shipup 内置跨平台平滑交接引擎，Windows 下采用轻量 cmd/ping 守护，Unix 下采用 sh 守护；
+///   - 自动预留启动缓冲释放 9876 端口与系统锁，保障 Web 响应完整发送。
 ///
 /// # Errors
 /// 当外部延迟拉起命令无法派生时返回错误。
 pub fn restart_process() -> Result<()> {
+    #[cfg(windows)]
+    if crate::util::windows_service::is_running_as_service() {
+        return crate::util::windows_service::restart_windows_service_after_update();
+    }
+
     info!("正在调度平滑重启服务以使更新生效...");
     schedule_restart(&RestartOptions::new()).context("调度自更新平滑重启服务失败")
 }

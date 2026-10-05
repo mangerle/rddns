@@ -48,6 +48,9 @@ psl = "2.1"
 shipup = { version = "0.5.1", default-features = false, features = ["async", "archive", "rustls-tls"] }
 dashmap = "6.2.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 
