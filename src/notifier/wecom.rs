@@ -24,6 +24,10 @@ struct WeComTokenCacheEntry {
 static WECOM_TOKEN_CACHE: LazyLock<RwLock<HashMap<String, WeComTokenCacheEntry>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// 企业微信 Token 刷新并发互斥锁，避免缓存失效瞬间多个协程并发击穿企业微信 API 限流
+static WECOM_TOKEN_MUTEX: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 impl WeComNotifier {
     pub fn new(config: WeComConfig) -> Self {
         let client = crate::util::http::create_notifier_client();
@@ -31,6 +35,10 @@ impl WeComNotifier {
     }
 
     /// 获取并缓存企业微信自建应用 access_token (有效生命周期内复用，避免频繁请求触发限流)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 避免在 Token 过期瞬间多个并发通知任务同时穿透去请求企业微信 Token 接口，触发 API 限流。
+    /// - **核心优势**: 采用双重检查锁 (Double-Checked Locking) 模式，锁前快速读取，锁后二次确认，确保同一时刻仅单个协程向远端刷新。
     async fn get_access_token(
         &self,
         corp_id: &str,
@@ -38,7 +46,17 @@ impl WeComNotifier {
     ) -> Result<String, NotifyError> {
         let cache_key = format!("{}:{}", corp_id, corp_secret);
 
-        // 1. 检查有效缓存
+        // 1. 快速检查有效缓存
+        if let Some(entry) = WECOM_TOKEN_CACHE.read().get(&cache_key)
+            && entry.expires_at > Instant::now()
+        {
+            return Ok(entry.access_token.clone());
+        }
+
+        // 2. 加异步互斥锁防止缓存击穿
+        let _guard = WECOM_TOKEN_MUTEX.lock().await;
+
+        // 3. 双重检查确认是否已被前序协程刷新完毕
         if let Some(entry) = WECOM_TOKEN_CACHE.read().get(&cache_key)
             && entry.expires_at > Instant::now()
         {

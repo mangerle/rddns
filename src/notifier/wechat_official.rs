@@ -38,6 +38,10 @@ use std::collections::HashMap;
 static GLOBAL_WECHAT_TOKEN_CACHE: std::sync::LazyLock<RwLock<HashMap<String, CachedToken>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// 微信 Token 刷新并发互斥锁，避免缓存失效瞬间多个协程并发击穿微信 API 限流
+static WECHAT_TOKEN_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// 微信公众号原生模板消息适配器
 pub struct WechatOfficialNotifier {
     config: WechatOfficialConfig,
@@ -54,8 +58,24 @@ impl WechatOfficialNotifier {
     }
 
     /// 获取公众号全局接口调用凭证 access_token (优先从内存缓存中获取)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 避免在 Token 过期瞬间多个并发任务同时穿透去请求微信 Token 接口，造成缓存击穿并触发微信 API 限流。
+    /// - **核心优势**: 采用双重检查锁 (Double-Checked Locking) 模式，锁前快速读取，锁后二次确认，确保同一时刻仅单个协程向远端刷新。
     async fn fetch_access_token(&self) -> Result<String, NotifyError> {
         let app_id = self.config.app_id.trim();
+
+        // 1. 快速检查读缓存
+        if let Some(cached) = GLOBAL_WECHAT_TOKEN_CACHE.read().get(app_id)
+            && Instant::now() < cached.expires_at
+        {
+            return Ok(cached.token.clone());
+        }
+
+        // 2. 加异步互斥锁防止缓存击穿
+        let _guard = WECHAT_TOKEN_MUTEX.lock().await;
+
+        // 3. 双重检查确认是否已被前序协程刷新完毕
         if let Some(cached) = GLOBAL_WECHAT_TOKEN_CACHE.read().get(app_id)
             && Instant::now() < cached.expires_at
         {
