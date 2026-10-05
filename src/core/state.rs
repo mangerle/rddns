@@ -58,6 +58,10 @@ impl TaskRuntimeState {
     }
 }
 
+pub use crate::notifier::dispatcher::ChannelDeliveryStatus;
+use crate::notifier::dispatcher::DeliveryStatusMap;
+use parking_lot::RwLock;
+
 /// 全局任务运行时状态管理器
 ///
 /// # 设计原理
@@ -67,6 +71,7 @@ impl TaskRuntimeState {
 #[derive(Clone, Default)]
 pub struct StateManager {
     tasks: Arc<DashMap<String, TaskRuntimeState>>,
+    delivery_statuses: DeliveryStatusMap,
 }
 
 impl StateManager {
@@ -74,7 +79,13 @@ impl StateManager {
     pub fn new() -> Self {
         Self {
             tasks: Arc::new(DashMap::new()),
+            delivery_statuses: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// 获取通知渠道投递状态共享引用
+    pub fn delivery_statuses(&self) -> DeliveryStatusMap {
+        self.delivery_statuses.clone()
     }
 
     /// 获取指定任务的状态克隆快照，若不存在则初始化为默认值
@@ -111,6 +122,11 @@ impl StateManager {
             .iter()
             .map(|entry| (entry.key().clone(), entry.value().sanitized()))
             .collect()
+    }
+
+    /// 获取全部通知渠道投递状态的只读快照
+    pub fn snapshot_notifications(&self) -> HashMap<String, ChannelDeliveryStatus> {
+        self.delivery_statuses.read().clone()
     }
 }
 

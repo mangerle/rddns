@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 use tokio::spawn;
 use tokio::task::JoinSet;
 
+use serde::{Deserialize, Serialize};
+
 /// 错误追踪表触发过期清理的软阈值条数
 const TRACKER_SOFT_LIMIT: usize = 256;
 /// 错误追踪表绝对硬上限，防止内存无限膨胀
@@ -35,6 +37,29 @@ pub struct ErrorTracker {
 
 pub type ErrorTrackerMap = Arc<RwLock<HashMap<String, ErrorTracker>>>;
 
+/// 单个通知渠道的最新投递状态快照
+///
+/// # 设计原理
+/// - **实现初衷**: 聚合多渠道异步推送的投递结果，使 Web 管理面板可以直观展示各渠道投递成功/失败状态，杜绝通知失败静默。
+/// - **核心优势**: 包含错误时间、累计计数与截断错误原因，避免敏感信息泄露的同时提供可观测性。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChannelDeliveryStatus {
+    /// 渠道名称
+    pub channel_name: String,
+    /// 最近一次投递成功时间
+    pub last_success_time: Option<String>,
+    /// 最近一次投递失败时间
+    pub last_failure_time: Option<String>,
+    /// 最近一次投递失败错误原因
+    pub last_error: Option<String>,
+    /// 累计成功次数
+    pub success_count: u64,
+    /// 累计失败次数
+    pub failure_count: u64,
+}
+
+pub type DeliveryStatusMap = Arc<RwLock<HashMap<String, ChannelDeliveryStatus>>>;
+
 /// 全局多渠道通知分发器
 ///
 /// # 设计原理
@@ -46,22 +71,46 @@ pub struct NotificationDispatcher {
     notifiers: Vec<Arc<dyn Notifier>>,
     config: NotificationConfig,
     error_trackers: ErrorTrackerMap,
+    delivery_statuses: DeliveryStatusMap,
 }
 
 impl NotificationDispatcher {
     /// 创建通知分发器实例
     pub fn new(config: NotificationConfig) -> Self {
-        Self::new_with_trackers(config, Arc::new(RwLock::new(HashMap::new())))
+        Self::new_with_trackers_and_statuses(
+            config,
+            Arc::new(RwLock::new(HashMap::new())),
+            Arc::new(RwLock::new(HashMap::new())),
+        )
     }
 
     /// 支持传入外部持久化的错误跟踪器（供 Engine 跨周期保留冷却状态）
     pub fn new_with_trackers(config: NotificationConfig, trackers: ErrorTrackerMap) -> Self {
+        Self::new_with_trackers_and_statuses(
+            config,
+            trackers,
+            Arc::new(RwLock::new(HashMap::new())),
+        )
+    }
+
+    /// 支持传入外部持久化的错误跟踪器与渠道投递状态表（供 Engine 与 Web 状态管理器共享）
+    pub fn new_with_trackers_and_statuses(
+        config: NotificationConfig,
+        trackers: ErrorTrackerMap,
+        delivery_statuses: DeliveryStatusMap,
+    ) -> Self {
         let notifiers = Self::build_enabled_notifiers(&config);
         Self {
             notifiers,
             config,
             error_trackers: trackers,
+            delivery_statuses,
         }
+    }
+
+    /// 获取全部通知渠道的最新投递状态快照
+    pub fn snapshot_delivery_statuses(&self) -> HashMap<String, ChannelDeliveryStatus> {
+        self.delivery_statuses.read().clone()
     }
 
     /// 根据配置初始化所有启用的通知渠道实例
@@ -228,17 +277,44 @@ impl NotificationDispatcher {
             let n = notifier.clone();
             let ev = ev_arc.clone();
             join_set.spawn(async move {
-                Self::send_with_retry(n, ev).await;
+                let name = n.channel_name().to_string();
+                let res = Self::send_with_retry(n, ev).await;
+                (name, res)
             });
         }
 
-        // 监管任务：收割各渠道句柄，确保 panic 可被识别并记录
+        let statuses = self.delivery_statuses.clone();
+        // 监管任务：收割各渠道句柄与投递结果，确保 panic 可被识别并聚合投递状态 (P2-7)
         spawn(async move {
             while let Some(res) = join_set.join_next().await {
-                if let Err(join_err) = res
-                    && join_err.is_panic()
-                {
-                    error!("通知渠道任务发生 panic，该渠道推送已中断: {}", join_err);
+                match res {
+                    Ok((channel_name, delivery_res)) => {
+                        let now = chrono::Local::now().to_rfc3339();
+                        let mut guard = statuses.write();
+                        let entry = guard.entry(channel_name.clone()).or_insert_with(|| {
+                            ChannelDeliveryStatus {
+                                channel_name,
+                                ..Default::default()
+                            }
+                        });
+                        match delivery_res {
+                            Ok(()) => {
+                                entry.last_success_time = Some(now);
+                                entry.success_count = entry.success_count.saturating_add(1);
+                            }
+                            Err(e) => {
+                                entry.last_failure_time = Some(now);
+                                let truncated: String = e.chars().take(500).collect();
+                                entry.last_error = Some(truncated);
+                                entry.failure_count = entry.failure_count.saturating_add(1);
+                            }
+                        }
+                    }
+                    Err(join_err) => {
+                        if join_err.is_panic() {
+                            error!("通知渠道任务发生 panic，该渠道推送已中断: {}", join_err);
+                        }
+                    }
                 }
             }
         });
@@ -248,12 +324,15 @@ impl NotificationDispatcher {
     ///
     /// 区分瞬时网络抖动与 4xx/认证配置错误等永久性错误，永久错误立即中止重试并输出日志；
     /// 重试退避引入轻量 Jitter，防范并发渠道重试风暴 (P2-8)。
-    async fn send_with_retry(notifier: Arc<dyn Notifier>, ev: Arc<NotificationEvent>) {
+    async fn send_with_retry(
+        notifier: Arc<dyn Notifier>,
+        ev: Arc<NotificationEvent>,
+    ) -> Result<(), String> {
         const MAX_RETRIES: usize = 2;
         let mut attempt = 0;
         loop {
             match notifier.send(&ev).await {
-                Ok(()) => return,
+                Ok(()) => return Ok(()),
                 Err(e) => {
                     // 若属于 4xx 客户端认证或语法配置等永久错误，直接中止，无需重试
                     if !e.is_retryable() {
@@ -262,7 +341,7 @@ impl NotificationDispatcher {
                             notifier.channel_name(),
                             e
                         );
-                        return;
+                        return Err(e.to_string());
                     }
 
                     if attempt >= MAX_RETRIES {
@@ -272,7 +351,7 @@ impl NotificationDispatcher {
                             attempt,
                             e
                         );
-                        return;
+                        return Err(e.to_string());
                     }
                     attempt += 1;
                     // 指数退避叠加轻量 Jitter (0~200ms)
@@ -343,7 +422,8 @@ mod tests {
             timestamp: chrono::Local::now(),
         });
 
-        NotificationDispatcher::send_with_retry(mock_notifier, event).await;
+        let res = NotificationDispatcher::send_with_retry(mock_notifier, event).await;
+        assert!(res.is_ok());
         // 初始 1 次 + 重试 2 次 = 3 次调用后成功
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
     }
@@ -380,7 +460,8 @@ mod tests {
             timestamp: chrono::Local::now(),
         });
 
-        NotificationDispatcher::send_with_retry(mock, event).await;
+        let res = NotificationDispatcher::send_with_retry(mock, event).await;
+        assert!(res.is_err());
         // 遇到 401 永久性错误，立刻返回不重试，调用次数仅为 1
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
@@ -396,5 +477,45 @@ mod tests {
         let trackers = dispatcher.error_trackers.read();
         // 验证不会无限膨胀，数量严格不超过硬上限 512
         assert_eq!(trackers.len(), TRACKER_HARD_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_aggregates_delivery_status() {
+        let statuses: DeliveryStatusMap = Arc::new(RwLock::new(HashMap::new()));
+        let mut dispatcher = NotificationDispatcher::new_with_trackers_and_statuses(
+            NotificationConfig::default(),
+            Arc::new(RwLock::new(HashMap::new())),
+            statuses.clone(),
+        );
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let mock = Arc::new(MockRetryNotifier {
+            fail_times: 0,
+            call_count,
+        });
+        dispatcher.notifiers.push(mock);
+
+        let event = NotificationEvent {
+            overall_status: NotificationOverallStatus::Success,
+            task_name: "测试聚合任务".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: true,
+            results: vec![],
+            timestamp: chrono::Local::now(),
+        };
+
+        dispatcher.dispatch_internal(event, true);
+
+        // 等待监管协程收割完成
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let snapshot = dispatcher.snapshot_delivery_statuses();
+        assert!(snapshot.contains_key("测试Mock渠道"));
+        let st = snapshot.get("测试Mock渠道").unwrap();
+        assert_eq!(st.success_count, 1);
+        assert_eq!(st.failure_count, 0);
+        assert!(st.last_success_time.is_some());
+        assert!(st.last_failure_time.is_none());
     }
 }

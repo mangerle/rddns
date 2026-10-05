@@ -20,6 +20,18 @@ pub async fn get_task_status_handler(
     Json(ApiResponse::ok(snapshot))
 }
 
+/// 查询各通知渠道的投递状态快照 (P2-7)
+///
+/// # 设计原理
+/// - **实现初衷**: 为 Web 管理后台提供通知投递结果聚合能力，展示各渠道最后成功/失败时间、错误原因及累计次数。
+/// - **核心优势**: 解决后台通知投递失败无聚合、无感知的问题，使运维人员一目了然。
+pub async fn get_notification_status_handler(
+    State(state): State<AppState>,
+) -> Json<ApiResponse<HashMap<String, crate::notifier::dispatcher::ChannelDeliveryStatus>>> {
+    let snapshot = state.state_manager.snapshot_notifications();
+    Json(ApiResponse::ok(snapshot))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +115,36 @@ mod tests {
             err.chars().count()
         );
         assert!(err.ends_with("...(已截断)"), "应带有截断标记");
+    }
+
+    #[tokio::test]
+    async fn test_notification_status_returns_aggregated_state() {
+        let state = build_state();
+        let statuses = state.state_manager.delivery_statuses();
+        {
+            let mut guard = statuses.write();
+            guard.insert(
+                "企业微信".to_string(),
+                crate::notifier::dispatcher::ChannelDeliveryStatus {
+                    channel_name: "企业微信".to_string(),
+                    last_success_time: Some("2026-10-05 12:00:00".to_string()),
+                    last_failure_time: None,
+                    last_error: None,
+                    success_count: 5,
+                    failure_count: 0,
+                },
+            );
+        }
+
+        let Json(resp) = get_notification_status_handler(State(state)).await;
+        assert!(resp.success);
+        let data = resp.data.expect("应返回通知投递数据");
+        let wecom = data.get("企业微信").expect("应包含企业微信投递状态");
+        assert_eq!(wecom.success_count, 5);
+        assert_eq!(wecom.failure_count, 0);
+        assert_eq!(
+            wecom.last_success_time.as_deref(),
+            Some("2026-10-05 12:00:00")
+        );
     }
 }

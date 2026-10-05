@@ -90,9 +90,10 @@ impl DdnsEngine {
             config.dns_tasks.iter().map(|t| t.name.clone()).collect();
         self.state_manager.retain_active_tasks(&active_task_names);
 
-        let dispatcher = NotificationDispatcher::new_with_trackers(
+        let dispatcher = NotificationDispatcher::new_with_trackers_and_statuses(
             config.notifications.clone(),
             self.error_trackers.clone(),
+            self.state_manager.delivery_statuses(),
         );
 
         let cache_times = config.cache_times;
