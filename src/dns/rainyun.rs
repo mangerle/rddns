@@ -273,7 +273,12 @@ impl RecordOps for RainYunProvider {
     ) -> Result<(), DnsProviderError> {
         let ttl_val = ttl.unwrap_or(600).max(1);
         let sub = domain.sub_domain_or_at();
-        let rid = record_id.parse::<i64>().unwrap_or(0);
+        let rid = record_id.parse::<i64>().map_err(|e| {
+            DnsProviderError::api(
+                "InvalidRecordId",
+                format!("雨云解析记录更新失败：无效的记录 ID 数字格式: {record_id}, 错误: {e}"),
+            )
+        })?;
         let update_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, zone);
         let update_payload = json!({
             "host": sub,

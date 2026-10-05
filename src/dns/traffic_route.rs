@@ -150,6 +150,15 @@ impl TrafficRouteProvider {
             records: None,
         }))
     }
+
+    fn parse_zid(zone: &str) -> Result<u64, DnsProviderError> {
+        zone.parse::<u64>().map_err(|e| {
+            DnsProviderError::api(
+                "InvalidZID",
+                format!("火山引擎解析失败：无效的 Zone ID 格式: {zone}, 错误: {e}"),
+            )
+        })
+    }
 }
 
 #[async_trait]
@@ -184,7 +193,7 @@ impl RecordOps for TrafficRouteProvider {
         record_type: DnsRecordType,
     ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
-        let zid_num = zone.parse::<u64>().unwrap_or(0);
+        let zid_num = Self::parse_zid(zone)?;
         let list_records_body = json!({
             "ZID": zid_num,
             "Host": sub,
@@ -218,7 +227,7 @@ impl RecordOps for TrafficRouteProvider {
     ) -> Result<(), DnsProviderError> {
         let ttl_val = ttl.unwrap_or(600).max(1);
         let sub = domain.sub_domain_or_at();
-        let zid_num = zone.parse::<u64>().unwrap_or(0);
+        let zid_num = Self::parse_zid(zone)?;
         let create_body = json!({
             "ZID": zid_num,
             "Host": sub,
@@ -244,7 +253,7 @@ impl RecordOps for TrafficRouteProvider {
     ) -> Result<(), DnsProviderError> {
         let ttl_val = ttl.unwrap_or(600).max(1);
         let sub = domain.sub_domain_or_at();
-        let zid_num = zone.parse::<u64>().unwrap_or(0);
+        let zid_num = Self::parse_zid(zone)?;
         let update_body = json!({
             "RecordID": record_id,
             "ZID": zid_num,
@@ -389,5 +398,18 @@ mod tests {
         let (auth2, sig2, _) = compute_volc_authorization(&params);
         assert_eq!(auth, auth2);
         assert_eq!(sig, sig2);
+    }
+
+    #[test]
+    fn test_traffic_route_invalid_zid_returns_error() {
+        let valid = TrafficRouteProvider::parse_zid("123456789");
+        assert_eq!(valid.unwrap(), 123456789);
+
+        let invalid = TrafficRouteProvider::parse_zid("abc_not_a_number");
+        assert!(invalid.is_err());
+        match invalid.unwrap_err() {
+            DnsProviderError::ApiError { code, .. } => assert_eq!(code, "InvalidZID"),
+            other => panic!("预期 ApiError(InvalidZID)，实际为: {:?}", other),
+        }
     }
 }
