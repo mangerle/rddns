@@ -159,6 +159,7 @@ jobs:
       - name: 生成并上传 latest.json 清单
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
           RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
@@ -180,6 +181,18 @@ jobs:
               raise ValueError(f"RELEASE_SIGNING_PRIVATE_KEY 必须为 32 字节 Ed25519 原始种子，当前解码长度: {len(priv_key_bytes)}")
 
           signer = ed25519.Ed25519PrivateKey.from_private_bytes(priv_key_bytes)
+
+          # 自定义重定向处理器：跨域重定向至 S3 等对象存储时剥离 Authorization 请求头，避免 S3 报 400 (Only one auth mechanism allowed)
+          class AssetRedirectHandler(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+                  if new_req:
+                      for header in list(new_req.headers.keys()):
+                          if header.lower() == "authorization":
+                              del new_req.headers[header]
+                  return new_req
+
+          opener = urllib.request.build_opener(AssetRedirectHandler())
 
           # 草稿模式下无法通过 releases/tags/{tag} 直接查询，需遍历 releases 列表按 tag_name 匹配
           req = urllib.request.Request(
@@ -206,11 +219,14 @@ jobs:
                   if sha_name not in asset_map:
                       continue
 
+              # 草稿模式下静态 CDN 下载路由 browser_download_url 返回 404，必须通过 API 的 asset url 下载
+              sha_asset = asset_map[sha_name]
               sha_req = urllib.request.Request(
-                  asset_map[sha_name]["browser_download_url"],
-                  headers={"Authorization": f"Bearer {token}", "User-Agent": "shipup-manifest"}
+                  sha_asset["url"],
+                  headers={"Accept": "application/octet-stream", "User-Agent": "shipup-manifest"}
               )
-              with urllib.request.urlopen(sha_req) as s_resp:
+              sha_req.add_unredirected_header("Authorization", f"Bearer {token}")
+              with opener.open(sha_req) as s_resp:
                   sha_text = s_resp.read().decode("utf-8").strip()
                   checksum = re.search(r"([a-fA-F0-9]{64})", sha_text).group(1).lower()
 
@@ -237,6 +253,7 @@ jobs:
 
           with open("latest.json", "w", encoding="utf-8") as f:
               json.dump(manifest, f, indent=2, ensure_ascii=False)
+          print(f"成功为 {len(packages)} 个平台的构建产物生成并签名 latest.json 清单")
           EOF
 
           gh release upload "${{ github.ref_name }}" latest.json --clobber --repo "${{ github.repository }}"
