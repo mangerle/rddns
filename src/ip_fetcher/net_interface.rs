@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::task::spawn_blocking;
+use tokio::time::{Duration, timeout};
+
+/// 网卡阻塞系统调用查询超时时间 (P2-2)
+const INTERFACE_OP_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 基于本地网卡设备提取 IP
 pub struct NetInterfaceIpFetcher {
@@ -33,28 +37,36 @@ impl NetInterfaceIpFetcher {
         }
     }
 
-    /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池)
+    /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池并附加超时保护)
     async fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
         let name = self.interface_name.clone();
-        spawn_blocking(move || {
-            let interfaces = NetworkInterface::show()
-                .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
+        timeout(
+            INTERFACE_OP_TIMEOUT,
+            spawn_blocking(move || {
+                let interfaces = NetworkInterface::show()
+                    .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
 
-            interfaces
-                .into_iter()
-                .find(|iface| iface.name.eq_ignore_ascii_case(&name))
-                .ok_or_else(|| FetchError::InterfaceNotFound(name))
-        })
+                interfaces
+                    .into_iter()
+                    .find(|iface| iface.name.eq_ignore_ascii_case(&name))
+                    .ok_or_else(|| FetchError::InterfaceNotFound(name))
+            }),
+        )
         .await
+        .map_err(|_| FetchError::Other("查询网卡设备超时 (超过 3 秒)".to_string()))?
         .map_err(|e| FetchError::Other(format!("异步执行网卡查询任务失败: {}", e)))?
     }
 
     /// 从 Linux `/proc/net/if_inet6` 读取指定网卡的 IPv6 候选集并按稳定性排序
     async fn collect_linux_ipv6_candidates(if_name: &str) -> Option<Vec<Ipv6Addr>> {
         let target_name = if_name.to_string();
-        let entries = spawn_blocking(move || read_linux_if_inet6(Some(&target_name)))
-            .await
-            .unwrap_or(None)?;
+        let entries = timeout(
+            INTERFACE_OP_TIMEOUT,
+            spawn_blocking(move || read_linux_if_inet6(Some(&target_name))),
+        )
+        .await
+        .ok()
+        .and_then(|res| res.unwrap_or(None))?;
 
         let entries_count = entries.len();
         let mut stable = Vec::with_capacity(entries_count);
