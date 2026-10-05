@@ -1,4 +1,5 @@
 use idna::domain_to_ascii;
+use log::warn;
 use psl::Psl;
 use std::collections::HashMap;
 use std::str::from_utf8;
@@ -189,8 +190,22 @@ pub fn parse_domain(raw_input: &str) -> Option<ParsedDomain> {
 }
 
 /// 批量解析域名列表
+///
+/// 遇到格式非法或无法识别根域名的输入时，打印警告日志提醒用户核对配置，并安全跳过该项。
 pub fn parse_domain_list(raw_list: &[String]) -> Vec<ParsedDomain> {
-    raw_list.iter().filter_map(|d| parse_domain(d)).collect()
+    let mut parsed = Vec::with_capacity(raw_list.len());
+    for raw in raw_list {
+        match parse_domain(raw) {
+            Some(domain) => parsed.push(domain),
+            None => {
+                warn!(
+                    "配置的域名 [{}] 格式非法或无法识别根域名，已被跳过，请检查任务域名配置",
+                    raw
+                );
+            }
+        }
+    }
+    parsed
 }
 
 #[cfg(test)]
@@ -372,5 +387,18 @@ mod tests {
         let (sub, root) = split_sub_and_root_by_psl("localhost");
         assert_eq!(sub, "@");
         assert_eq!(root, "localhost");
+    }
+
+    #[test]
+    fn test_parse_domain_list_skips_invalid() {
+        let list = vec![
+            "example.com".to_string(),
+            "localhost".to_string(),
+            "sub.test.org".to_string(),
+        ];
+        let parsed = parse_domain_list(&list);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].full_domain(), "example.com");
+        assert_eq!(parsed[1].full_domain(), "sub.test.org");
     }
 }

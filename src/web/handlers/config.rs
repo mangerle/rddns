@@ -72,6 +72,20 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
         }
 
         for ip_cfg in [&task.ipv4, &task.ipv6] {
+            if ip_cfg.enabled {
+                for domain_str in &ip_cfg.domains {
+                    let trimmed = domain_str.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+                        continue;
+                    }
+                    if crate::core::domain::parse_domain(trimmed).is_none() {
+                        return Err(AppError::bad_request(format!(
+                            "任务 [{}] 配置的域名 [{}] 格式非法或无法识别根域名，请核对输入",
+                            name, trimmed
+                        )));
+                    }
+                }
+            }
             if ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
