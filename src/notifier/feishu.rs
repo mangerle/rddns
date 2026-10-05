@@ -17,6 +17,24 @@ pub struct FeishuNotifier {
     client: Client,
 }
 
+/// 对飞书 lark_md 内容中的特殊控制字符进行安全转义，防止破坏卡片 Markdown 排版或引发解析异常
+pub fn escape_lark_md(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len() * 3 / 2);
+    for ch in input.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '*' | '_' | '~' | '[' | ']' | '(' | ')' | '`' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 impl FeishuNotifier {
     pub fn new(config: FeishuConfig) -> Self {
         let client = crate::util::http::create_notifier_client();
@@ -84,7 +102,7 @@ impl FeishuNotifier {
                                     "is_short": true,
                                     "text": {
                                         "tag": "lark_md",
-                                        "content": format!("**任务名称**\n{}", event.task_name)
+                                        "content": format!("**任务名称**\n{}", escape_lark_md(&event.task_name))
                                     }
                                 },
                                 {
@@ -297,5 +315,15 @@ mod tests {
         let card_json = payload.to_string();
         assert!(card_json.contains("同步出现错误"));
         assert!(card_json.contains("失败"));
+    }
+
+    #[test]
+    fn test_escape_lark_md() {
+        let input = "task_*[test]~#1 <alert> & `code`";
+        let escaped = escape_lark_md(input);
+        assert_eq!(
+            escaped,
+            "task\\_\\*\\[test\\]\\~#1 &lt;alert&gt; &amp; \\`code\\`"
+        );
     }
 }

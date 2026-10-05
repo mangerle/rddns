@@ -112,6 +112,22 @@ pub(crate) fn escape_html(input: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Markdown 特殊字符安全转义（防止任务名或错误文本中包含 Markdown 控制符导致排版崩溃）
+pub fn escape_markdown(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3 / 2);
+    for c in input.chars() {
+        match c {
+            '\\' | '*' | '_' | '`' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '!' | '|' | '<'
+            | '>' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// 同步总状态标识
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationOverallStatus {
@@ -202,7 +218,7 @@ impl NotificationEvent {
             > **触发时间**：{}\n\n\
             #### 同步结果：\n{}",
             self.overall_status.as_str(),
-            self.task_name,
+            escape_markdown(&self.task_name),
             self.ipv4_str(),
             self.ipv6_str(),
             self.domains_comma_separated(),
@@ -422,5 +438,15 @@ mod tests {
         };
 
         assert_eq!(event1.error_fingerprint(), event2.error_fingerprint());
+    }
+
+    #[test]
+    fn test_escape_markdown() {
+        let input = "task_*[test]#1 (v2.0) <tag> & | alert!";
+        let escaped = escape_markdown(input);
+        assert_eq!(
+            escaped,
+            "task\\_\\*\\[test\\]\\#1 \\(v2.0\\) \\<tag\\> & \\| alert\\!"
+        );
     }
 }
