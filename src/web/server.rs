@@ -11,6 +11,7 @@ use crate::web::handlers::{
     trigger_upgrade_handler,
 };
 use crate::web::sse::sse_log_handler;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -20,6 +21,13 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Web API 请求体最大限制（256 KB）
+///
+/// # 设计原理
+/// - **实现初衷**: 限制入站 JSON 请求体最大大小，避免攻击者发送巨型 JSON 导致反序列化或内存耗尽。
+/// - **核心优势**: 相比 Axum 默认的 2MB 限制更紧凑，充分满足配置保存（通常仅数 KB）的同时强化防攻击屏障。
+pub const MAX_BODY_LIMIT_BYTES: usize = 256 * 1024;
 
 pub struct WebServer {
     config_manager: Arc<ConfigManager>,
@@ -131,6 +139,7 @@ impl WebServer {
         let app = Router::new()
             .nest("/api/v1", api_routes)
             .fallback(static_handler)
+            .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT_BYTES))
             .with_state(state);
 
         let listener = TcpListener::bind(addr).await?;
@@ -173,5 +182,10 @@ mod tests {
         // 3. CLI 显式覆盖时优先采用 CLI 参数
         let addr_cli = WebServer::resolve_bind_addr(Some("192.168.1.10:8080"), 9876, true);
         assert_eq!(addr_cli, "192.168.1.10:8080".parse().unwrap());
+    }
+
+    #[test]
+    fn test_body_limit_constant() {
+        assert_eq!(MAX_BODY_LIMIT_BYTES, 262_144);
     }
 }
