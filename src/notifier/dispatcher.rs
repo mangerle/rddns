@@ -202,9 +202,7 @@ impl NotificationDispatcher {
             let n = notifier.clone();
             let ev = ev_arc.clone();
             join_set.spawn(async move {
-                if let Err(e) = n.send(&ev).await {
-                    error!("[{}] 渠道发送通知失败: {}", n.channel_name(), e);
-                }
+                Self::send_with_retry(n, ev).await;
             });
         }
 
@@ -218,5 +216,89 @@ impl NotificationDispatcher {
                 }
             }
         });
+    }
+
+    /// 尝试发送通知并在网络异常时进行有限重试 (最多重试 2 次，共 3 次尝试)
+    async fn send_with_retry(notifier: Arc<dyn Notifier>, ev: Arc<NotificationEvent>) {
+        const MAX_RETRIES: usize = 2;
+        let mut attempt = 0;
+        loop {
+            match notifier.send(&ev).await {
+                Ok(()) => return,
+                Err(e) => {
+                    if attempt >= MAX_RETRIES {
+                        error!(
+                            "[{}] 渠道发送通知最终失败（已重试 {} 次）: {}",
+                            notifier.channel_name(),
+                            attempt,
+                            e
+                        );
+                        return;
+                    }
+                    attempt += 1;
+                    let backoff = Duration::from_millis(500 * (1 << attempt)); // 1s, 2s
+                    warn!(
+                        "[{}] 渠道发送通知失败: {}，将在 {} 秒后进行第 {}/{} 次重试",
+                        notifier.channel_name(),
+                        e,
+                        backoff.as_secs_f32(),
+                        attempt,
+                        MAX_RETRIES
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::notifier::trait_def::{NotificationOverallStatus, NotifyError};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct MockRetryNotifier {
+        fail_times: usize,
+        call_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Notifier for MockRetryNotifier {
+        fn channel_name(&self) -> &'static str {
+            "测试Mock渠道"
+        }
+
+        async fn send(&self, _event: &NotificationEvent) -> Result<(), NotifyError> {
+            let current = self.call_count.fetch_add(1, Ordering::SeqCst);
+            if current < self.fail_times {
+                Err(NotifyError::Provider("网络临时抖动".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_succeeds_after_retries() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let mock_notifier = Arc::new(MockRetryNotifier {
+            fail_times: 2,
+            call_count: call_count.clone(),
+        });
+        let event = Arc::new(NotificationEvent {
+            overall_status: NotificationOverallStatus::Success,
+            task_name: "测试任务".to_string(),
+            ipv4: None,
+            ipv6: None,
+            ip_changed: true,
+            results: vec![],
+            timestamp: chrono::Local::now(),
+        });
+
+        NotificationDispatcher::send_with_retry(mock_notifier, event).await;
+        // 初始 1 次 + 重试 2 次 = 3 次调用后成功
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
     }
 }
