@@ -1,14 +1,29 @@
 use crate::config::model::DnsTaskConfig;
 use crate::core::domain::ParsedDomain;
-use crate::core::state::TaskRuntimeState;
+use crate::core::state::{StateManager, TaskRuntimeState};
 use crate::dns::trait_def::{DnsProvider, DnsRecordType, SyncRecordResult};
+use crate::notifier::dispatcher::NotificationDispatcher;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// 单任务内向 DNS 服务商并发同步域名的最大协程数，防止瞬时打满平台 QPS 限流
-pub const MAX_CONCURRENT_DNS_SYNCS: usize = 5;
+/// 全局向 DNS 服务商并发同步域名的最大协程数，防止跨任务并发请求打满平台 QPS 限流
+pub const MAX_CONCURRENT_DNS_SYNCS: usize = 10;
+
+/// 单个 DNS 任务的处理上下文参数对象（参数对象模式，避免平铺多参）
+///
+/// # 设计原理
+/// - **实现初衷**: 收敛任务执行时所需的配置、状态管理器、通知分发器及全局并发信号量。
+/// - **核心优势**: 符合入参不超 4 个规范，并在任务生命周期中复用全局 DNS 并发控制器。
+pub(crate) struct TaskProcessParams<'a> {
+    pub task: &'a DnsTaskConfig,
+    pub cache_times: u32,
+    pub dispatcher: &'a NotificationDispatcher,
+    pub state_manager: &'a StateManager,
+    pub semaphore: Arc<Semaphore>,
+    pub force_sync: bool,
+}
 
 /// 单协议域名并发同步入参对象（参数对象模式，避免平铺多参）
 ///

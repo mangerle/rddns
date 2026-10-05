@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::model::{AppConfig, IpFetchConfig, IpSourceType, ProviderConfig};
+use crate::config::model::{AppConfig, DnsTaskConfig, IpFetchConfig, IpSourceType, ProviderConfig};
 use crate::core::domain::ParsedDomain;
 use crate::core::state::TaskRuntimeState;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult};

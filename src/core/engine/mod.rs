@@ -5,7 +5,6 @@ pub(crate) mod sync;
 #[cfg(test)]
 mod tests;
 
-use crate::config::model::DnsTaskConfig;
 use crate::config::storage::ConfigManager;
 use crate::core::domain::parse_domain_list;
 use crate::core::state::StateManager;
@@ -32,13 +31,14 @@ pub(crate) use params::*;
 ///
 /// # 设计原理
 /// - **实现初衷**: 统一协调与驱动定时轮询、配置热加载订阅、手动触发、故障重试、网络连通性探测以及多任务并发同步。
-/// - **核心优势**: 任务间全异步独立并发，单任务内通过信号量限制 DNS 同步并发度（最大 5 并发），兼顾同步吞吐量与平台 QPS 防限流；智能增量比对与缓存周期检测，极大降低公网 API 调用频次。
+/// - **核心优势**: 任务间全异步独立并发，全局通过信号量限制跨任务 DNS 同步并发度（最大 10 并发），兼顾同步吞吐量与平台 QPS 防限流；智能增量比对与缓存周期检测，极大降低公网 API 调用频次。
 /// - **代价与局限**: 跨任务错误追踪与状态快照驻留内存，需依赖生命周期回收函数 `retain_active_tasks` 定期清理已删除任务。
 pub struct DdnsEngine {
     config_manager: Arc<ConfigManager>,
     state_manager: StateManager,
     trigger_receiver: mpsc::Receiver<()>,
     error_trackers: ErrorTrackerMap,
+    dns_sync_semaphore: Arc<Semaphore>,
 }
 
 impl DdnsEngine {
@@ -61,6 +61,7 @@ impl DdnsEngine {
             state_manager,
             trigger_receiver: rx,
             error_trackers: Arc::new(RwLock::new(HashMap::new())),
+            dns_sync_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_DNS_SYNCS)),
         };
         (engine, tx)
     }
@@ -90,6 +91,7 @@ impl DdnsEngine {
         let cache_times = config.cache_times;
 
         let mut join_set = JoinSet::new();
+        let semaphore = self.dns_sync_semaphore.clone();
         for task in config.dns_tasks.iter() {
             if !task.enabled {
                 debug!("[{}] 任务已处于禁用状态，跳过后台同步", task.name);
@@ -98,14 +100,16 @@ impl DdnsEngine {
             let task = task.clone();
             let dispatcher_clone = dispatcher.clone();
             let state_manager = self.state_manager.clone();
+            let sem = semaphore.clone();
             join_set.spawn(async move {
-                Self::process_task(
-                    &task,
+                Self::process_task(TaskProcessParams {
+                    task: &task,
                     cache_times,
-                    &dispatcher_clone,
-                    &state_manager,
-                    force_cloud_sync,
-                )
+                    dispatcher: &dispatcher_clone,
+                    state_manager: &state_manager,
+                    semaphore: sem,
+                    force_sync: force_cloud_sync,
+                })
                 .await;
             });
         }
@@ -130,13 +134,16 @@ impl DdnsEngine {
     }
 
     /// 处理单个 DNS 任务
-    async fn process_task(
-        task: &DnsTaskConfig,
-        cache_times: u32,
-        dispatcher: &NotificationDispatcher,
-        state_manager: &StateManager,
-        force_sync: bool,
-    ) {
+    async fn process_task(params: TaskProcessParams<'_>) {
+        let TaskProcessParams {
+            task,
+            cache_times,
+            dispatcher,
+            state_manager,
+            semaphore,
+            force_sync,
+        } = params;
+
         if !decision::validate_task_preconditions(task) {
             return;
         }
@@ -239,7 +246,6 @@ impl DdnsEngine {
         };
 
         let mut sync_join_set = JoinSet::new();
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_DNS_SYNCS));
         let force_sync_all = force_sync || reach_cache_limit;
 
         sync::spawn_protocol_sync_tasks(
