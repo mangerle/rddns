@@ -59,7 +59,7 @@ function toggleLang() {
               @click="versionStore.checkVersion(true)"
             >
               <span class="w-1.5 h-1.5 rounded-full" :class="hasUpdate ? 'bg-amber-500 dark:bg-amber-400 animate-ping' : 'bg-emerald-500 dark:bg-emerald-400'" />
-              <span>v{{ currentVer || '0.10.0' }}</span>
+              <span>v{{ currentVer || '0.10.1' }}</span>
               <span v-if="hasUpdate" class="text-[10px] text-amber-600 dark:text-amber-300 font-sans flex items-center gap-1 ml-0.5">
                 <Sparkles class="w-2.5 h-2.5" />
                 <span>{{ t('update.title') }}</span>
