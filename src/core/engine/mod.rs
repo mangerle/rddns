@@ -14,7 +14,7 @@ use crate::dns::trait_def::DnsRecordType;
 use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::util::wait_internet::wait_for_internet;
 use chrono::Local;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -336,6 +336,9 @@ impl DdnsEngine {
         let mut timer = interval(current_interval);
         timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        let mut trigger_rx_closed = false;
+        let mut config_rx_closed = false;
+
         loop {
             select! {
                 _ = cancel_token.cancelled() => {
@@ -345,23 +348,35 @@ impl DdnsEngine {
                 _ = timer.tick() => {
                     self.run_once(false).await;
                 }
-                manual_req = self.trigger_receiver.recv() => {
-                    if manual_req.is_some() {
-                        info!("收到手动强制同步触发指令");
-                        self.run_once(true).await;
+                manual_req = self.trigger_receiver.recv(), if !trigger_rx_closed => {
+                    match manual_req {
+                        Some(_) => {
+                            info!("收到手动强制同步触发指令");
+                            self.run_once(true).await;
+                        }
+                        None => {
+                            warn!("手动同步触发通道已关闭，已停用手动指令监听分支，防止 CPU 空转");
+                            trigger_rx_closed = true;
+                        }
                     }
                 }
-                res = config_rx.changed() => {
-                    if res.is_ok() {
-                        let new_conf = config_rx.borrow_and_update().clone();
-                        let new_secs = new_conf.interval_secs.max(5);
-                        if Duration::from_secs(new_secs) != current_interval {
-                            current_interval = Duration::from_secs(new_secs);
-                            let mut new_timer = interval(current_interval);
-                            new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                            new_timer.reset();
-                            timer = new_timer;
-                            info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
+                res = config_rx.changed(), if !config_rx_closed => {
+                    match res {
+                        Ok(()) => {
+                            let new_conf = config_rx.borrow_and_update().clone();
+                            let new_secs = new_conf.interval_secs.max(5);
+                            if Duration::from_secs(new_secs) != current_interval {
+                                current_interval = Duration::from_secs(new_secs);
+                                let mut new_timer = interval(current_interval);
+                                new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                                new_timer.reset();
+                                timer = new_timer;
+                                info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
+                            }
+                        }
+                        Err(_) => {
+                            warn!("配置变更广播通道已关闭，已停用配置监听分支，防止 CPU 空转");
+                            config_rx_closed = true;
                         }
                     }
                 }

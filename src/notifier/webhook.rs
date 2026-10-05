@@ -78,7 +78,8 @@ impl Notifier for CustomWebhookNotifier {
             req = req.body(rendered_body);
         }
 
-        let body = crate::notifier::trait_def::execute_notify_request(req, self.channel_name()).await?;
+        let body =
+            crate::notifier::trait_def::execute_notify_request(req, self.channel_name()).await?;
         info!("[{}] Webhook 执行成功: {}", self.channel_name(), body);
         Ok(())
     }
