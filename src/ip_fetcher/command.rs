@@ -86,8 +86,11 @@ impl CommandIpFetcher {
             c
         };
         command.kill_on_drop(true);
+        // 置空标准输入，避免子进程继承父进程 stdin 导致交互式读取挂起
+        command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
+        // 丢弃标准错误，避免因无读取方导致操作系统管道缓冲区写满（Windows 仅 4KB）引发子进程死锁与超时
+        command.stderr(Stdio::null());
 
         let mut child = command.spawn().map_err(FetchError::Io)?;
         let mut stdout = child
