@@ -45,7 +45,7 @@
   - 支持按任务指定绑定的出站物理网卡（如 `eth0`、`pppoe-wan`），多宽带聚合、策略路由及软路由多拨环境下的刚需利器。
 - **网络抗污染与自定义 DNS**：
   - 内置纯 Rust 异步 DNS UDP 查询器，支持命令行 `--dns` 及 Web 控制台配置公共 DNS 节点（如 `223.5.5.5`、`1.1.1.1`），直连递归解析，彻底规避运营商 Local DNS 劫持与缓存污染。
-- **支持 25 款主流 DNS 服务商（纯 Rust 驱动与算法签名）**：
+- **支持 27 款主流 DNS 服务商（纯 Rust 驱动与算法签名）**：
   - **主流云厂商**：Cloudflare、阿里云 (AliDNS)、腾讯云 (DNSPod)、华为云 (Huawei Cloud)、百度智能云 (Baidu Cloud)、火山引擎 (TrafficRoute)；
   - **海外注册商**：Porkbun、GoDaddy、Namecheap、NameSilo、Spaceship、Dynadot、Name.com、Gcore、Dynv6、ClouDNS、NS1 Connect (IBM NS1)；
   - **边缘加速与云托管**：阿里云 ESA (边缘安全加速)、腾讯云 EdgeOne (含动态源站组 OriginGroup 同步)、Vercel (含团队 teamId 支持)、雨云 (RainYun)、DNS.LA；
@@ -175,7 +175,7 @@ docker run -d \
   --name rddns \
   --restart always \
   --net host \
-  -v /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml \
+  -v /etc/rddns/.rddns.toml:/.rddns.toml \
   mangerle/rddns:latest
 ```
 
@@ -188,7 +188,7 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml
+      - /etc/rddns/.rddns.toml:/.rddns.toml
     environment:
       - TZ=Asia/Shanghai
 ```
@@ -244,7 +244,7 @@ cargo build --release
 
 | 参数 | 短参数 | 别名 | 默认值 | 说明 |
 | :--- | :---: | :---: | :---: | :--- |
-| `--config <PATH>` | `-c` | - | `.rddns_config.yaml` | 配置文件路径（优先读取当前目录或程序所在目录） |
+| `--config <PATH>` | `-c` | - | `.rddns.toml` | 配置文件路径（优先读取当前目录或程序所在目录） |
 | `--listen <ADDR>` | `-l` | `-p`, `--port` | `9876` | Web 控制台监听地址或端口（如 `8888` 或 `127.0.0.1:8888`） |
 | `--frequency <SECS>` | `-f` | - | `300` | 同步轮询周期（秒，仅覆盖当前运行时） |
 | `--noweb` | - | - | `false` | 纯静默后台同步模式（不开启 Web 控制台） |
@@ -259,97 +259,108 @@ cargo build --release
 
 ---
 
-## 配置文件示例 (`.rddns_config.yaml`)
+## 配置文件示例 (`.rddns.toml`)
 
-```yaml
+```toml
 # Web 控制台监听端口
-listen_port: 9876
+listen_port = 9876
 
 # 全局定时同步周期 (秒)
-interval_secs: 300
+interval_secs = 300
 
 # 连续 IP 未发生变动时的远程记录校对周期 (每 N 次同步执行一次远程比对)
-cache_times: 10
+cache_times = 10
 
 # 是否禁止公网 (WAN) 访问 Web 管理界面
-not_allow_wan_access: true
+not_allow_wan_access = true
 
 # 自定义抗污染 DNS 解析服务器 (留空使用系统默认)
-dns_server: "223.5.5.5"
+dns_server = "223.5.5.5"
 
 # Web 管理员认证配置
-auth:
-  username: "admin"
-  password_hash: "$2b$12$..." # BCrypt 安全哈希
+[auth]
+username = "admin"
+password_hash = "$2b$12$..." # BCrypt 安全哈希
 
 # 多任务配置列表
-dns_tasks:
-  - name: "主宽带-Cloudflare解析"
-    enabled: true
-    ttl: 600
-    http_interface: "eth0" # 绑定的出站物理网卡 (可选，用于软路由多 WAN)
-    provider:
-      type: "cloudflare"
-      api_token: "your-cloudflare-token"
-    ipv4:
-      enabled: true
-      source_type: "url"
-      url_endpoints:
-        - "https://api.ipify.org"
-      domains:
-        - "nas.example.com"
-    ipv6:
-      enabled: true
-      source_type: "net_interface"
-      net_interface: "eth0"
-      regex: "@1" # 快捷选取第 1 个公网 IPv6 地址
-      domains:
-        - "nas-v6.example.com"
+[[dns_tasks]]
+name = "主宽带-Cloudflare解析"
+enabled = true
+ttl = 600
+http_interface = "eth0" # 绑定的出站物理网卡 (可选，用于软路由多 WAN)
 
-  - name: "副宽带-阿里云解析"
-    enabled: true
-    ttl: 600
-    http_interface: "pppoe-wan2"
-    provider:
-      type: "alidns"
-      access_key_id: "your-aliyun-ak"
-      access_key_secret: "your-aliyun-sk"
-    ipv4:
-      enabled: true
-      source_type: "url"
-      url_endpoints:
-        - "https://myip4.ipip.net"
-      domains:
-        - "backup.example.com"
+[dns_tasks.provider]
+type = "cloudflare"
+api_token = "your-cloudflare-token"
+
+[dns_tasks.ipv4]
+enabled = true
+source_type = "url"
+url_endpoints = ["https://api.ipify.org"]
+domains = ["nas.example.com"]
+
+[dns_tasks.ipv6]
+enabled = true
+source_type = "net_interface"
+net_interface = "eth0"
+regex = "@1" # 快捷选取第 1 个公网 IPv6 地址
+domains = ["nas-v6.example.com"]
+
+[[dns_tasks]]
+name = "副宽带-阿里云解析"
+enabled = true
+ttl = 600
+http_interface = "pppoe-wan2"
+
+[dns_tasks.provider]
+type = "alidns"
+access_key_id = "your-aliyun-ak"
+access_key_secret = "your-aliyun-sk"
+
+[dns_tasks.ipv4]
+enabled = true
+source_type = "url"
+url_endpoints = ["https://myip4.ipip.net"]
+domains = ["backup.example.com"]
 
 # 告警通知配置 (支持多渠道同时开启)
-notifications:
-  feishu:
-    enabled: true
-    webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
-    secret: "your-feishu-secret"
-  dingtalk:
-    enabled: true
-    access_token: "your-dingtalk-access-token"
-    secret: "SEC..."
-  wecom:
-    enabled: false
-    webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
-  bark:
-    enabled: false
-    server_url: "https://api.day.app"
-    device_key: "your-bark-device-key"
-  email:
-    enabled: false
-    smtp_server: "smtp.example.com"
-    smtp_port: 465
-    use_ssl: true
-    username: "notify@example.com"
-    password: "your-smtp-password"
-    from_address: "notify@example.com"
-    to_addresses:
-      - "admin@example.com"
+[notifications.feishu]
+enabled = true
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+secret = "your-feishu-secret"
+
+[notifications.dingtalk]
+enabled = true
+access_token = "your-dingtalk-access-token"
+secret = "SEC..."
+
+[notifications.wecom]
+enabled = false
+webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+
+[notifications.bark]
+enabled = false
+server_url = "https://api.day.app"
+device_key = "your-bark-device-key"
+
+[notifications.email]
+enabled = false
+smtp_server = "smtp.example.com"
+smtp_port = 465
+use_ssl = true
+username = "notify@example.com"
+password = "your-smtp-password"
+from_address = "notify@example.com"
+to_addresses = ["admin@example.com"]
 ```
+
+---
+
+## 安全说明与最佳实践
+
+- **访问隔离**：默认开启 `not_allow_wan_access = true`，此时仅监听本地回环地址（`127.0.0.1`）。若需在公网安全访问控制台，建议使用 Nginx / Caddy 配置反向代理并启用 HTTPS/TLS 证书保护。
+- **凭据存储安全**：`.rddns.toml` 配置文件内保存有 DNS 服务商密钥与通知凭证。在 Unix/Linux 环境下，程序生成默认配置时会自动将其文件权限收敛为 `0600`（仅当前用户可读写），请勿将其提交到公共 Git 仓库中。
+- **证书校验开关**：命令行参数 `--skip-verify` 会全局跳过 HTTPS 证书有效性校验，**仅建议在内网测试或自签名根证书环境中临时开启**，严禁在公网开放环境长期开启。
 
 ---
 

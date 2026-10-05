@@ -45,7 +45,7 @@ Building upon its battle-tested workflow, `rddns` is rewritten entirely in **pur
   - Bind individual tasks to specific outbound physical interfaces (such as `eth0`, `pppoe-wan`), essential for multi-WAN load balancing and policy routing.
 - **Anti-Pollution & Custom DNS Resolution**:
   - Built-in pure Rust async DNS resolver, supporting `--dns` CLI parameter and Web UI configuration for custom upstream DNS servers (e.g. `223.5.5.5`, `1.1.1.1`), directly querying authoritative servers to bypass local ISP DNS hijacking and cache poisoning.
-- **Supports 25 Mainstream DNS Providers (Pure Rust drivers & signatures)**:
+- **Supports 27 Mainstream DNS Providers (Pure Rust drivers & signatures)**:
   - **Global Cloud Providers**: Cloudflare, Alibaba Cloud (AliDNS), Tencent Cloud (DNSPod), Huawei Cloud, Baidu Cloud, Volcano Engine (TrafficRoute);
   - **Domain Registrars**: Porkbun, GoDaddy, Namecheap, NameSilo, Spaceship, Dynadot, Name.com, Gcore, Dynv6, ClouDNS, NS1 Connect (IBM NS1);
   - **Edge & Cloud Hosting**: Alibaba Cloud ESA, Tencent Cloud EdgeOne (supports dynamic OriginGroup syncing), Vercel (with teamId support), RainYun, DNS.LA;
@@ -175,7 +175,7 @@ docker run -d \
   --name rddns \
   --restart always \
   --net host \
-  -v /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml \
+  -v /etc/rddns/.rddns.toml:/.rddns.toml \
   mangerle/rddns:latest
 ```
 
@@ -188,7 +188,7 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - /etc/rddns/.rddns_config.yaml:/.rddns_config.yaml
+      - /etc/rddns/.rddns.toml:/.rddns.toml
     environment:
       - TZ=Asia/Shanghai
 ```
@@ -244,7 +244,7 @@ Open `http://localhost:9876` in your browser to access the Web Management Consol
 
 | Parameter | Short | Alias | Default | Description |
 | :--- | :---: | :---: | :---: | :--- |
-| `--config <PATH>` | `-c` | - | `.rddns_config.yaml` | Path to configuration file |
+| `--config <PATH>` | `-c` | - | `.rddns.toml` | Path to configuration file |
 | `--listen <ADDR>` | `-l` | `-p`, `--port` | `9876` | Web console listening address or port (e.g. `8888` or `127.0.0.1:8888`) |
 | `--frequency <SECS>` | `-f` | - | `300` | Sync check interval in seconds (runtime override) |
 | `--noweb` | - | - | `false` | Silent background mode (disable Web UI) |
@@ -259,97 +259,108 @@ Open `http://localhost:9876` in your browser to access the Web Management Consol
 
 ---
 
-## Configuration File (`.rddns_config.yaml`)
+## Configuration File (`.rddns.toml`)
 
-```yaml
+```toml
 # Web console listen port
-listen_port: 9876
+listen_port = 9876
 
 # Global synchronization interval (seconds)
-interval_secs: 300
+interval_secs = 300
 
-# Remote record check frequency when local IP has not changed (checks cloud every N intervals)
-cache_times: 10
+# Periodic verification interval against remote records
+cache_times = 10
 
-# Disallow WAN access to Web management dashboard (LAN-only)
-not_allow_wan_access: true
+# Disable WAN access to Web management console
+not_allow_wan_access = true
 
-# Custom anti-pollution upstream DNS server (leave blank to use system default)
-dns_server: "223.5.5.5"
+# Custom upstream anti-pollution DNS resolver
+dns_server = "223.5.5.5"
 
-# Web dashboard authentication
-auth:
-  username: "admin"
-  password_hash: "$2b$12$..." # BCrypt hash
+# Web console admin credentials
+[auth]
+username = "admin"
+password_hash = "$2b$12$..." # BCrypt hash
 
-# Multi-task configuration
-dns_tasks:
-  - name: "Main-WAN-Cloudflare"
-    enabled: true
-    ttl: 600
-    http_interface: "eth0" # Bound outbound physical interface (optional, for multi-WAN)
-    provider:
-      type: "cloudflare"
-      api_token: "your-cloudflare-token"
-    ipv4:
-      enabled: true
-      source_type: "url"
-      url_endpoints:
-        - "https://api.ipify.org"
-      domains:
-        - "nas.example.com"
-    ipv6:
-      enabled: true
-      source_type: "net_interface"
-      net_interface: "eth0"
-      regex: "@1" # Select 1st public IPv6 address
-      domains:
-        - "nas-v6.example.com"
+# DNS task definitions
+[[dns_tasks]]
+name = "Primary WAN - Cloudflare"
+enabled = true
+ttl = 600
+http_interface = "eth0" # Outbound interface binding
 
-  - name: "Secondary-WAN-AliDNS"
-    enabled: true
-    ttl: 600
-    http_interface: "pppoe-wan2"
-    provider:
-      type: "alidns"
-      access_key_id: "your-aliyun-ak"
-      access_key_secret: "your-aliyun-sk"
-    ipv4:
-      enabled: true
-      source_type: "url"
-      url_endpoints:
-        - "https://myip4.ipip.net"
-      domains:
-        - "backup.example.com"
+[dns_tasks.provider]
+type = "cloudflare"
+api_token = "your-cloudflare-token"
 
-# Notification settings (multiple channels can be enabled simultaneously)
-notifications:
-  feishu:
-    enabled: true
-    webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/..."
-    secret: "your-feishu-secret"
-  dingtalk:
-    enabled: true
-    access_token: "your-dingtalk-access-token"
-    secret: "SEC..."
-  wecom:
-    enabled: false
-    webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
-  bark:
-    enabled: false
-    server_url: "https://api.day.app"
-    device_key: "your-bark-device-key"
-  email:
-    enabled: false
-    smtp_server: "smtp.example.com"
-    smtp_port: 465
-    use_ssl: true
-    username: "notify@example.com"
-    password: "your-smtp-password"
-    from_address: "notify@example.com"
-    to_addresses:
-      - "admin@example.com"
+[dns_tasks.ipv4]
+enabled = true
+source_type = "url"
+url_endpoints = ["https://api.ipify.org"]
+domains = ["nas.example.com"]
+
+[dns_tasks.ipv6]
+enabled = true
+source_type = "net_interface"
+net_interface = "eth0"
+regex = "@1"
+domains = ["nas-v6.example.com"]
+
+[[dns_tasks]]
+name = "Secondary WAN - AliDNS"
+enabled = true
+ttl = 600
+http_interface = "pppoe-wan2"
+
+[dns_tasks.provider]
+type = "alidns"
+access_key_id = "your-aliyun-ak"
+access_key_secret = "your-aliyun-sk"
+
+[dns_tasks.ipv4]
+enabled = true
+source_type = "url"
+url_endpoints = ["https://myip4.ipip.net"]
+domains = ["backup.example.com"]
+
+# Notification channels
+[notifications.feishu]
+enabled = true
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/..."
+secret = "your-feishu-secret"
+
+[notifications.dingtalk]
+enabled = true
+access_token = "your-dingtalk-access-token"
+secret = "SEC..."
+
+[notifications.wecom]
+enabled = false
+webhook_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+
+[notifications.bark]
+enabled = false
+server_url = "https://api.day.app"
+device_key = "your-bark-device-key"
+
+[notifications.email]
+enabled = false
+smtp_server = "smtp.example.com"
+smtp_port = 465
+use_ssl = true
+username = "notify@example.com"
+password = "your-smtp-password"
+from_address = "notify@example.com"
+to_addresses = ["admin@example.com"]
 ```
+
+---
+
+## Security Notes & Best Practices
+
+- **Access Isolation**: By default, `not_allow_wan_access = true` is enabled, binding exclusively to `127.0.0.1`. If exposing the dashboard to the WAN, reverse proxy via Nginx/Caddy with HTTPS/TLS is strongly recommended.
+- **Credential Storage**: Credentials in `.rddns.toml` are stored locally. On Unix/Linux systems, permissions are restricted to `0600` automatically. Do not commit `.rddns.toml` to public repositories.
+- **TLS Verification**: `--skip-verify` completely disables TLS validation. Use this only for local/intranet environments with self-signed certificates.
 
 ---
 
