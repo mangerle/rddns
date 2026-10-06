@@ -159,7 +159,7 @@ async fn validate_task_ssrf(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
 
         // 2. 校验 IP 提取 URL 端点异步 SSRF
         for ip_cfg in [&task.ipv4, &task.ipv6] {
-            if ip_cfg.source_type == IpSourceType::Url {
+            if ip_cfg.enabled && ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
                     if !trimmed.is_empty() {
@@ -385,8 +385,11 @@ type = "cloudflare"
 
     #[tokio::test]
     async fn test_save_config_validation_rules() {
+        let mut valid_task = DnsTaskConfig::default();
+        valid_task.ipv4.url_endpoints = vec!["https://1.1.1.1/ip".to_string()];
+        valid_task.ipv6.url_endpoints = vec![];
         let valid_config = AppConfig {
-            dns_tasks: vec![DnsTaskConfig::default()],
+            dns_tasks: vec![valid_task],
             ..Default::default()
         };
 
@@ -492,7 +495,7 @@ type = "cloudflare"
 
         // 拦截非白名单的危险 HTTP 方法 (如 TRACE)
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
-            url: "https://api.example.com/hook".to_string(),
+            url: "https://1.1.1.1/hook".to_string(),
             method: "TRACE".to_string(),
             headers: None,
             body: None,
@@ -503,7 +506,7 @@ type = "cloudflare"
         let mut dangerous_headers = HashMap::new();
         dangerous_headers.insert("Host".to_string(), "internal.service".to_string());
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
-            url: "https://api.example.com/hook".to_string(),
+            url: "https://1.1.1.1/hook".to_string(),
             method: "POST".to_string(),
             headers: Some(dangerous_headers),
             body: None,
@@ -512,7 +515,7 @@ type = "cloudflare"
 
         // 拦截超过 64KB 的超大请求体
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
-            url: "https://api.example.com/hook".to_string(),
+            url: "https://1.1.1.1/hook".to_string(),
             method: "POST".to_string(),
             headers: None,
             body: Some("a".repeat(65537)),
@@ -521,7 +524,7 @@ type = "cloudflare"
 
         // 合法公网 Callback 配置应通过全部校验
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
-            url: "https://api.example.com/hook?ip=#{ip}".to_string(),
+            url: "https://1.1.1.1/hook?ip=#{ip}".to_string(),
             method: "POST".to_string(),
             headers: Some(HashMap::from([(
                 "Authorization".to_string(),
