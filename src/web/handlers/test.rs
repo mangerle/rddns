@@ -20,8 +20,14 @@ const TEST_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(3000);
 /// 上一次触发测试通知的单调时钟时刻
 static LAST_NOTIFY_TEST_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// 测试 IP 提取触发的最小时间间隔，杜绝短时间内高频调用作为外部 HTTP 反射源 (L-8)
+const TEST_IP_MIN_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// 上一次触发测试 IP 获取的单调时钟时刻
+static LAST_IP_TEST_TIME: Mutex<Option<Instant>> = Mutex::new(None);
+
 /// 测试 IP 提取器配置请求体
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TestIpRequest {
     pub ip_type: Option<String>,
     pub http_interface: Option<String>,
@@ -43,6 +49,27 @@ async fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
 
 /// 测试 IP 提取器在线获取
 pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoResponse {
+    // 频控校验：防止短时间内高频调用 IP 测试造成外部请求轰炸或反射滥用 (L-8)
+    {
+        let mut last_time = LAST_IP_TEST_TIME.lock();
+        let now = Instant::now();
+        if let Some(prev) = *last_time {
+            let elapsed = now.saturating_duration_since(prev);
+            if elapsed < TEST_IP_MIN_INTERVAL {
+                let remaining_millis = (TEST_IP_MIN_INTERVAL - elapsed).as_millis();
+                let remaining_secs = remaining_millis.div_ceil(1000);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(ApiResponse::<TestIpResult>::err(format!(
+                        "IP 测试请求过于频繁，请等待 {} 秒后重试",
+                        remaining_secs
+                    ))),
+                );
+            }
+        }
+        *last_time = Some(now);
+    }
+
     let iface = payload.http_interface.as_deref();
     let config = payload.config;
 
@@ -277,7 +304,30 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
+    async fn test_test_ip_rate_limit() {
+        *LAST_IP_TEST_TIME.lock() = None;
+        let req = TestIpRequest {
+            ip_type: Some("ipv4".to_string()),
+            http_interface: None,
+            config: IpFetchConfig {
+                enabled: true,
+                source_type: IpSourceType::Url,
+                url_endpoints: vec!["https://api.ipify.org".to_string()],
+                ..Default::default()
+            },
+        };
+
+        // 第一次调用记录频控时刻
+        let _ = test_ip_handler(Json(req.clone())).await;
+
+        // 紧接着立即二次调用，必须触发 429 频控限制 (L-8)
+        let res2 = test_ip_handler(Json(req)).await.into_response();
+        assert_eq!(res2.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
     async fn test_test_ip_rejects_command() {
+        *LAST_IP_TEST_TIME.lock() = None;
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -294,6 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_rejects_invalid_scheme() {
+        *LAST_IP_TEST_TIME.lock() = None;
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -310,6 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_supports_stun() {
+        *LAST_IP_TEST_TIME.lock() = None;
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -338,6 +390,7 @@ mod tests {
         ];
 
         for target in ssrf_targets {
+            *LAST_IP_TEST_TIME.lock() = None;
             let req = TestIpRequest {
                 ip_type: Some("ipv4".to_string()),
                 http_interface: None,
