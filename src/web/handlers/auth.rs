@@ -307,6 +307,11 @@ pub async fn login_auth_handler(
         .await
         {
             record_login_failure(&limiter_key, true);
+            crate::web::auth::insert_credential_cache(
+                &auth.username,
+                &auth.password_hash,
+                &req.password,
+            );
             return Ok(Json(ApiResponse::ok("登录成功")));
         }
         record_login_failure(&limiter_key, false);

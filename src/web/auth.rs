@@ -70,6 +70,61 @@ static SSE_TICKETS: LazyLock<RwLock<TicketStore>> = LazyLock::new(|| {
     })
 });
 
+/// Basic Auth 快速凭据验证缓存 TTL (300 秒 / 5 分钟)
+const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(300);
+/// 凭据缓存容量硬上限（极简单用户系统，防止恶意构造占用）
+const MAX_CREDENTIAL_CACHE_ENTRIES: usize = 16;
+
+/// 快速凭据验证缓存键
+///
+/// # 设计原理
+/// - **实现初衷**: 避免合法请求每次调用 cost=12 的昂贵 bcrypt 耗尽 CPU (P-1)。
+/// - **安全性**: 密码仅存 SHA-256 摘要（不落盘、不存明文）；同时绑定 `password_hash`，管理员一旦改密码旧缓存自动失效。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CredentialCacheKey {
+    username: String,
+    password_hash: String,
+    password_sha256: [u8; 32],
+}
+
+/// 快速凭据验证缓存池
+struct CredentialCache {
+    entries: HashMap<CredentialCacheKey, Instant>,
+}
+
+/// 全局 Basic Auth 快速凭据验证缓存
+static CREDENTIAL_CACHE: LazyLock<RwLock<CredentialCache>> = LazyLock::new(|| {
+    RwLock::new(CredentialCache {
+        entries: HashMap::with_capacity(4),
+    })
+});
+
+/// 预热快速凭据验证缓存
+pub(crate) fn insert_credential_cache(username: &str, password_hash: &str, raw_password: &str) {
+    let pass_sha = crate::util::crypto::sha256_bytes(raw_password.as_bytes());
+    let cache_key = CredentialCacheKey {
+        username: username.to_string(),
+        password_hash: password_hash.to_string(),
+        password_sha256: pass_sha,
+    };
+    let now = Instant::now();
+    let mut cache = CREDENTIAL_CACHE.write();
+    if cache.entries.len() >= MAX_CREDENTIAL_CACHE_ENTRIES {
+        cache
+            .entries
+            .retain(|_, created_at| now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL);
+    }
+    if cache.entries.len() < MAX_CREDENTIAL_CACHE_ENTRIES {
+        cache.entries.insert(cache_key, now);
+    }
+}
+
+/// 清空全局凭据验证缓存（仅供测试套件保证用例间隔离）
+#[cfg(test)]
+pub(crate) fn clear_credential_cache_for_test() {
+    CREDENTIAL_CACHE.write().entries.clear();
+}
+
 /// 生成并注册一个 30 秒有效的一次性 SSE Ticket
 ///
 /// # 设计原理
@@ -190,14 +245,46 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
                 .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
         }
 
-        // 常量时间校验凭据，防止利用用户名快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
-        let is_valid = crate::util::crypto::verify_credentials_constant_time(
-            user,
-            pass,
-            &auth_conf.username,
-            &auth_conf.password_hash,
-        )
-        .await;
+        // 优先检查快速凭据缓存，避免每轮受保护请求触发昂贵的 bcrypt 哈希验证 (P-1)
+        let pass_sha = crate::util::crypto::sha256_bytes(pass.as_bytes());
+        let cache_key = CredentialCacheKey {
+            username: user.to_string(),
+            password_hash: auth_conf.password_hash.clone(),
+            password_sha256: pass_sha,
+        };
+
+        let now = Instant::now();
+        let mut is_valid = {
+            let cache = CREDENTIAL_CACHE.read();
+            cache
+                .entries
+                .get(&cache_key)
+                .is_some_and(|created_at| now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL)
+        };
+
+        if !is_valid {
+            // 常量时间校验凭据，防止利用用户名快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
+            is_valid = crate::util::crypto::verify_credentials_constant_time(
+                user,
+                pass,
+                &auth_conf.username,
+                &auth_conf.password_hash,
+            )
+            .await;
+
+            if is_valid {
+                // 校验成功：安全写入快速凭据缓存
+                let mut cache = CREDENTIAL_CACHE.write();
+                if cache.entries.len() >= MAX_CREDENTIAL_CACHE_ENTRIES {
+                    cache.entries.retain(|_, created_at| {
+                        now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL
+                    });
+                }
+                if cache.entries.len() < MAX_CREDENTIAL_CACHE_ENTRIES {
+                    cache.entries.insert(cache_key, now);
+                }
+            }
+        }
 
         // 记录失败或成功状态
         crate::web::handlers::auth::record_login_failure(&limiter_key, is_valid);
@@ -394,5 +481,92 @@ mod tests {
         assert_eq!(ip4, "127.0.0.1");
         let ip5 = resolve_client_ip(None, &empty_headers);
         assert_eq!(ip5, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_credential_cache_warmup_and_invalidation() {
+        clear_credential_cache_for_test();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());
+
+        let hash = bcrypt::hash("StrongPass#123", bcrypt::DEFAULT_COST).unwrap();
+        config_manager
+            .update_config(AppConfig {
+                auth: Some(UserAuthConfig {
+                    username: "cache_admin".to_string(),
+                    password_hash: hash.clone(),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let state = AppState {
+            config_manager: config_manager.clone(),
+            trigger_sender: tx,
+            log_buffer: LogBuffer::new(10),
+            state_manager: StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
+        };
+
+        let app = Router::new()
+            .route("/config", get(|| async { "ok" }))
+            .layer(from_fn_with_state(state, auth_middleware));
+
+        let basic_token = BASE64_STANDARD.encode("cache_admin:StrongPass#123");
+
+        // 1. 首次请求：未命中缓存，走 bcrypt，返回 200 并预热缓存
+        let req1 = Request::builder()
+            .uri("/config")
+            .header(AUTHORIZATION, format!("Basic {}", basic_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::OK);
+
+        // 验证凭据缓存中已存在该条目
+        {
+            let cache = CREDENTIAL_CACHE.read();
+            assert!(
+                cache
+                    .entries
+                    .iter()
+                    .any(|(k, _)| k.username == "cache_admin"),
+                "成功验证后应写入快速凭据缓存"
+            );
+        }
+
+        // 2. 二次请求：直接命中快速缓存，秒级放行 (P-1 验证)
+        let req2 = Request::builder()
+            .uri("/config")
+            .header(AUTHORIZATION, format!("Basic {}", basic_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+
+        // 3. 密码哈希变更：旧凭据缓存自动失效
+        let new_hash = bcrypt::hash("NewStrongPass#456", bcrypt::DEFAULT_COST).unwrap();
+        config_manager
+            .update_config(AppConfig {
+                auth: Some(UserAuthConfig {
+                    username: "cache_admin".to_string(),
+                    password_hash: new_hash,
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // 原旧密码请求必须立即被拒绝 (401)
+        let req3 = Request::builder()
+            .uri("/config")
+            .header(AUTHORIZATION, format!("Basic {}", basic_token))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res3 = app.oneshot(req3).await.unwrap();
+        assert_eq!(res3.status(), StatusCode::UNAUTHORIZED);
     }
 }

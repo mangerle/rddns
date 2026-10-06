@@ -58,6 +58,17 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// 计算 SHA256 并返回 32 字节原始摘要 (纯栈分配零开销)
+///
+/// # 设计原理
+/// - **实现初衷**: 供 HTTP 快速凭据缓存计算摘要，避免为了 Hash 键生成产生堆分配与 Hex 格式化开销。
+/// - **核心优势**: 纯栈分配 `[u8; 32]`，执行耗时微秒级，兼顾高吞吐与安全性。
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
 /// 使用操作系统密码学安全熵源填充随机字节数组 (CSPRNG)
 ///
 /// # 设计原理
@@ -291,6 +302,12 @@ mod tests {
             digest,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn test_sha256_bytes() {
+        let digest = sha256_bytes(b"");
+        assert_eq!(hex::encode(digest), sha256_hex(b""));
     }
 
     #[test]
