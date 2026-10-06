@@ -383,6 +383,7 @@ impl DdnsEngine {
 
         let mut trigger_rx_closed = false;
         let mut config_rx_closed = false;
+        let mut in_fast_retry = false;
 
         'engine_loop: loop {
             select! {
@@ -394,6 +395,33 @@ impl DdnsEngine {
                     if !self.run_once_cancellable(false, &cancel_token).await {
                         info!("定时同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
                         break 'engine_loop;
+                    }
+
+                    // 评估是否需要启动或退出自愈快速重试调度
+                    let fast_retry_interval = Duration::from_secs(30);
+                    let has_recent_failures = self.state_manager.has_recent_failures(5);
+                    if has_recent_failures && !in_fast_retry && current_interval > fast_retry_interval {
+                        in_fast_retry = true;
+                        info!(
+                            "检测到任务同步存在偶发故障，临时启用自愈快速重试调度 (每 {} 秒检测一次)...",
+                            fast_retry_interval.as_secs()
+                        );
+                        let mut fast_timer = interval(fast_retry_interval);
+                        fast_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                        fast_timer.reset();
+                        timer = fast_timer;
+                    } else if (!has_recent_failures || !self.state_manager.has_recent_failures(u32::MAX))
+                        && in_fast_retry
+                    {
+                        in_fast_retry = false;
+                        info!(
+                            "任务同步已恢复正常或超出快速自愈阈值，定时同步恢复为正常周期: {} 秒",
+                            current_interval.as_secs()
+                        );
+                        let mut normal_timer = interval(current_interval);
+                        normal_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                        normal_timer.reset();
+                        timer = normal_timer;
                     }
                 }
                 manual_req = self.trigger_receiver.recv(), if !trigger_rx_closed => {
@@ -418,10 +446,12 @@ impl DdnsEngine {
                             let new_secs = new_conf.interval_secs.max(5);
                             if Duration::from_secs(new_secs) != current_interval {
                                 current_interval = Duration::from_secs(new_secs);
-                                let mut new_timer = interval(current_interval);
-                                new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                                new_timer.reset();
-                                timer = new_timer;
+                                if !in_fast_retry {
+                                    let mut new_timer = interval(current_interval);
+                                    new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                                    new_timer.reset();
+                                    timer = new_timer;
+                                }
                                 info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
                             }
                         }

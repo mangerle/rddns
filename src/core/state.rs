@@ -102,6 +102,14 @@ impl StateManager {
         f(&mut state);
     }
 
+    /// 检查是否存在处于连续失败状态且具备自愈价值的任务（连续失败次数在指定阈值内）
+    pub fn has_recent_failures(&self, max_failures_threshold: u32) -> bool {
+        self.tasks.iter().any(|entry| {
+            let failures = entry.value().consecutive_failures;
+            failures > 0 && failures <= max_failures_threshold
+        })
+    }
+
     /// 清理已删除任务的历史运行时状态，防止内存长期驻留与泄漏
     pub fn retain_active_tasks(&self, active_task_names: &[String]) {
         self.tasks
@@ -156,6 +164,8 @@ mod tests {
             updated.synced_domains.get("sub.example.com:A"),
             Some(&"1.2.3.4".to_string())
         );
+        assert!(mgr.has_recent_failures(3));
+        assert!(!mgr.has_recent_failures(1));
 
         // 测试清理已废弃任务状态
         mgr.get_task_state("obsolete_task");

@@ -369,6 +369,7 @@ fn handle_linux_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 
     match action {
         "install" => {
+            let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
             info!("正在生成 systemd 服务配置文件 [{}]...", service_file_path);
             let service_content = format!(
                 r#"[Unit]
@@ -379,6 +380,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+WorkingDirectory={}
 ExecStart="{}" -c "{}"
 Restart=always
 RestartSec=5s
@@ -388,6 +390,7 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 "#,
                 SERVICE_DESCRIPTION,
+                exe_dir.display(),
                 exe_path.display(),
                 config_path.display()
             );
@@ -411,6 +414,7 @@ WantedBy=multi-user.target
             info!("==========================================");
             info!("RDDNS systemd 服务已成功安装并启动！");
             info!("服务文件: {}", service_file_path);
+            info!("工作目录: {}", exe_dir.display());
             info!("运行程序: {}", exe_path.display());
             info!("配置文件: {}", config_path.display());
             info!("可使用 systemctl status rddns 查看服务实时状态");
@@ -470,6 +474,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 
     match action {
         "install" => {
+            let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
             info!("正在生成 launchd 配置文件 [{}]...", plist_path);
             let plist_content = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -478,6 +483,8 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 <dict>
     <key>Label</key>
     <string>com.mangerle.rddns</string>
+    <key>WorkingDirectory</key>
+    <string>{}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
@@ -495,6 +502,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 </dict>
 </plist>
 "#,
+                exe_dir.display(),
                 exe_path.display(),
                 config_path.display()
             );
@@ -513,6 +521,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
             info!("==========================================");
             info!("RDDNS macOS launchd 服务已成功安装并启动！");
             info!("配置文件: {}", plist_path);
+            info!("工作目录: {}", exe_dir.display());
             info!("==========================================");
         }
         "uninstall" => {

@@ -413,6 +413,7 @@ fn main() -> Result<()> {
     let logging_handle = init_logger().context("初始化全局日志系统失败")?;
     let log_buffer = logging_handle.log_buffer;
     let _log_guard = logging_handle._guard;
+    let log_dir = logging_handle.log_dir;
 
     let args = CliArgs::parse();
 
@@ -421,6 +422,7 @@ fn main() -> Result<()> {
         "rddns 动态域名解析系统 v{} 正在启动",
         env!("CARGO_PKG_VERSION")
     );
+    info!("日志持久化目录: {}", log_dir.display());
 
     if args.skip_verify {
         set_skip_verify(true);

@@ -22,11 +22,14 @@ const DNS_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const DNS_SYNC_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// 瞬时网络抖动自动重试退避间隔 (P1-11)
+/// 瞬时网络抖动最大重试次数（总尝试次数 = 1 + MAX_RETRIES = 3）
+const MAX_RETRIES: usize = 2;
+
+/// 瞬时网络抖动自动重试梯级退避间隔 (P1-11)
 #[cfg(not(test))]
-const RETRY_DELAY: Duration = Duration::from_millis(1000);
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(2000), Duration::from_millis(3000)];
 #[cfg(test)]
-const RETRY_DELAY: Duration = Duration::from_millis(10);
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(10), Duration::from_millis(20)];
 
 /// 并发探测任务所需的公网 IPv4 与 IPv6 地址
 ///
@@ -310,7 +313,7 @@ pub(crate) fn dispatch_sync_notification(
 /// 执行带有瞬时抖动自动重试的 DNS 记录同步操作 (P1-11)
 ///
 /// 当遇到底层网络连接断开或对端服务端瞬时限流 (502/503/504/RateLimit) 时，
-/// 等待退避时间进行至多一次自动重试，避免单次网络偶发抖动直接导致整个任务同步失败并误发告警。
+/// 等待梯级退避时间进行至多 2 次自动重试（总共至多尝试 3 次），充分吸收开机阶段的网络与 DNS 就绪抖动。
 async fn sync_record_with_retry(
     provider: &Arc<dyn DnsProvider>,
     task_name: &str,
@@ -319,20 +322,27 @@ async fn sync_record_with_retry(
     ip: &IpAddr,
     ttl: Option<u32>,
 ) -> Result<SyncRecordResult, DnsProviderError> {
-    match provider.sync_record(domain, rec_type, ip, ttl).await {
-        Ok(res) => Ok(res),
-        Err(e) if e.is_retryable() => {
-            warn!(
-                "[{}] 同步域名 {} ({}) 遇到临时网络抖动: {}，正在进行自动重试...",
-                task_name,
-                domain.full_domain(),
-                rec_type,
-                e
-            );
-            tokio::time::sleep(RETRY_DELAY).await;
-            provider.sync_record(domain, rec_type, ip, ttl).await
+    let mut retry_count = 0usize;
+    loop {
+        match provider.sync_record(domain, rec_type, ip, ttl).await {
+            Ok(res) => return Ok(res),
+            Err(e) if e.is_retryable() && retry_count < MAX_RETRIES => {
+                let delay = RETRY_DELAYS[retry_count];
+                retry_count = retry_count.saturating_add(1);
+                warn!(
+                    "[{}] 同步域名 {} ({}) 遇到临时网络抖动: {}，正在进行第 {}/{} 次重试 (等待 {:?})...",
+                    task_name,
+                    domain.full_domain(),
+                    rec_type,
+                    e,
+                    retry_count,
+                    MAX_RETRIES,
+                    delay
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return Err(e),
         }
-        Err(e) => Err(e),
     }
 }
 
@@ -543,6 +553,55 @@ mod tests {
     async fn test_sync_record_with_retry_succeeds_on_second_try() {
         let domain = parse_domain("retry.example.com").unwrap();
         let provider: Arc<dyn DnsProvider> = Arc::new(FlakyProvider {
+            attempt: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        let res =
+            sync_record_with_retry(&provider, "test_task", &domain, DnsRecordType::A, &ip, None)
+                .await
+                .unwrap();
+
+        assert_eq!(res.status, SyncStatus::Created);
+    }
+
+    struct TwiceFlakyProvider {
+        attempt: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl DnsProvider for TwiceFlakyProvider {
+        fn provider_name(&self) -> &'static str {
+            "twice_flaky"
+        }
+
+        async fn sync_record(
+            &self,
+            domain: &ParsedDomain,
+            record_type: DnsRecordType,
+            ip: &IpAddr,
+            _ttl: Option<u32>,
+        ) -> Result<SyncRecordResult, DnsProviderError> {
+            let n = self
+                .attempt
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 2 {
+                Err(DnsProviderError::Http(
+                    "Connection reset by peer".to_string(),
+                ))
+            } else {
+                Ok(SyncRecordResult::created(
+                    domain.full_domain(),
+                    record_type,
+                    ip.to_string(),
+                ))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_record_with_retry_succeeds_on_third_try() {
+        let domain = parse_domain("retry3.example.com").unwrap();
+        let provider: Arc<dyn DnsProvider> = Arc::new(TwiceFlakyProvider {
             attempt: std::sync::atomic::AtomicUsize::new(0),
         });
         let ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));

@@ -9,6 +9,7 @@ use fern::Dispatch;
 use fern::colors::{Color, ColoredLevelConfig};
 use log::LevelFilter;
 use std::env;
+use std::path::{Path, PathBuf};
 
 /// 退出时确保日志刷盘的 RAII 守护对象
 ///
@@ -34,6 +35,93 @@ pub struct LoggingHandle {
     pub log_buffer: LogBuffer,
     /// 确保退出时日志正确刷盘的守护句柄
     pub _guard: LogGuard,
+    /// 实际生效的日志持久化目录
+    pub log_dir: PathBuf,
+}
+
+/// 智能解析日志文件的持久化目录
+///
+/// # 设计原理
+/// - **实现初衷**：解决程序作为后台守护进程、Windows NT 服务或 Linux systemd 服务启动时，
+///   由于系统调度器将工作目录重定向至受限目录（如 `C:\Windows\System32` 或 `/`）导致日志写入失败或找不到文件的问题。
+/// - **核心优势**：优先提取显式指定的配置文件所在目录，其次锚定可执行文件同级目录；当在开发调试或常规终端环境下启动时，
+///   智能保留当前工作目录下的 `logs/`，确保跨平台与全场景开箱即用。
+/// - **代价与局限**：在极端只读介质环境下，需确保程序同级目录具备写权限。
+pub fn resolve_log_dir() -> PathBuf {
+    let args: Vec<String> = env::args().collect();
+    let cwd = env::current_dir().ok();
+    let exe = env::current_exe().ok();
+    resolve_log_dir_internal(&args, cwd.as_deref(), exe.as_deref())
+}
+
+/// 内部解析日志目录核心逻辑（解耦环境参数便于单元测试覆盖）
+fn resolve_log_dir_internal(
+    args: &[String],
+    cwd: Option<&Path>,
+    exe_path: Option<&Path>,
+) -> PathBuf {
+    // 1. 优先尝试从命令行参数提取配置文件所在目录 (-c / --config)
+    if let Some(config_parent) = extract_config_parent_from_args(args) {
+        return config_parent.join("logs");
+    }
+
+    // 2. 检测当前工作目录是否为系统服务调度默认的根路径或系统目录
+    let is_system_cwd = cwd.is_none_or(|p| {
+        #[cfg(windows)]
+        {
+            let path_str = p.to_string_lossy().to_lowercase();
+            path_str.ends_with(r"\system32")
+                || path_str.ends_with(r"\syswow64")
+                || path_str == r"c:\"
+        }
+        #[cfg(not(windows))]
+        {
+            p.as_os_str() == "/"
+        }
+    });
+
+    let is_windows_service_env = args.iter().any(|arg| arg == "--windows-service");
+    let exe_dir = exe_path.and_then(|p| p.parent());
+
+    // 3. 若处于系统目录环境或明确为 Windows 服务调度，强制锚定可执行文件同级目录
+    if let Some(dir) = exe_dir.filter(|_| is_system_cwd || is_windows_service_env) {
+        return dir.join("logs");
+    }
+
+    // 4. 若当前工作目录下存在配置文件或已存在 logs 目录，优先使用当前工作目录
+    if let Some(c) = cwd.filter(|c| c.join(".rddns.toml").exists() || c.join("logs").exists()) {
+        return c.join("logs");
+    }
+
+    // 5. 兜底回退：优先可执行文件同级目录，其次工作目录
+    if let Some(dir) = exe_dir {
+        dir.join("logs")
+    } else if let Some(c) = cwd {
+        c.join("logs")
+    } else {
+        PathBuf::from("logs")
+    }
+}
+
+/// 从参数列表中提取 -c 或 --config 指定的父级目录
+fn extract_config_parent_from_args(args: &[String]) -> Option<PathBuf> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-c" || arg == "--config" {
+            if let Some(val) = iter.next() {
+                let p = Path::new(val);
+                if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    return Some(parent.to_path_buf());
+                }
+            }
+        } else if let Some(stripped) = arg.strip_prefix("--config=") {
+            let p = Path::new(stripped);
+            if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
+                return Some(parent.to_path_buf());
+            }
+        }
+    }
+    None
 }
 
 /// 解析环境变量 RUST_LOG 对应的日志级别过滤器
@@ -79,9 +167,10 @@ pub fn init_logger() -> Result<LoggingHandle> {
         })
         .chain(std::io::stdout());
 
-    // 4. 本地文件日志写入通道 (单文件上限 10MB，最多保留 5 个备份归档)
-    let file_writer = init_file_writer("logs", "rddns.log", 10 * 1024 * 1024, 5)
-        .context("初始化本地文件日志写入器失败")?;
+    // 4. 解析日志存储目录并初始化本地文件日志写入通道 (单文件上限 10MB，最多保留 5 个备份归档)
+    let log_dir = resolve_log_dir();
+    let file_writer = init_file_writer(&log_dir, "rddns.log", 10 * 1024 * 1024, 5)
+        .with_context(|| format!("初始化本地文件日志写入器失败，目录: {}", log_dir.display()))?;
     let file_dispatch = Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -112,5 +201,70 @@ pub fn init_logger() -> Result<LoggingHandle> {
     Ok(LoggingHandle {
         log_buffer,
         _guard: LogGuard,
+        log_dir,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_log_dir_from_config_args() {
+        // 测试从 -c 提取绝对路径父目录
+        let args = vec![
+            "rddns".to_string(),
+            "-c".to_string(),
+            if cfg!(windows) {
+                r"C:\Program Files\rddns\.rddns.toml".to_string()
+            } else {
+                "/etc/rddns/config.toml".to_string()
+            },
+        ];
+        let res = resolve_log_dir_internal(&args, None, None);
+        if cfg!(windows) {
+            assert_eq!(res, PathBuf::from(r"C:\Program Files\rddns\logs"));
+        } else {
+            assert_eq!(res, PathBuf::from("/etc/rddns/logs"));
+        }
+
+        // 测试从 --config= 提取父目录
+        let args2 = vec![
+            "rddns".to_string(),
+            if cfg!(windows) {
+                r"--config=D:\rddns\conf.toml".to_string()
+            } else {
+                "--config=/opt/rddns/conf.toml".to_string()
+            },
+        ];
+        let res2 = resolve_log_dir_internal(&args2, None, None);
+        if cfg!(windows) {
+            assert_eq!(res2, PathBuf::from(r"D:\rddns\logs"));
+        } else {
+            assert_eq!(res2, PathBuf::from("/opt/rddns/logs"));
+        }
+    }
+
+    #[test]
+    fn test_resolve_log_dir_system_cwd_fallback() {
+        // 模拟 Windows Service 场景：cwd 为 System32，但 exe 为 D:\rddns\rddns.exe
+        let args = vec!["rddns".to_string(), "--windows-service".to_string()];
+        let cwd = if cfg!(windows) {
+            Path::new(r"C:\Windows\System32")
+        } else {
+            Path::new("/")
+        };
+        let exe = if cfg!(windows) {
+            Path::new(r"D:\rddns\rddns.exe")
+        } else {
+            Path::new("/usr/local/bin/rddns")
+        };
+
+        let res = resolve_log_dir_internal(&args, Some(cwd), Some(exe));
+        if cfg!(windows) {
+            assert_eq!(res, PathBuf::from(r"D:\rddns\logs"));
+        } else {
+            assert_eq!(res, PathBuf::from("/usr/local/bin/logs"));
+        }
+    }
 }
