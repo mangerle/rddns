@@ -17,6 +17,64 @@ const SERVICE_NAME: &str = "rddns";
 #[cfg(unix)]
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
 
+/// 转义路径，使其可安全嵌入 systemd unit 的 `ExecStart=` 行 (P1-10)
+///
+/// # 设计原理
+/// - **实现初衷**: `ExecStart=` 的值支持双引号包裹，但 systemd 的引号解析
+///   **不处理嵌入的换行符**。配置文件路径由用户通过 `-c` 参数完全控制，
+///   若路径含换行，后续文本将被 systemd 当作新的 unit 指令解析——攻击者
+///   可借此注入 `User=root`、`ExecStartPre=` 等任意指令实现提权。
+/// - **核心优势**: 采用与 systemd 引号语义一致的反斜杠转义：显式剔除
+///   控制字符（换行、回车、制表符等一律无法进入 unit 文件），并对
+///   反斜杠与双引号做转义。
+///
+/// # 不变式保证
+/// 返回值**必定**为单行且不含裸换行符，可安全嵌入 unit 指令值。
+#[cfg(unix)]
+fn escape_systemd_exec_arg(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    for ch in raw.chars() {
+        match ch {
+            // 控制字符一律剔除（含换行/回车/制表符），杜绝指令注入
+            c if c.is_control() => {}
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            // 空格需保留在引号内，仅剔除可能导致 unit 结构异常的字符
+            '$' => out.push_str("\\$"),
+            '%' => out.push_str("\\%"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 转义字符串，使其可安全嵌入 XML 文本节点 (P1-10)
+///
+/// # 设计原理
+/// - **实现初衷**: launchd plist 将程序路径与配置路径直接嵌入 XML 文本节点。
+///   macOS 路径可合法包含 `&` 与 `<`（如 `/Applications/A&B/rddns`），直接
+///   嵌入会产生格式错误的 plist，进而导致 launchd 拒绝加载；更严重的是
+///   恶意构造的路径可注入额外 XML 节点改写服务定义。
+/// - **核心优势**: 按 XML 规范对四类保留字符做实体转义。
+///
+/// # 不变式保证
+/// 返回值**必定**为合法 XML 文本节点内容，不含裸 `&`、`<`、`>`。
+#[cfg(unix)]
+fn escape_xml_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 16);
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// 处理系统服务管理命令 (install | uninstall | start | stop | restart | status)
 ///
 /// # 设计原理
@@ -371,6 +429,12 @@ fn handle_linux_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
         "install" => {
             let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
             info!("正在生成 systemd 服务配置文件 [{}]...", service_file_path);
+
+            // 路径经转义后嵌入，防止换行注入任意 unit 指令 (P1-10)
+            let exe_dir_safe = escape_systemd_exec_arg(&exe_dir.display().to_string());
+            let exe_safe = escape_systemd_exec_arg(&exe_path.display().to_string());
+            let config_safe = escape_systemd_exec_arg(&config_path.display().to_string());
+
             let service_content = format!(
                 r#"[Unit]
 Description={}
@@ -380,7 +444,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory={}
+WorkingDirectory="{}"
 ExecStart="{}" -c "{}"
 Restart=always
 RestartSec=5s
@@ -389,10 +453,7 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 "#,
-                SERVICE_DESCRIPTION,
-                exe_dir.display(),
-                exe_path.display(),
-                config_path.display()
+                SERVICE_DESCRIPTION, exe_dir_safe, exe_safe, config_safe
             );
 
             fs::write(service_file_path, service_content).context("写入 systemd 服务文件失败")?;
@@ -476,6 +537,12 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
         "install" => {
             let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
             info!("正在生成 launchd 配置文件 [{}]...", plist_path);
+
+            // 路径经 XML 转义后嵌入，防止 plist 格式错误与节点注入 (P1-10)
+            let exe_dir_xml = escape_xml_text(&exe_dir.display().to_string());
+            let exe_xml = escape_xml_text(&exe_path.display().to_string());
+            let config_xml = escape_xml_text(&config_path.display().to_string());
+
             let plist_content = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -502,9 +569,7 @@ fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Re
 </dict>
 </plist>
 "#,
-                exe_dir.display(),
-                exe_path.display(),
-                config_path.display()
+                exe_dir_xml, exe_xml, config_xml
             );
 
             fs::write(plist_path, plist_content).context("写入 launchd plist 失败")?;
@@ -665,5 +730,92 @@ mod tests {
         assert!(cmd_str.contains("\"auto\""));
         assert!(cmd_str.contains("\"DisplayName=\""));
         assert!(cmd_str.contains(r#""C:\\Program Files\\rddns\\rddns.exe\" -c \"C:\\Program Files\\rddns\\config.json\" --windows-service"#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_escape_systemd_exec_arg_prevents_unit_injection() {
+        // 回归用例 (P1-10)：配置文件路径由用户通过 -c 参数完全控制。
+        // systemd 的引号解析不处理嵌入换行，恶意路径可注入任意 unit 指令
+        // 实现提权（如注入 User=root / ExecStartPre=）。
+        let malicious = "/tmp/a\nUser=root\nExecStartPre=/bin/sh -c 'id > /tmp/pwn'\nExecStart=";
+
+        let escaped = escape_systemd_exec_arg(malicious);
+
+        // 核心不变式：结果必须为单行，不含任何换行符。
+        // 这正是注入被阻断的原理——systemd 按行解析 unit 文件，
+        // 换行一旦消失，后续文本就只能作为 ExecStart 参数的一部分，
+        // 而无法成为独立的 User= / ExecStartPre= 指令。
+        assert!(
+            !escaped.contains('\n') && !escaped.contains('\r'),
+            "转义结果绝不可包含换行符，否则可注入 unit 指令: {:?}",
+            escaped
+        );
+        // 注入内容可作为路径文本残留（无害），但绝不可产生新的行结构。
+        // 逐行校验每一行都不含 unit 指令语法。
+        for line in escaped.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("User=")
+                    && !trimmed.starts_with("ExecStartPre=")
+                    && !trimmed.starts_with("ExecStart="),
+                "转义后不得出现独立的 unit 指令行，实际行: {:?}",
+                line
+            );
+        }
+        // 其余内容仍应保留（剔除控制字符而非整体丢弃路径）
+        assert!(
+            escaped.contains("/tmp/a"),
+            "合法路径部分应被保留: {:?}",
+            escaped
+        );
+        assert!(
+            escaped.contains("User=root"),
+            "注入文本可作为路径内容残留，但因无换行而不构成指令: {:?}",
+            escaped
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_escape_systemd_exec_arg_escapes_quotes_and_specials() {
+        // 双引号与反斜杠必须转义，否则可提前闭合引号改变解析结构
+        assert_eq!(
+            escape_systemd_exec_arg(r#"/path/with"quote"#),
+            r#"/path/with\"quote"#
+        );
+        assert_eq!(
+            escape_systemd_exec_arg(r"/path/with\backslash"),
+            r"/path/with\\backslash"
+        );
+        // systemd 将 $ 与 % 用作变量/规格展开标记，需转义防注入
+        assert_eq!(escape_systemd_exec_arg("/path/$USER"), r"/path/\$USER");
+        assert_eq!(escape_systemd_exec_arg("/path/%i"), r"/path/\%i");
+        // 空格与中文路径属合法内容，不应被破坏
+        assert_eq!(
+            escape_systemd_exec_arg("/opt/my apps/我的程序"),
+            "/opt/my apps/我的程序"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_escape_xml_text_prevents_plist_corruption() {
+        // 回归用例 (P1-10)：macOS 路径可合法包含 & 与 <，直接嵌入会产生
+        // 格式错误的 plist，恶意路径还可注入额外 XML 节点改写服务定义。
+        let escaped = escape_xml_text("/Applications/A&B/rddns");
+        assert_eq!(escaped, "/Applications/A&amp;B/rddns");
+
+        // 节点注入尝试
+        let injection = "/tmp/x</string></dict><dict><key>Label</key><string>evil</string>";
+        let esc = escape_xml_text(injection);
+        assert!(!esc.contains('<'));
+        assert!(!esc.contains('>'));
+
+        // 四类 XML 保留字符全覆盖
+        assert_eq!(
+            escape_xml_text(r#"<a href="x">&'</a>"#),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&apos;&lt;/a&gt;"
+        );
     }
 }

@@ -1,7 +1,9 @@
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::pin::Pin;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::net::lookup_host;
@@ -207,7 +209,79 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
 ///
 /// # Errors
 /// 当主机指向本地回环、私网 IP、localhost、内部保留域名，或解析出的 IP 属于私网/保留网段时返回错误。
+/// 域名解析器抽象
+///
+/// # 设计原理
+/// - **实现初衷**: SSRF 校验的判定逻辑（协议、保留域名、私网 IP 判定）
+///   本��是纯函数，唯独「域名解析」一步必须访问外部 DNS。此前二者耦合在
+///   `validate_safe_host` 内��使安全测试无法注入确定性结果——只能依赖真实
+///   公网 DNS 产生断言，从而衍生出两类严重问题：
+///   1. **假性失败**：CI 网络受限、DNS 被墙、出口 IP 被限流时用例莫名失败；
+///   2. **反向失效**：若实现退化为「解析失败即放行」，公网放行用例反而会
+///      假性通过——安全测试比没有测试更危险。
+/// - **核心优势**: 抽出 trait 后，测试可注入预置解析结果，使全部安全断言
+///   具备 100% 确定性，与外部网络状态完全解耦。
+/// - **代价与局限**: 仅内部使用，不构成公开 API 兼容负担。
+pub trait HostResolver: Send + Sync {
+    /// 解析主机名，返回其全部地址
+    ///
+    /// # 设计原理
+    /// 主机名以 `String` 传入而非 `&str`，使返回的 Future 不必借用入参
+    /// 生命周期，从而免去调用方在使用 trait object 时的生命周期约束负担。
+    ///
+    /// # Errors
+    /// 解析失败时返回错误描述（将被上层按 fail-closed 拒绝）。
+    fn resolve(
+        &self,
+        host: String,
+        port: u16,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, String>> + Send>>;
+}
+
+/// 基于操作系统解析器的生产实现
+pub struct SystemResolver;
+
+impl HostResolver for SystemResolver {
+    fn resolve(
+        &self,
+        host: String,
+        port: u16,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, String>> + Send>> {
+        Box::pin(async move {
+            let addr_str = format!("{}:{}", host, port);
+            match lookup_host(&addr_str).await {
+                Ok(addrs) => Ok(addrs.into_iter().map(|sa| sa.ip()).collect()),
+                Err(e) => Err(e.to_string()),
+            }
+        })
+    }
+}
+
+/// 使用系统解析器校验外部目标主机地址，防御指向内网与云元数据的 SSRF 风险
+///
+/// # 设计原理
+/// - **实现初衷**: 统一验证外部主机或域名，防止指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
+/// - **核心优势**: 采用非阻塞的异步 DNS 解析 (`tokio::net::lookup_host`) 并辅以 3 秒强制超时保护，
+///   避免在单线程异步运行时中因底层操作系统同步阻塞 DNS 解析挂起而导致全局事件循环冻结 (P-3)。
+/// - **代价与局限**: 校验过程需执行网络异步 DNS 查询，存在微秒至毫秒级网络 I/O 耗时。
+///
+/// # Errors
+/// 当主机指向本地回环、私网 IP、localhost、内部保留域名，或解析出的 IP 属于私网/保留网段时返回错误。
 pub async fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), String> {
+    validate_safe_host_with(host_str, port, &SystemResolver).await
+}
+
+/// 以可注入解析器校验外部目标主机地址
+///
+/// # 设计原理
+/// 与 [`validate_safe_host`] 共享全部判定逻辑，仅将「域名解析」一步委托给
+/// 传入的 [`HostResolver`]。使安全测试可注入确定性解析结果，彻底摆脱对
+/// 真实公网 DNS 的依赖（P1-9）。
+pub async fn validate_safe_host_with(
+    host_str: &str,
+    port: Option<u16>,
+    resolver: &dyn HostResolver,
+) -> Result<(), String> {
     let trimmed = host_str.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -238,28 +312,28 @@ pub async fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(),
 
     // 执行异步 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名 (P-3)
     let check_port = port.unwrap_or(80);
-    let addr_str = format!("{}:{}", trimmed, check_port);
     let lookup_timeout = Duration::from_secs(3);
 
-    let lookup_result = tokio::time::timeout(lookup_timeout, lookup_host(&addr_str)).await;
+    let lookup_result = tokio::time::timeout(
+        lookup_timeout,
+        resolver.resolve(trimmed.to_string(), check_port),
+    )
+    .await;
     match lookup_result {
-        Ok(Ok(addrs)) => {
-            let mut resolved_any = false;
-            for socket_addr in addrs {
-                resolved_any = true;
-                let ip = socket_addr.ip();
+        Ok(Ok(ips)) => {
+            if ips.is_empty() {
+                return Err(format!(
+                    "出于安全策略，域名 [{}] 未能解析出有效 IP 地址，已拒绝该目标地址",
+                    trimmed
+                ));
+            }
+            for ip in ips {
                 if is_private_or_loopback(&ip) {
                     return Err(format!(
                         "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
                         trimmed, ip
                     ));
                 }
-            }
-            if !resolved_any {
-                return Err(format!(
-                    "出于安全策略，域名 [{}] 未能解析出有效 IP 地址，已拒绝该目标地址",
-                    trimmed
-                ));
             }
         }
         Ok(Err(e)) => {
@@ -289,6 +363,21 @@ pub async fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(),
 /// # Errors
 /// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
 pub async fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
+    validate_safe_url_endpoint_with(raw_url, &SystemResolver).await
+}
+
+/// 以可注入解析器校验外部 URL 端点（防范 SSRF 攻击）
+///
+/// # 设计原理
+/// 与 [`validate_safe_url_endpoint`] 共享全部判定逻辑，仅将域名解析委托给
+/// 传入的 [`HostResolver`]。使安全测试可注入确定性解析结果（P1-9）。
+///
+/// # Errors
+/// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
+pub async fn validate_safe_url_endpoint_with(
+    raw_url: &str,
+    resolver: &dyn HostResolver,
+) -> Result<(), String> {
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -302,9 +391,15 @@ pub async fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let parsed =
         Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
     match parsed.host() {
-        Some(Host::Ipv4(v4)) => validate_safe_host(&v4.to_string(), parsed.port()).await,
-        Some(Host::Ipv6(v6)) => validate_safe_host(&v6.to_string(), parsed.port()).await,
-        Some(Host::Domain(domain)) => validate_safe_host(domain, parsed.port()).await,
+        Some(Host::Ipv4(v4)) => {
+            validate_safe_host_with(&v4.to_string(), parsed.port(), resolver).await
+        }
+        Some(Host::Ipv6(v6)) => {
+            validate_safe_host_with(&v6.to_string(), parsed.port(), resolver).await
+        }
+        Some(Host::Domain(domain)) => {
+            validate_safe_host_with(domain, parsed.port(), resolver).await
+        }
         None => Err("URL 端点缺少有效的主机地址".to_string()),
     }
 }

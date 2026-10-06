@@ -9,11 +9,11 @@ use crate::notifier::webhook::CustomWebhookNotifier;
 use crate::notifier::wechat_official::WechatOfficialNotifier;
 use crate::notifier::wecom::WeComNotifier;
 use log::{debug, error, warn};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
-use tokio::spawn;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,37 @@ const TRACKER_HARD_LIMIT: usize = 512;
 const ERROR_TRACKER_TTL: Duration = Duration::from_secs(3600);
 /// 相同错误防风暴告警冷却窗口（30 分钟）
 const ERROR_SUPPRESSION_TTL: Duration = Duration::from_secs(1800);
+
+/// 全局在途通知任务并发上限 (P1-13)
+///
+/// # 设计原理
+/// - **实现初衷**: `dispatch_internal` 为保持「即发即忘」语义而不阻塞 DDNS
+///   主同步循环，每轮会派生「渠道数 + 1」个任务且**无任何数量约束**。
+///   最短同步间隔为 5 秒，而单渠道最长耗时可达约 36 秒（10 秒超时 × 3 次
+///   尝试 + 梯级退避），稳态下在途任务可无界累积上百个，最终演变为
+///   协程与内存的双重膨胀。
+/// - **核心优势**: 以全局 `Semaphore` 为在途任务数设上限，超限时立即拒绝
+///   并记录告警。通知属于「尽力而为」的旁路能力，为保障 DDNS 主流程可用性
+///   而拒绝过量通知，是明确的取舍而非缺陷。
+const MAX_INFLIGHT_NOTIFY_TASKS: usize = 32;
+
+/// 全局在途通知任务并发闸门
+static NOTIFY_INFLIGHT_GATE: LazyLock<Semaphore> =
+    LazyLock::new(|| Semaphore::new(MAX_INFLIGHT_NOTIFY_TASKS));
+
+/// 全局通知监管任务追踪表 (P1-13)
+///
+/// # 设计原理
+/// 监管任务若以 `let _ = spawn(...)` 形式派生，其 `JoinHandle` 会随
+/// 作用域结束被丢弃——生命周期完全脱离追踪，与项目「严禁脱缰孤儿任务」
+/// 的约定相悖，且 panic 无人收割。
+///
+/// `JoinSet` 本身不满足 `Sync`（需 `&mut` 才能收割），无法直接作为
+/// `static`。故以 `parking_lot::Mutex` 包裹：`dispatch` 为同步函数，
+/// 锁内仅执行一次 `spawn`（微秒级），收割发生在 `JoinSet::join_next`
+/// 的异步轮询中，二者不共享临界区。
+static HARVESTER_TRACKER: LazyLock<Mutex<JoinSet<()>>> =
+    LazyLock::new(|| Mutex::new(JoinSet::new()));
 
 /// 错误告警状态跟踪（用于防风暴抑制）
 #[derive(Debug, Clone)]
@@ -259,9 +290,17 @@ impl NotificationDispatcher {
     ///
     /// # 设计原理
     /// 各渠道推送相互独立，单个渠道失败不应影响其他渠道。为避免通知网络
-    /// 延迟阻塞 DDNS 主同步循环，本函数保持「即发即忘」语义；但裸 spawn
-    /// 会丢弃 JoinHandle，使 panic 彻底静默。故派生一个**监管任务**持有
-    /// JoinSet 并收割全部结果——既保持非阻塞，又不丢失 panic 感知能力。
+    /// 延迟阻塞 DDNS 主同步循环，本函数保持「即发即忘」语义。
+    ///
+    /// # 在途任务限流 (P1-13)
+    /// 每轮派生「渠道数 + 1」个任务且无数量约束时，最短同步间隔（5 秒）
+    /// 小于单渠道最长耗时（约 36 秒），稳态下在途任务会无界累积。故在派生
+    /// 前先申请全局闸门许可，无许可时立即拒绝并告警——通知属旁路能力，
+    /// 为保障 DDNS 主流程可用性而拒绝过量通知是明确取舍。
+    ///
+    /// # 任务生命周期
+    /// 监管任务的 `JoinHandle` 交由全局收割表纳管（见 [`Self::spawn_harvester`]），
+    /// 确保其生命周期可追踪、可等待，避免脱缰孤儿任务。
     fn dispatch_internal(&self, event: NotificationEvent, force: bool) {
         if self.notifiers.is_empty() {
             return;
@@ -270,6 +309,18 @@ impl NotificationDispatcher {
         if !force && self.should_filter_event(&event) {
             return;
         }
+
+        // 一次性申请本轮全部渠道所需许可，避免部分渠道被派发、部分被拒
+        let permits = match NOTIFY_INFLIGHT_GATE.try_acquire_many(self.notifiers.len() as u32) {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(
+                    "在途通知任务已达上限 ({})，本次通知分发被拒绝以避免任务无界堆积",
+                    MAX_INFLIGHT_NOTIFY_TASKS
+                );
+                return;
+            }
+        };
 
         let ev_arc = std::sync::Arc::new(event);
         let mut join_set = JoinSet::new();
@@ -285,7 +336,12 @@ impl NotificationDispatcher {
 
         let statuses = self.delivery_statuses.clone();
         // 监管任务：收割各渠道句柄与投递结果，确保 panic 可被识别并聚合投递状态 (P2-7, P3-15)
-        let _harvest_task = spawn(async move {
+        //
+        // 句柄纳管方式：直接并入全局 `HARVESTER_TRACKER`，而非派生新的
+        // 监管任务去持有它——后者只会把孤儿任务问题向下复制一层。
+        HARVESTER_TRACKER.lock().spawn(async move {
+            // 许可令牌随本任务存活，任务结束时自动释放闸门配额
+            let _permits = permits;
             while let Some(res) = join_set.join_next().await {
                 match res {
                     Ok((channel_name, delivery_res)) => {
@@ -517,5 +573,86 @@ mod tests {
         assert_eq!(st.failure_count, 0);
         assert!(st.last_success_time.is_some());
         assert!(st.last_failure_time.is_none());
+    }
+
+    /// 全局闸门测试互斥锁
+    ///
+    /// # 设计原理
+    /// `NOTIFY_INFLIGHT_GATE` 为进程级单例，多个测试并行改动其许可数会
+    /// 相互干扰（一个测试的 `available_permits` 断言会被另一个测试的
+    /// 占用打断）。此锁确保两个用例串行执行。
+    static GATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_inflight_gate_blocks_unbounded_notification_tasks() {
+        // 回归用例 (P1-13)：dispatch_internal 原先对在途任务数无任何约束。
+        // 最短同步间隔（5 秒）小于单渠道最长耗时（约 36 秒），稳态下任务
+        // 会无界累积。验证闸门在耗尽后会拒绝新的分发。
+        //
+        // 全程同步执行，锁的作用域不跨越任何 await（AGENTS.md 明令禁止
+        // MutexGuard 跨 await）。
+        let _serial = GATE_TEST_LOCK.lock();
+
+        // 按当前实际可用量申请，不假定闸门初始为空闲——同进程内其它测试
+        // 可能已占用部分许可，硬编码申请全量会间歇性失败（flaky）。
+        let available = NOTIFY_INFLIGHT_GATE.available_permits();
+        assert!(available > 0, "闸门可用许可应为正数，当前 {}", available);
+
+        // 占满全部可用许可，模拟在途任务已达上限
+        let held = NOTIFY_INFLIGHT_GATE
+            .try_acquire_many(available as u32)
+            .expect("按可用量申请许可理应成功");
+
+        // 闸门耗尽后新的分发必须被拒绝
+        assert!(
+            NOTIFY_INFLIGHT_GATE.try_acquire_many(1).is_err(),
+            "在途任务达上限后必须拒绝新的分发，否则任务将无界堆积"
+        );
+
+        // 许可释放后应可再次获取
+        drop(held);
+        assert!(
+            NOTIFY_INFLIGHT_GATE.try_acquire_many(1).is_ok(),
+            "许可释放后必须可继续分发"
+        );
+    }
+
+    #[test]
+    fn test_inflight_gate_permits_are_released_after_harvest() {
+        // 验证许可令牌随持有者结束而释放，不会永久占用导致后续通知全被拒。
+        // 全程使用 try_acquire_many 而非 async 版本，使本用例无需 await，
+        // 从根本上避免 MutexGuard 跨挂起点的高危反模式。
+        let _serial = GATE_TEST_LOCK.lock();
+        let before = NOTIFY_INFLIGHT_GATE.available_permits();
+        {
+            let _p = NOTIFY_INFLIGHT_GATE
+                .try_acquire_many(4)
+                .expect("申请许可失败：闸门应有余量");
+            assert_eq!(
+                NOTIFY_INFLIGHT_GATE.available_permits(),
+                before - 4,
+                "许可应被实际占用"
+            );
+        }
+        assert_eq!(
+            NOTIFY_INFLIGHT_GATE.available_permits(),
+            before,
+            "作用域结束后许可必须被完整释放"
+        );
+    }
+
+    #[test]
+    fn test_harvester_tracker_is_process_wide_and_bounded() {
+        // 监管任务必须纳管至全局追踪表而非被丢弃为孤儿任务
+        let mut tracker = HARVESTER_TRACKER.lock();
+        // 收割已完成的历史任务，防止表本身无界增长
+        while tracker.try_join_next().is_some() {}
+        let len = tracker.len();
+        drop(tracker);
+        assert!(
+            len <= MAX_INFLIGHT_NOTIFY_TASKS * 2,
+            "监管任务追踪表长度应受在途上限约束，实际 {}",
+            len
+        );
     }
 }

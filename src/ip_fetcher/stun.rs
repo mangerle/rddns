@@ -4,7 +4,7 @@ use crate::util::dns_resolver::{QueryRecordType, query_dns_server};
 use crate::util::http::{find_interface_ipv4, find_interface_ipv6};
 use crate::util::net::{is_global_unicast_ipv6, is_public_ipv4};
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::{UdpSocket, lookup_host};
@@ -30,6 +30,15 @@ const DEFAULT_IPV6_STUN_SERVERS: &[&str] = &[
     "stun1.l.google.com:19302",
     "stun.fitauto.ru:3478",
 ];
+
+/// 节点遍历总预算超时 (P1-14)
+///
+/// # 设计原理
+/// 6 个节点串行探测，每节点最坏耗时为「3 秒 DNS 解析 + 2 秒接收超时」，
+/// 累计可达约 30 秒，直接占满整个同步轮询周期；而 `core/engine/sync.rs`
+/// 的双栈 `tokio::join!` 仅使 IPv4/IPv6 并行，总预算仍达 30 秒。
+/// 逐节点超时无法约束总量，此处为整个遍历设置统一预算上限。
+const STUN_FALLBACK_BUDGET: Duration = Duration::from_secs(10);
 
 /// 基于 STUN 协议 (RFC 5389) 的轻量级 UDP 公网 IP 探测器
 pub struct StunIpFetcher {
@@ -295,7 +304,28 @@ impl StunIpFetcher {
             }
 
             match Self::parse_binding_response(&recv_buf[..len], &tx_id) {
-                Ok(ip) => return Ok(ip),
+                Ok(ip) => {
+                    // 公网地址校验必须置于节点遍历**内部** (P1-14)
+                    //
+                    // 若在 `fetch_ipv4` / `fetch_ipv6` 的最外层校验，
+                    // 首个返回 CGNAT / 私网地址的节点即导致整轮探测失败，
+                    // 而不会继续尝试剩余 5 个节点——降级链在此断裂。
+                    // `url.rs` 与 `command.rs` 的同类校验均位于遍历体内，
+                    // 此处必须对齐，否则 STUN 是四个探测器中唯一不可降级的。
+                    let is_public = match ip {
+                        IpAddr::V4(v4) => is_public_ipv4(&v4),
+                        IpAddr::V6(v6) => is_global_unicast_ipv6(&v6),
+                    };
+                    if is_public {
+                        return Ok(ip);
+                    }
+                    let reason = format!(
+                        "STUN 服务器 [{}] 返回的映射地址 {} 非公网单播地址（可能是运营商 CGNAT 或内网地址），已跳过该节点继续尝试",
+                        target_addr, ip
+                    );
+                    debug!("{}", reason);
+                    last_err = Some(FetchError::NoValidIpv4(reason));
+                }
                 Err(e) => {
                     debug!("解析 STUN 目标 [{}] 响应失败: {}", target_addr, e);
                     last_err = Some(e);
@@ -333,40 +363,74 @@ impl StunIpFetcher {
             Self::default_servers(is_ipv6)
         };
 
-        let mut last_err = None;
-        for server in &server_list {
-            debug!(
-                "尝试通过 STUN 服务器 [{}] 探测公网 {}...",
-                server,
-                if is_ipv6 { "IPv6" } else { "IPv4" }
-            );
-            match self.probe_single_server(server, is_ipv6).await {
-                Ok(ip) => {
-                    info!(
-                        "通过 STUN 服务器 [{}] 成功探测到公网 {}: {}",
-                        server,
-                        if is_ipv6 { "IPv6" } else { "IPv4" },
-                        ip
-                    );
-                    return Ok(ip);
-                }
-                Err(e) => {
-                    // 节点地址来自用户配置，理论上可内嵌凭据，统一经脱敏出口 (P1-3)
-                    let safe_msg =
-                        crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string());
-                    warn!(
-                        "通过 STUN 服务器 [{}] 探测 {} 失败: {}",
-                        server,
-                        if is_ipv6 { "IPv6" } else { "IPv4" },
-                        safe_msg
-                    );
-                    last_err = Some(e);
+        // 遍历体整体受总预算约束 (P1-14)：逐节点超时无法约束总量，
+        // 6 节点串行最坏可达约 30 秒并占满整个同步轮询周期。
+        // 闭包返回 `Result`，首个成功即返回 Ok，全程不跳出闭包。
+        let probe_all = async {
+            let mut last_err: Option<FetchError> = None;
+            for server in &server_list {
+                debug!(
+                    "尝试通过 STUN 服务器 [{}] 探测公网 {}...",
+                    server,
+                    if is_ipv6 { "IPv6" } else { "IPv4" }
+                );
+                match self.probe_single_server(server, is_ipv6).await {
+                    Ok(ip) => {
+                        // 降级为 debug (P1-14)：本函数位于轮询热路径，
+                        // 最短同步间隔 5 秒，双栈各一条即每 5 秒产生 2 条 info，
+                        // 直接违反 AGENTS.md「严禁高频热点日志轰炸」。
+                        // 探测结果已由 `sync.rs` 的同步日志与 Web 面板运行状态
+                        // 完整呈现，此处无需重复输出。
+                        debug!(
+                            "通过 STUN 服务器 [{}] 成功探测到公网 {}: {}",
+                            server,
+                            if is_ipv6 { "IPv6" } else { "IPv4" },
+                            ip
+                        );
+                        return Ok(ip);
+                    }
+                    Err(e) => {
+                        // 节点级失败降级为 debug：单轮全失败时最坏产生 6 条日志，
+                        // 每 5 秒一轮将持续刷盘。最终失败由下方统一 warn 一次。
+                        debug!(
+                            "通过 STUN 服务器 [{}] 探测 {} 失败: {}",
+                            server,
+                            if is_ipv6 { "IPv6" } else { "IPv4" },
+                            // 节点地址来自用户配置，理论上可内嵌凭据 (P1-3)
+                            crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+                        );
+                        last_err = Some(e);
+                    }
                 }
             }
+            Err(last_err.unwrap_or_else(|| {
+                FetchError::Other("所有配置的 STUN 服务器均探测失败".to_string())
+            }))
+        };
+
+        let result = match timeout(STUN_FALLBACK_BUDGET, probe_all).await {
+            Ok(res) => res,
+            Err(_) => {
+                warn!(
+                    "STUN 节点遍历超出总预算 {} 秒，放弃剩余节点（目标协议: {}）",
+                    STUN_FALLBACK_BUDGET.as_secs(),
+                    if is_ipv6 { "IPv6" } else { "IPv4" }
+                );
+                Err(FetchError::Timeout)
+            }
+        };
+
+        if let Err(e) = &result {
+            // 全部节点失败：在此处一次性告警，而非逐节点刷盘
+            warn!(
+                "全部 {} 个 STUN 服务器均探测失败（目标协议: {}），最后一次错误: {}",
+                server_list.len(),
+                if is_ipv6 { "IPv6" } else { "IPv4" },
+                crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+            );
         }
 
-        Err(last_err
-            .unwrap_or_else(|| FetchError::Other("所有配置的 STUN 服务器均探测失败".to_string())))
+        result
     }
 }
 
@@ -375,8 +439,10 @@ impl IpFetcher for StunIpFetcher {
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         match self.fetch_ip_with_fallback(false).await {
             Ok(IpAddr::V4(v4)) => {
-                // 必须校验为公网单播地址：STUN 服务器返回的映射地址若为 RFC1918 私网
-                // 或运营商 CGNAT(100.64.0.0/10)，提交到公网 DNS 后会导致域名对外不可达。
+                // 纵深防御 (P1-14)：主校验已下沉至 `probe_single_server` 的
+                // 节点遍历内部（否则首个返回非公网地址的节点会使整轮探测
+                // 失败、降级链断裂）。此处保留为最后一道关卡，确保任何
+                // 未来绕过内部校验的路径也不会把私网地址提交到公网 DNS。
                 if is_public_ipv4(&v4) {
                     Ok(Some(v4))
                 } else {
@@ -450,5 +516,53 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_stun_fallback_budget_is_bounded() {
+        // 回归用例 (P1-14)：6 节点串行探测，每节点最坏 5 秒（3 秒 DNS
+        // + 2 秒接收），累计约 30 秒会占满整个同步轮询周期。
+        // 断言总预算显著小于「节点数 × 单节点最坏耗时」这一理论上限，
+        // 确保遍历时长存在硬上限。
+        let per_node_worst = Duration::from_secs(5);
+        let naive_worst = per_node_worst * DEFAULT_IPV4_STUN_SERVERS.len() as u32;
+        assert!(
+            STUN_FALLBACK_BUDGET < naive_worst,
+            "总预算 {} 秒必须显著小于无预算约束时的理论最坏耗时 {} 秒",
+            STUN_FALLBACK_BUDGET.as_secs(),
+            naive_worst.as_secs()
+        );
+        // 预算本身不应短到连单个节点都探测不完
+        assert!(
+            STUN_FALLBACK_BUDGET > per_node_worst,
+            "总预算不得短于单节点最坏耗时，否则单个节点都探测不完"
+        );
+    }
+
+    #[test]
+    fn test_stun_server_pool_sizes_are_reasonable() {
+        // 节点池规模直接决定最坏耗时；池过大时即便有总预算保护，
+        // 也会让「预算耗尽」成为常态而非异常。约束池规模使其可被快速遍历。
+        assert!(
+            DEFAULT_IPV4_STUN_SERVERS.len() <= 8,
+            "IPv4 节点池过大（{}），最坏耗时会逼近总预算上限",
+            DEFAULT_IPV4_STUN_SERVERS.len()
+        );
+        assert!(
+            DEFAULT_IPV6_STUN_SERVERS.len() <= 8,
+            "IPv6 节点池过大（{}），最坏耗时会逼近总预算上限",
+            DEFAULT_IPV6_STUN_SERVERS.len()
+        );
+        // 全部节点地址必须显式带端口，避免回退到默认端口时的解析歧义
+        for server in DEFAULT_IPV4_STUN_SERVERS
+            .iter()
+            .chain(DEFAULT_IPV6_STUN_SERVERS.iter())
+        {
+            assert!(
+                server.contains(':'),
+                "STUN 节点 [{}] 应显式指定端口",
+                server
+            );
+        }
     }
 }
