@@ -271,13 +271,57 @@ impl DdnsEngine {
             });
 
         if !should_sync {
-            debug!(
-                "[{}] 本地 IP 未发生变动 (IPv4: {:?}, IPv6: {:?})，未达服务商校对周期 ({}/{})，跳过云端请求",
-                task.name, ipv4_opt, ipv6_opt, current_state.check_counter, cache_times
-            );
-            current_state.last_sync_time =
-                Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-            state_manager.update_task_state(&task.name, |s| *s = current_state);
+            if ip_fetch_failed {
+                warn!(
+                    "[{}] 公网 IP 获取失败，跳过云端同步并派发告警通知",
+                    task.name
+                );
+                current_state.consecutive_failures =
+                    current_state.consecutive_failures.saturating_add(1);
+                current_state.last_sync_time =
+                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                state_manager.update_task_state(&task.name, |s| *s = current_state.clone());
+
+                let mut fail_results = Vec::new();
+                if task.ipv4.enabled && ipv4_opt.is_none() {
+                    for d in &parsed_v4 {
+                        fail_results.push(SyncRecordResult::failed(
+                            d.full_domain(),
+                            DnsRecordType::A,
+                            "未知/获取失败",
+                            "获取本地公网 IPv4 地址失败",
+                        ));
+                    }
+                }
+                if task.ipv6.enabled && ipv6_opt.is_none() {
+                    for d in &parsed_v6 {
+                        fail_results.push(SyncRecordResult::failed(
+                            d.full_domain(),
+                            DnsRecordType::AAAA,
+                            "未知/获取失败",
+                            "获取本地公网 IPv6 地址失败",
+                        ));
+                    }
+                }
+                fail_results.extend(invalid_v4);
+                fail_results.extend(invalid_v6);
+
+                sync::dispatch_sync_notification(
+                    &task.name,
+                    dispatcher,
+                    ipv4_opt,
+                    ipv6_opt,
+                    fail_results,
+                );
+            } else {
+                debug!(
+                    "[{}] 本地 IP 未发生变动 (IPv4: {:?}, IPv6: {:?})，未达服务商校对周期 ({}/{})，跳过云端请求",
+                    task.name, ipv4_opt, ipv6_opt, current_state.check_counter, cache_times
+                );
+                current_state.last_sync_time =
+                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                state_manager.update_task_state(&task.name, |s| *s = current_state);
+            }
             return;
         }
 
