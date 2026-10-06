@@ -1,7 +1,6 @@
 use super::{ApiResponse, AppError, AppState};
 use crate::config::model::UserAuthConfig;
 use crate::config::storage::ConfigError;
-use crate::util::net::is_private_or_loopback;
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
@@ -181,7 +180,7 @@ pub async fn get_auth_status_handler(
     }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AuthInitRequest {
     pub username: String,
     pub password: String,
@@ -194,14 +193,14 @@ pub async fn init_auth_handler(
     State(state): State<AppState>,
     Json(req): Json<AuthInitRequest>,
 ) -> Result<Json<ApiResponse<&'static str>>, AppError> {
-    // 1. 来源 IP 校验：仅允许本地回环和私网局域网初始化，禁止公网直接初始化
-    if !is_private_or_loopback(&peer_addr.ip()) {
+    // 1. 来源 IP 校验：首发管理员账号初始化仅允许从本地回环地址发起，防御局域网/公网未授权抢占 (L-7)
+    if !peer_addr.ip().is_loopback() {
         warn!(
-            "[安全拦截] 阻止公网 IP ({}) 初始化管理员账号",
+            "[安全拦截] 阻止非本地回环 IP ({}) 初始化管理员账号",
             peer_addr.ip()
         );
         return Err(AppError::forbidden(
-            "出于安全保护，禁止从公网(WAN)初始化管理员账号，请从本机(127.0.0.1)或内网局域网访问！",
+            "出于安全保护，首发管理员账号初始化仅允许从本机(127.0.0.1 或 ::1)访问设置，禁止从局域网或公网直接初始化！",
         ));
     }
 
@@ -355,18 +354,30 @@ mod tests {
             active_not_allow_wan_access: true,
         };
 
-        // 模拟来自公网 IP (8.8.8.8) 的初始化请求
-        let wan_addr = SocketAddr::from(([8, 8, 8, 8], 12345));
         let headers = HeaderMap::new();
         let req = AuthInitRequest {
             username: "admin".to_string(),
             password: "password123".to_string(),
         };
 
-        let res = init_auth_handler(ConnectInfo(wan_addr), headers, State(state), Json(req))
+        // 1. 模拟来自公网 IP (8.8.8.8) 的初始化请求，必须拒绝
+        let wan_addr = SocketAddr::from(([8, 8, 8, 8], 12345));
+        let res = init_auth_handler(
+            ConnectInfo(wan_addr),
+            headers.clone(),
+            State(state.clone()),
+            Json(req.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2. 模拟来自局域网私网 IP (192.168.1.100) 的初始化请求，必须拒绝 (L-7)
+        let lan_addr = SocketAddr::from(([192, 168, 1, 100], 12345));
+        let res_lan = init_auth_handler(ConnectInfo(lan_addr), headers, State(state), Json(req))
             .await
             .into_response();
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res_lan.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
