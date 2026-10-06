@@ -242,15 +242,39 @@ pub async fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(),
     let lookup_timeout = Duration::from_secs(3);
 
     let lookup_result = tokio::time::timeout(lookup_timeout, lookup_host(&addr_str)).await;
-    if let Ok(Ok(addrs)) = lookup_result {
-        for socket_addr in addrs {
-            let ip = socket_addr.ip();
-            if is_private_or_loopback(&ip) {
+    match lookup_result {
+        Ok(Ok(addrs)) => {
+            let mut resolved_any = false;
+            for socket_addr in addrs {
+                resolved_any = true;
+                let ip = socket_addr.ip();
+                if is_private_or_loopback(&ip) {
+                    return Err(format!(
+                        "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
+                        trimmed, ip
+                    ));
+                }
+            }
+            if !resolved_any {
                 return Err(format!(
-                    "出于安全策略，域名 [{}] 解析结果指向内部保留/私网 IP [{}]，已拒绝该目标地址",
-                    trimmed, ip
+                    "出于安全策略，域名 [{}] 未能解析出有效 IP 地址，已拒绝该目标地址",
+                    trimmed
                 ));
             }
+        }
+        Ok(Err(e)) => {
+            // DNS 解析失败默认拒绝，消除 fail-open 静默放行绕过漏洞 (P-6)
+            return Err(format!(
+                "出于安全策略，无法解析目标域名 [{}] ({})，已拒绝该目标地址",
+                trimmed, e
+            ));
+        }
+        Err(_) => {
+            // DNS 解析超时默认拒绝 (P-6)
+            return Err(format!(
+                "出于安全策略，解析目标域名 [{}] 超时，已拒绝该目标地址",
+                trimmed
+            ));
         }
     }
     Ok(())

@@ -140,6 +140,21 @@ async fn test_ssrf_comprehensive_protection() {
             res
         );
     }
+
+    // 8. 针对不存在或无法解析的异常域名严格拦截 (P-6: fail-closed)
+    let invalid_dns_cases = [
+        "http://non-existent-domain-404-ssrf-attack.invalid",
+        "https://dns-blackhole-test.invalid:8443/status",
+    ];
+    for url in invalid_dns_cases {
+        let res = validate_safe_url_endpoint(url).await;
+        assert!(
+            res.is_err(),
+            "无法解析或不存在的域名应当默认拒绝 (fail-closed): {}, 实际结果: {:?}",
+            url,
+            res
+        );
+    }
 }
 
 #[test]

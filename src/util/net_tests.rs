@@ -179,6 +179,13 @@ async fn test_validate_safe_url_endpoint_ssrf_protection() {
             .await
             .is_err()
     );
+
+    // 5. 拦截无法解析的无效/黑洞域名 (P-6: fail-closed)
+    let non_existent_res =
+        validate_safe_url_endpoint("http://non-existent-ssrf-domain-for-test.invalid").await;
+    assert!(non_existent_res.is_err());
+    let err_str = non_existent_res.unwrap_err();
+    assert!(err_str.contains("无法解析目标域名") || err_str.contains("已拒绝该目标地址"));
 }
 
 #[test]
