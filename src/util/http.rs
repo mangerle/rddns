@@ -340,18 +340,24 @@ where
         .clone()
 }
 
-/// 创建具有 15 秒标准超时的 DNS 任务通用 HTTP 客户端 (跨周期复用全局连接池)
+/// DNS 提供商同步接口通用默认超时时间 (15 秒)
+pub const DEFAULT_DNS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 通知渠道推送接口通用默认超时时间 (10 秒)
+pub const DEFAULT_NOTIFIER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 创建具有标准超时的 DNS 任务通用 HTTP 客户端 (跨周期复用全局连接池)
 pub fn create_default_dns_client(interface_name: Option<&str>) -> Client {
-    get_task_http_client(interface_name, Duration::from_secs(15))
+    get_task_http_client(interface_name, DEFAULT_DNS_TIMEOUT)
 }
 
-/// 创建通知渠道专属的 HTTP 客户端 (标准 10 秒超时，跨周期复用全局连接池)
+/// 创建通知渠道专属的 HTTP 客户端 (标准超时，跨周期复用全局连接池)
 ///
 /// # 设计原理
 /// 通知分发在每轮同步后可能对多个渠道并发调用，若每次都新建 Client 会
 /// 造成连接池反复创建销毁，故统一纳入缓存治理。
 pub fn create_notifier_client() -> Client {
-    get_task_http_client(None, Duration::from_secs(10))
+    get_task_http_client(None, DEFAULT_NOTIFIER_TIMEOUT)
 }
 
 /// 对字符串执行 URL 百分比编码 (application/x-www-form-urlencoded)

@@ -9,6 +9,9 @@ use serde::Deserialize;
 use serde_json::json;
 use std::net::IpAddr;
 
+/// Vercel API 基础服务地址
+const VERCEL_API_BASE: &str = "https://api.vercel.com";
+
 /// Vercel DNS 提供商
 pub struct VercelProvider {
     token: String,
@@ -125,7 +128,8 @@ impl RecordOps for VercelProvider {
 
         for _ in 0..MAX_PAGES {
             let base_url = format!(
-                "https://api.vercel.com/v4/domains/{}/records?limit=100{}",
+                "{}/v4/domains/{}/records?limit=100{}",
+                VERCEL_API_BASE,
                 url_encode(&domain.root_domain),
                 next_cursor
                     .map(|c| format!("&until={}", c))
@@ -187,7 +191,8 @@ impl RecordOps for VercelProvider {
         };
 
         let create_url = self.append_team_id(&format!(
-            "https://api.vercel.com/v2/domains/{}/records",
+            "{}/v2/domains/{}/records",
+            VERCEL_API_BASE,
             url_encode(&domain.root_domain)
         ));
 
@@ -224,7 +229,8 @@ impl RecordOps for VercelProvider {
     ) -> Result<(), DnsProviderError> {
         let ttl_val = ttl.unwrap_or(60).max(60);
         let update_url = self.append_team_id(&format!(
-            "https://api.vercel.com/v1/domains/records/{}",
+            "{}/v1/domains/records/{}",
+            VERCEL_API_BASE,
             url_encode(record_id)
         ));
 
