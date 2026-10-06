@@ -60,7 +60,10 @@ fn build_locked_message(remain_secs: u64) -> AppError {
 /// 对频控键执行字符边界安全截断，防御超长请求体注入
 fn sanitize_limiter_key(key: &str) -> &str {
     if key.len() > MAX_LIMITER_KEY_LEN {
-        let idx = key.floor_char_boundary(MAX_LIMITER_KEY_LEN);
+        let mut idx = MAX_LIMITER_KEY_LEN;
+        while !key.is_char_boundary(idx) {
+            idx = idx.saturating_sub(1);
+        }
         &key[..idx]
     } else {
         key

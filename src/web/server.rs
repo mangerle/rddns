@@ -86,22 +86,13 @@ impl WebServer {
         }
     }
 
-    pub async fn run(self, cancel_token: CancellationToken) -> Result<(), anyhow::Error> {
-        let conf = self.config_manager.get_config();
-        let port = conf.listen_port;
-        let not_allow_wan_access = conf.not_allow_wan_access;
-        let addr = Self::resolve_bind_addr(self.cli_listen.as_deref(), port, not_allow_wan_access);
-
-        let state = AppState {
-            config_manager: self.config_manager.clone(),
-            trigger_sender: self.trigger_sender,
-            log_buffer: self.log_buffer.clone(),
-            state_manager: self.state_manager,
-            cancel_token: cancel_token.clone(),
-            active_listen_port: addr.port(),
-            active_not_allow_wan_access: addr.ip().is_loopback(),
-        };
-
+    /// 构建完整的 Web 服务路由分发器
+    ///
+    /// # 设计原理
+    /// - **实现初衷**: 统一抽离应用路由装配逻辑，使生产服务运行 (`run`) 与无网络绑定的内存级集成测试 (`build_router`) 共享完全一致的路由与中间件定义，杜绝测试与生产脱节。
+    /// - **核心优势**: 消除集成测试对本地端口占用的依赖，支持使用 `tower::ServiceExt` 进行零端口冲突的内存模拟请求测试。
+    /// - **代价与局限**: 路由构建需要消费 `AppState`，由调用方负责组装对应的依赖状态。
+    pub fn build_router(state: AppState) -> Router {
         // 需受保护的 API 路由 (附带 Basic Auth 校验中间件)
         let protected_routes = Router::new()
             .route("/config", get(get_config_handler).post(save_config_handler))
@@ -138,11 +129,30 @@ impl WebServer {
                 )
             });
 
-        let app = Router::new()
+        Router::new()
             .nest("/api/v1", api_routes)
             .fallback(static_handler)
             .layer(DefaultBodyLimit::max(MAX_BODY_LIMIT_BYTES))
-            .with_state(state);
+            .with_state(state)
+    }
+
+    pub async fn run(self, cancel_token: CancellationToken) -> Result<(), anyhow::Error> {
+        let conf = self.config_manager.get_config();
+        let port = conf.listen_port;
+        let not_allow_wan_access = conf.not_allow_wan_access;
+        let addr = Self::resolve_bind_addr(self.cli_listen.as_deref(), port, not_allow_wan_access);
+
+        let state = AppState {
+            config_manager: self.config_manager.clone(),
+            trigger_sender: self.trigger_sender,
+            log_buffer: self.log_buffer.clone(),
+            state_manager: self.state_manager,
+            cancel_token: cancel_token.clone(),
+            active_listen_port: addr.port(),
+            active_not_allow_wan_access: addr.ip().is_loopback(),
+        };
+
+        let app = Self::build_router(state);
 
         let listener = TcpListener::bind(addr).await?;
         info!("Web 服务已成功监听在: http://{}", addr);
