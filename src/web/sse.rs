@@ -57,7 +57,11 @@ impl Drop for SseConnectionGuard {
     }
 }
 
-/// 实时日志 SSE 推流处理器 (支持并发连接数硬上限防护与优雅降级)
+/// 实时日志 SSE 推流处理器 (支持并发连接数硬上限防护、连接初次自动回放历史快照与优雅降级)
+///
+/// # 设计原理
+/// - **实现初衷**: 解决客户端建立连接或页面刷新后此前运行日志丢失的问题。在连接建立瞬间优先回放内存环形缓冲区中的历史快照，随后无缝接入实时广播流。
+/// - **核心优势**: 通过先订阅广播通道后拉取历史快照，并基于自增 `id` 过滤掉连接瞬间产生的重复项，杜绝日志遗漏与乱序。
 pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse {
     let guard = match SseConnectionGuard::try_acquire() {
         Some(g) => Arc::new(g),
@@ -74,29 +78,46 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
         }
     };
 
+    // 1. 先订阅实时通道，再读取历史快照，防止在订阅与取快照的微小间隙内产生日志遗漏
     let rx = state.log_buffer.subscribe();
+    let recent = state.log_buffer.get_recent();
+    let last_history_id = recent.last().map(|e| e.id).unwrap_or(0);
+
     let cancel = state.cancel_token.clone();
     let stream_guard = guard.clone();
 
-    let stream = BroadcastStream::new(rx)
-        .filter_map(move |item| {
-            let _g = stream_guard.clone();
-            async move {
-                let _ref = &_g;
-                match item {
-                    Ok(entry) => serde_json::to_string(&entry)
-                        .ok()
-                        .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str))),
-                    Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                        debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
-                        None
+    // 2. 构造历史日志快照流
+    let history_stream = futures_util::stream::iter(recent.into_iter().filter_map(|entry| {
+        serde_json::to_string(&entry)
+            .ok()
+            .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str)))
+    }));
+
+    // 3. 构造实时增量广播流，过滤快照中已包含的旧日志 (id <= last_history_id)
+    let live_stream = BroadcastStream::new(rx).filter_map(move |item| {
+        let _g = stream_guard.clone();
+        async move {
+            let _ref = &_g;
+            match item {
+                Ok(entry) => {
+                    if entry.id <= last_history_id {
+                        return None;
                     }
+                    serde_json::to_string(&entry)
+                        .ok()
+                        .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str)))
+                }
+                Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                    debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
+                    None
                 }
             }
-        })
-        .take_until(async move {
-            cancel.cancelled().await;
-        });
+        }
+    });
+
+    let stream = history_stream.chain(live_stream).take_until(async move {
+        cancel.cancelled().await;
+    });
 
     drop(guard);
 
@@ -146,5 +167,29 @@ mod tests {
         // 清理全部守卫恢复现场
         drop(guards);
         assert_eq!(SseConnectionGuard::active_count(), initial);
+    }
+
+    #[tokio::test]
+    async fn test_sse_history_replay() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let config_manager =
+            Arc::new(crate::config::storage::ConfigManager::load_or_create(config_path).unwrap());
+        let log_buffer = crate::util::logging::LogBuffer::new(10);
+        log_buffer.push(log::Level::Info, "test_target", "历史测试日志".to_string());
+
+        let state = AppState {
+            config_manager,
+            trigger_sender: tx,
+            log_buffer: log_buffer.clone(),
+            state_manager: crate::core::state::StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let resp = sse_log_handler(axum::extract::State(state))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

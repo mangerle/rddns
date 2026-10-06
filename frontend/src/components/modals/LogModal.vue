@@ -24,6 +24,9 @@ watch(() => logStore.logs.length, () => {
 
 watch(() => logStore.isModalOpen, (open) => {
   if (open) {
+    if (logStore.logs.length === 0) {
+      logStore.fetchHistoryLogs()
+    }
     scrollToBottom()
   }
 })
@@ -93,7 +96,7 @@ onUnmounted(() => {
         </div>
         <div
           v-for="(log, idx) in logStore.logs"
-          :key="idx"
+          :key="log.id ?? idx"
           class="flex items-start gap-2 hover:bg-slate-900/50 px-2 py-0.5 rounded transition"
         >
           <span class="text-slate-500 shrink-0">[{{ log.timestamp }}]</span>

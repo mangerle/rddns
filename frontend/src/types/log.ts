@@ -3,6 +3,7 @@
 // ==========================================
 
 export interface LogEntry {
+  id?: number
   timestamp: string
   level: 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
   target: string

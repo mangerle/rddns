@@ -5,7 +5,7 @@
 import type { LogEntry } from '@/types/log'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { authApi } from '@/api'
+import { authApi, systemApi } from '@/api'
 import { i18n } from '@/i18n'
 import { useToastStore } from './toast'
 
@@ -30,6 +30,19 @@ export const useLogStore = defineStore('log', () => {
   }
 
   function appendLog(entry: LogEntry) {
+    // 按唯一 id 去重；无 id 时按时间戳、模块与内容去重，防止快照与流并发重复
+    const exists = entry.id != null
+      ? logs.value.some(l => l.id === entry.id)
+      : logs.value.some(
+          l =>
+            l.timestamp === entry.timestamp
+            && l.target === entry.target
+            && l.message === entry.message,
+        )
+    if (exists) {
+      return
+    }
+
     logs.value.push(entry)
     if (logs.value.length > 1000) {
       logs.value.shift()
@@ -42,12 +55,30 @@ export const useLogStore = defineStore('log', () => {
     })
   }
 
+  // 主动拉取服务端的最新历史日志快照
+  async function fetchHistoryLogs() {
+    try {
+      const res = await systemApi.getLogs()
+      if (res.success && Array.isArray(res.data)) {
+        for (const entry of res.data) {
+          appendLog(entry)
+        }
+      }
+    }
+    catch (e) {
+      console.warn('拉取历史日志快照失败:', e)
+    }
+  }
+
   function clearLogs() {
     logs.value = []
     toast.info(t('modal.logsCleared'))
   }
 
   async function initSSE() {
+    // 建立推流连接前，先拉取服务端的历史日志快照
+    await fetchHistoryLogs()
+
     if (activeEventSource) {
       try {
         activeEventSource.close()
@@ -112,5 +143,6 @@ export const useLogStore = defineStore('log', () => {
     appendLog,
     clearLogs,
     initSSE,
+    fetchHistoryLogs,
   }
 })

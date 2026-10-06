@@ -10,6 +10,7 @@ import type {
   VersionInfo,
 } from '@/types/config'
 import type { NotificationConfig } from '@/types/notify'
+import type { LogEntry } from '@/types/log'
 import type { IpFetchConfig } from '@/types/task'
 import { api } from './client'
 
@@ -56,4 +57,6 @@ export const systemApi = {
   // 枚举物理与虚拟网卡
   getNetworkInterfaces: () =>
     api.get<NetworkInterface[]>('/api/v1/network-interfaces'),
+  // 获取最近操作日志快照
+  getLogs: () => api.get<LogEntry[]>('/api/v1/logs'),
 }
