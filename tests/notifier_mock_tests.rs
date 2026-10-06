@@ -11,8 +11,10 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Local;
-use rddns::config::model::WebhookConfig;
+use rddns::config::model::{BarkConfig, TelegramConfig, WebhookConfig};
 use rddns::dns::trait_def::{DnsRecordType, SyncRecordResult};
+use rddns::notifier::bark::BarkNotifier;
+use rddns::notifier::telegram::TelegramNotifier;
 use rddns::notifier::trait_def::{
     NotificationEvent, NotificationOverallStatus, Notifier, NotifyError,
 };
@@ -71,6 +73,66 @@ async fn start_notifier_mock_server(
                         state.received_bodies.write().await.push(body);
 
                         (StatusCode::OK, Json(json!({"code": 0, "msg": "success"}))).into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/bot{token}/sendMessage",
+            post({
+                let state = state.clone();
+                move |axum::extract::Path(_token): axum::extract::Path<String>,
+                      Json(body): Json<Value>| {
+                    let state = state.clone();
+                    async move {
+                        state.request_count.fetch_add(1, Ordering::SeqCst);
+                        if state.should_fail {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({
+                                    "ok": false,
+                                    "error_code": 400,
+                                    "description": "Bad Request: chat not found"
+                                })),
+                            )
+                                .into_response();
+                        }
+                        state.received_bodies.write().await.push(body);
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "ok": true,
+                                "result": {
+                                    "message_id": 12345
+                                }
+                            })),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/push",
+            post({
+                let state = state.clone();
+                move |Json(body): Json<Value>| {
+                    let state = state.clone();
+                    async move {
+                        state.request_count.fetch_add(1, Ordering::SeqCst);
+                        if state.should_fail {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "Bark 服务器内部错误")
+                                .into_response();
+                        }
+                        state.received_bodies.write().await.push(body);
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "code": 200,
+                                "message": "success"
+                            })),
+                        )
+                            .into_response()
                     }
                 }
             }),
@@ -218,5 +280,142 @@ async fn test_webhook_notifier_mock_url_query_template_interpolation() {
 
     let res = notifier.send(&event).await;
     assert!(res.is_ok(), "GET 请求参数插值发送预期成功: {:?}", res);
+    assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
+}
+
+// ==========================================
+// Telegram Bot 端到端 Mock 测试
+// ==========================================
+
+#[tokio::test]
+async fn test_telegram_notifier_mock_send_success() {
+    let state = Arc::new(NotifierMockState::default());
+    let (base_url, _handle) = start_notifier_mock_server(state.clone()).await;
+
+    let config = TelegramConfig {
+        enabled: true,
+        bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11".to_string(),
+        chat_id: "-100123456789".to_string(),
+        api_proxy: Some(base_url),
+    };
+
+    let notifier = TelegramNotifier::new(config);
+    let event = build_test_event("TG通知任务", Some("198.51.100.1".parse().unwrap()));
+
+    let res = notifier.send(&event).await;
+    assert!(res.is_ok(), "Telegram 发送预期成功: {:?}", res);
+
+    assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
+    let bodies = state.received_bodies.read().await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["chat_id"], "-100123456789");
+    assert_eq!(bodies[0]["parse_mode"], "HTML");
+    assert!(
+        bodies[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("rddns 域名解析通知")
+    );
+}
+
+#[tokio::test]
+async fn test_telegram_notifier_mock_api_error() {
+    let state = Arc::new(NotifierMockState {
+        should_fail: true,
+        ..Default::default()
+    });
+    let (base_url, _handle) = start_notifier_mock_server(state.clone()).await;
+
+    let config = TelegramConfig {
+        enabled: true,
+        bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11".to_string(),
+        chat_id: "-100123456789".to_string(),
+        api_proxy: Some(base_url),
+    };
+
+    let notifier = TelegramNotifier::new(config);
+    let event = build_test_event("TG错误任务", Some("198.51.100.1".parse().unwrap()));
+
+    let res = notifier.send(&event).await;
+    assert!(res.is_err(), "Telegram API 返回错误时预期失败");
+
+    match res.unwrap_err() {
+        NotifyError::Provider(msg) => {
+            assert!(
+                msg.contains("chat not found") || msg.contains("400"),
+                "应包含 Telegram API 错误信息: {}",
+                msg
+            );
+        }
+        other => panic!("预期为 NotifyError::Provider，实际为: {:?}", other),
+    }
+
+    assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
+}
+
+// ==========================================
+// Bark (iOS) 端到端 Mock 测试
+// ==========================================
+
+#[tokio::test]
+async fn test_bark_notifier_mock_send_success() {
+    let state = Arc::new(NotifierMockState::default());
+    let (base_url, _handle) = start_notifier_mock_server(state.clone()).await;
+
+    let config = BarkConfig {
+        enabled: true,
+        server_url: base_url,
+        device_key: "mock_bark_device_key_123".to_string(),
+        group: Some("RDDNS".to_string()),
+        sound: Some("bell".to_string()),
+    };
+
+    let notifier = BarkNotifier::new(config);
+    let event = build_test_event("Bark通知任务", Some("198.51.100.1".parse().unwrap()));
+
+    let res = notifier.send(&event).await;
+    assert!(res.is_ok(), "Bark 推送预期成功: {:?}", res);
+
+    assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
+    let bodies = state.received_bodies.read().await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["device_key"], "mock_bark_device_key_123");
+    assert_eq!(bodies[0]["group"], "RDDNS");
+    assert_eq!(bodies[0]["sound"], "bell");
+}
+
+#[tokio::test]
+async fn test_bark_notifier_mock_server_error() {
+    let state = Arc::new(NotifierMockState {
+        should_fail: true,
+        ..Default::default()
+    });
+    let (base_url, _handle) = start_notifier_mock_server(state.clone()).await;
+
+    let config = BarkConfig {
+        enabled: true,
+        server_url: base_url,
+        device_key: "mock_bark_device_key_123".to_string(),
+        group: None,
+        sound: None,
+    };
+
+    let notifier = BarkNotifier::new(config);
+    let event = build_test_event("Bark错误任务", Some("198.51.100.1".parse().unwrap()));
+
+    let res = notifier.send(&event).await;
+    assert!(res.is_err(), "Bark 服务端异常时预期失败");
+
+    match res.unwrap_err() {
+        NotifyError::Provider(msg) => {
+            assert!(
+                msg.contains("500") || msg.contains("Bark 服务器内部错误"),
+                "应包含 Bark 失败详情: {}",
+                msg
+            );
+        }
+        other => panic!("预期为 NotifyError::Provider，实际为: {:?}", other),
+    }
+
     assert_eq!(state.request_count.load(Ordering::SeqCst), 1);
 }

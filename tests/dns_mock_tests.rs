@@ -341,3 +341,242 @@ async fn test_hipm_dnsmgr_mock_zone_not_found() {
         other => panic!("预期为 ZoneNotFound，实际为: {:?}", other),
     }
 }
+
+// ==========================================
+// 阿里云 DNS (AliDns POP RPC) 端到端 Mock 测试
+// ==========================================
+
+#[derive(Default)]
+struct AliDnsMockState {
+    records: RwLock<Vec<Value>>,
+    add_count: AtomicUsize,
+    update_count: AtomicUsize,
+    invalid_ak: bool,
+}
+
+#[derive(Deserialize)]
+struct AliDnsQuery {
+    #[serde(rename = "Action")]
+    action: Option<String>,
+    #[serde(rename = "AccessKeyId")]
+    access_key_id: Option<String>,
+    #[serde(rename = "RR")]
+    rr: Option<String>,
+    #[serde(rename = "Type")]
+    record_type: Option<String>,
+    #[serde(rename = "Value")]
+    value: Option<String>,
+    #[serde(rename = "RecordId")]
+    record_id: Option<String>,
+}
+
+async fn start_alidns_mock_server(
+    state: Arc<AliDnsMockState>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let app = Router::new().route(
+        "/",
+        get({
+            let state = state.clone();
+            move |Query(q): Query<AliDnsQuery>| {
+                let state = state.clone();
+                async move {
+                    if state.invalid_ak || q.access_key_id.as_deref() == Some("invalid_ak") {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "Code": "InvalidAccessKeyId.NotFound",
+                                "Message": "Specified access key is not found."
+                            })),
+                        )
+                            .into_response();
+                    }
+
+                    match q.action.as_deref() {
+                        Some("DescribeDomainRecords") | Some("DescribeSubDomainRecords") => {
+                            let recs = state.records.read().await;
+                            (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "TotalCount": recs.len(),
+                                    "PageNumber": 1,
+                                    "PageSize": 100,
+                                    "DomainRecords": {
+                                        "Record": recs.clone()
+                                    }
+                                })),
+                            )
+                                .into_response()
+                        }
+                        Some("AddDomainRecord") => {
+                            state.add_count.fetch_add(1, Ordering::SeqCst);
+                            let new_id = format!("rec_{}", state.add_count.load(Ordering::SeqCst));
+                            let mut recs = state.records.write().await;
+                            recs.push(json!({
+                                "RecordId": new_id,
+                                "RR": q.rr.unwrap_or_default(),
+                                "Type": q.record_type.unwrap_or_default(),
+                                "Value": q.value.unwrap_or_default(),
+                                "TTL": 600
+                            }));
+                            (StatusCode::OK, Json(json!({ "RecordId": new_id }))).into_response()
+                        }
+                        Some("UpdateDomainRecord") => {
+                            state.update_count.fetch_add(1, Ordering::SeqCst);
+                            let rec_id = q.record_id.unwrap_or_default();
+                            let mut recs = state.records.write().await;
+                            for r in recs.iter_mut() {
+                                if r.get("RecordId").and_then(|v| v.as_str()) == Some(&rec_id)
+                                    && let Some(ref val) = q.value
+                                {
+                                    r["Value"] = json!(val);
+                                }
+                            }
+                            (StatusCode::OK, Json(json!({ "RecordId": rec_id }))).into_response()
+                        }
+                        _ => (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "Code": "InvalidAction",
+                                "Message": "Specified action is not valid."
+                            })),
+                        )
+                            .into_response(),
+                    }
+                }
+            }
+        }),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    (format!("http://{}", addr), server_handle)
+}
+
+#[tokio::test]
+async fn test_alidns_mock_add_record() {
+    let state = Arc::new(AliDnsMockState::default());
+    let (base_url, _server) = start_alidns_mock_server(state.clone()).await;
+
+    let config = ProviderConfig::AliDns {
+        access_key_id: "test_ak".to_string(),
+        access_key_secret: "test_sk".to_string(),
+        endpoint: Some(base_url),
+    };
+    let provider = create_dns_provider(&config, None).unwrap();
+    let domain = parse_domain("sub.example.com").unwrap();
+    let ip: IpAddr = "198.51.100.1".parse().unwrap();
+
+    let res = provider
+        .sync_record(&domain, DnsRecordType::A, &ip, Some(600))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status, SyncStatus::Created);
+    assert_eq!(state.add_count.load(Ordering::SeqCst), 1);
+    assert_eq!(state.update_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_alidns_mock_unchanged_record() {
+    let state = Arc::new(AliDnsMockState::default());
+    {
+        let mut records = state.records.write().await;
+        records.push(json!({
+            "RecordId": "rec_001",
+            "RR": "sub",
+            "Type": "A",
+            "Value": "198.51.100.1",
+            "TTL": 600
+        }));
+    }
+
+    let (base_url, _server) = start_alidns_mock_server(state.clone()).await;
+
+    let config = ProviderConfig::AliDns {
+        access_key_id: "test_ak".to_string(),
+        access_key_secret: "test_sk".to_string(),
+        endpoint: Some(base_url),
+    };
+    let provider = create_dns_provider(&config, None).unwrap();
+    let domain = parse_domain("sub.example.com").unwrap();
+    let ip: IpAddr = "198.51.100.1".parse().unwrap();
+
+    let res = provider
+        .sync_record(&domain, DnsRecordType::A, &ip, Some(600))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status, SyncStatus::Unchanged);
+    assert_eq!(state.add_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.update_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_alidns_mock_update_record() {
+    let state = Arc::new(AliDnsMockState::default());
+    {
+        let mut records = state.records.write().await;
+        records.push(json!({
+            "RecordId": "rec_001",
+            "RR": "sub",
+            "Type": "A",
+            "Value": "198.51.100.1",
+            "TTL": 600
+        }));
+    }
+
+    let (base_url, _server) = start_alidns_mock_server(state.clone()).await;
+
+    let config = ProviderConfig::AliDns {
+        access_key_id: "test_ak".to_string(),
+        access_key_secret: "test_sk".to_string(),
+        endpoint: Some(base_url),
+    };
+    let provider = create_dns_provider(&config, None).unwrap();
+    let domain = parse_domain("sub.example.com").unwrap();
+    let new_ip: IpAddr = "203.0.113.88".parse().unwrap();
+
+    let res = provider
+        .sync_record(&domain, DnsRecordType::A, &new_ip, Some(600))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status, SyncStatus::Updated);
+    assert_eq!(state.add_count.load(Ordering::SeqCst), 0);
+    assert_eq!(state.update_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_alidns_mock_auth_error() {
+    let state = Arc::new(AliDnsMockState {
+        invalid_ak: true,
+        ..Default::default()
+    });
+    let (base_url, _server) = start_alidns_mock_server(state).await;
+
+    let config = ProviderConfig::AliDns {
+        access_key_id: "invalid_ak".to_string(),
+        access_key_secret: "test_sk".to_string(),
+        endpoint: Some(base_url),
+    };
+    let provider = create_dns_provider(&config, None).unwrap();
+    let domain = parse_domain("sub.example.com").unwrap();
+    let ip: IpAddr = "198.51.100.1".parse().unwrap();
+
+    let err = provider
+        .sync_record(&domain, DnsRecordType::A, &ip, Some(600))
+        .await
+        .unwrap_err();
+
+    match err {
+        DnsProviderError::ApiError { code, message } => {
+            assert!(code.contains("InvalidAccessKeyId"));
+            assert!(message.contains("Specified access key is not found"));
+        }
+        other => panic!("预期为 ApiError，实际为: {:?}", other),
+    }
+}

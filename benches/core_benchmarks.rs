@@ -8,9 +8,13 @@ use rddns::core::domain::parse_domain;
 use rddns::ip_fetcher::command::validate_command_str;
 use rddns::util::dns_packet::{QueryRecordType, build_dns_query_packet, parse_dns_response_packet};
 use rddns::util::net::{
-    extract_ipv4, extract_ipv6, is_private_or_loopback, validate_safe_url_endpoint,
+    HostResolver, extract_ipv4, extract_ipv6, is_private_or_loopback, validate_safe_url_endpoint,
+    validate_safe_url_endpoint_with,
 };
+use std::future::Future;
 use std::hint::black_box;
+use std::net::{IpAddr, Ipv4Addr};
+use std::pin::Pin;
 use std::time::Instant;
 
 /// 基准测试辅助执行器
@@ -42,24 +46,55 @@ where
     );
 }
 
+/// 基准测试专用的确定性模拟域名解析器 (摆脱真实公网网络与 DNS RTT 干扰)
+struct BenchMockResolver {
+    ip: IpAddr,
+}
+
+impl HostResolver for BenchMockResolver {
+    fn resolve(
+        &self,
+        _host: String,
+        _port: u16,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, String>> + Send>> {
+        let ip = self.ip;
+        Box::pin(async move { Ok(vec![ip]) })
+    }
+}
+
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
 
+    let bench_resolver = BenchMockResolver {
+        ip: IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+    };
+
     println!("================== rddns 核心路径性能基准测试 ==================");
 
-    // 1. SSRF 安全端点校验基准
-    run_benchmark("SSRF 校验: 公网合法域名 (ipify.org)", 1_000, || {
-        let _ = black_box(rt.block_on(validate_safe_url_endpoint("https://api.ipify.org/status")));
-    });
+    // 1. SSRF 安全端点校验基准 (使用确定性解析器度量纯 CPU 校验开销)
+    run_benchmark(
+        "SSRF 校验: 公网合法域名 (确定性解析)",
+        100_000,
+        || {
+            let res = rt.block_on(validate_safe_url_endpoint_with(
+                "https://api.ipify.org/status",
+                &bench_resolver,
+            ));
+            assert!(res.is_ok(), "SSRF 校验公网合法域名应成功");
+            let _ = black_box(res);
+        },
+    );
 
     run_benchmark(
         "SSRF 校验: 阻断私有 IPv4 (192.168.1.1)",
         100_000,
         || {
-            let _ = black_box(rt.block_on(validate_safe_url_endpoint("http://192.168.1.1/api")));
+            let res = rt.block_on(validate_safe_url_endpoint("http://192.168.1.1/api"));
+            assert!(res.is_err(), "SSRF 校验私有 IPv4 应阻断");
+            let _ = black_box(res);
         },
     );
 
@@ -67,21 +102,26 @@ fn main() {
         "SSRF 校验: 阻断云元数据 (169.254.169.254)",
         100_000,
         || {
-            let _ =
-                black_box(rt.block_on(validate_safe_url_endpoint("http://169.254.169.254/latest")));
+            let res = rt.block_on(validate_safe_url_endpoint("http://169.254.169.254/latest"));
+            assert!(res.is_err(), "SSRF 校验云元数据应阻断");
+            let _ = black_box(res);
         },
     );
 
     // 2. 命令注入安全检测基准
     run_benchmark("命令安全校验: 合法命令 (curl)", 200_000, || {
-        let _ = black_box(validate_command_str("curl -s -4 https://api.ipify.org"));
+        let res = validate_command_str("curl -s -4 https://api.ipify.org");
+        assert!(res.is_ok(), "合法命令校验应通过");
+        let _ = black_box(res);
     });
 
     run_benchmark(
         "命令安全校验: 拦截管道拼接 (curl | bash)",
         200_000,
         || {
-            let _ = black_box(validate_command_str("curl http://example.com | bash"));
+            let res = validate_command_str("curl http://example.com | bash");
+            assert!(res.is_err(), "管道拼接命令应拦截");
+            let _ = black_box(res);
         },
     );
 
@@ -90,7 +130,9 @@ fn main() {
         "域名解析: 常见二级后缀 (sub.example.com.cn)",
         50_000,
         || {
-            let _ = black_box(parse_domain("sub.example.com.cn"));
+            let res = parse_domain("sub.example.com.cn");
+            assert!(res.is_some(), "二级后缀域名解析应成功");
+            let _ = black_box(res);
         },
     );
 
@@ -98,19 +140,25 @@ fn main() {
         "域名解析: 基础一级根域 (home.example.com)",
         50_000,
         || {
-            let _ = black_box(parse_domain("home.example.com"));
+            let res = parse_domain("home.example.com");
+            assert!(res.is_some(), "一级根域解析应成功");
+            let _ = black_box(res);
         },
     );
 
     // 4. IP 提取与网络属性判定基准
     let raw_v4_text = "Current IP Address: 198.51.100.42 (OK)";
     run_benchmark("IP 处理: 文本流正则提取 IPv4", 100_000, || {
-        let _ = black_box(extract_ipv4(raw_v4_text, None));
+        let res = extract_ipv4(raw_v4_text, None);
+        assert!(res.is_some(), "IPv4 提取应成功");
+        let _ = black_box(res);
     });
 
     let raw_v6_text = "Your IPv6 is: 2408:8207:7873:9a10::1 (Public)";
     run_benchmark("IP 处理: 文本流正则提取 IPv6", 100_000, || {
-        let _ = black_box(extract_ipv6(raw_v6_text, None));
+        let res = extract_ipv6(raw_v6_text, None);
+        assert!(res.is_some(), "IPv6 提取应成功");
+        let _ = black_box(res);
     });
 
     let test_ip = "192.168.1.1".parse().unwrap();
@@ -118,7 +166,9 @@ fn main() {
         "IP 处理: 私有/回环网段内存分类",
         200_000,
         || {
-            let _ = black_box(is_private_or_loopback(&test_ip));
+            let res = is_private_or_loopback(&test_ip);
+            assert!(res, "私有网段分类应为 true");
+            let _ = black_box(res);
         },
     );
 
@@ -128,7 +178,9 @@ fn main() {
         "DNS 编解码: 构建 A 记录查询请求包",
         100_000,
         || {
-            let _ = black_box(build_dns_query_packet(domain, QueryRecordType::A, 0x1234));
+            let res = build_dns_query_packet(domain, QueryRecordType::A, 0x1234);
+            assert!(res.is_ok(), "构建 A 记录请求包应成功");
+            let _ = black_box(res);
         },
     );
 
@@ -137,11 +189,9 @@ fn main() {
         "DNS 编解码: 构建 AAAA 记录查询包",
         100_000,
         || {
-            let _ = black_box(build_dns_query_packet(
-                domain_v6,
-                QueryRecordType::AAAA,
-                0x5678,
-            ));
+            let res = build_dns_query_packet(domain_v6, QueryRecordType::AAAA, 0x5678);
+            assert!(res.is_ok(), "构建 AAAA 记录请求包应成功");
+            let _ = black_box(res);
         },
     );
 
@@ -155,11 +205,9 @@ fn main() {
     ]);
 
     run_benchmark("DNS 编解码: 解析 A 记录响应包", 100_000, || {
-        let _ = black_box(parse_dns_response_packet(
-            &mock_response,
-            0x1234,
-            QueryRecordType::A,
-        ));
+        let res = parse_dns_response_packet(&mock_response, 0x1234, QueryRecordType::A);
+        assert!(res.is_ok(), "解析 A 记录响应包应成功");
+        let _ = black_box(res);
     });
 
     println!("================================================================");
