@@ -37,8 +37,8 @@ pub struct TestIpResult {
 }
 
 /// 校验测试目标 URL 是否安全（防范 SSRF 滥用与协议走私）
-fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
-    crate::util::net::validate_safe_url_endpoint(raw_url)
+async fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
+    crate::util::net::validate_safe_url_endpoint(raw_url).await
 }
 
 /// 测试 IP 提取器在线获取
@@ -59,7 +59,7 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
     // 2. URL 型 IP 获取强制校验安全限制 (防范协议走私与 SSRF 滥用)
     if config.source_type == IpSourceType::Url {
         for url in &config.url_endpoints {
-            if let Err(err_msg) = validate_safe_url_endpoint(url) {
+            if let Err(err_msg) = validate_safe_url_endpoint(url).await {
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(ApiResponse::<TestIpResult>::err(err_msg)),
@@ -137,7 +137,7 @@ pub async fn test_notify_handler(
     }
 
     // 2. 校验所有通知渠道的 URL 地址安全性，防御针对内网及保留地址的 SSRF 探测
-    if let Err(e) = crate::web::handlers::config::validate_notification_urls(&config) {
+    if let Err(e) = crate::web::handlers::config::validate_notification_urls(&config).await {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<()>::err(format!(

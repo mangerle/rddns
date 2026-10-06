@@ -43,18 +43,23 @@ where
 }
 
 fn main() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     println!("================== rddns 核心路径性能基准测试 ==================");
 
     // 1. SSRF 安全端点校验基准
     run_benchmark("SSRF 校验: 公网合法域名 (ipify.org)", 1_000, || {
-        let _ = black_box(validate_safe_url_endpoint("https://api.ipify.org/status"));
+        let _ = black_box(rt.block_on(validate_safe_url_endpoint("https://api.ipify.org/status")));
     });
 
     run_benchmark(
         "SSRF 校验: 阻断私有 IPv4 (192.168.1.1)",
         100_000,
         || {
-            let _ = black_box(validate_safe_url_endpoint("http://192.168.1.1/api"));
+            let _ = black_box(rt.block_on(validate_safe_url_endpoint("http://192.168.1.1/api")));
         },
     );
 
@@ -62,7 +67,8 @@ fn main() {
         "SSRF 校验: 阻断云元数据 (169.254.169.254)",
         100_000,
         || {
-            let _ = black_box(validate_safe_url_endpoint("http://169.254.169.254/latest"));
+            let _ =
+                black_box(rt.block_on(validate_safe_url_endpoint("http://169.254.169.254/latest")));
         },
     );
 

@@ -113,28 +113,72 @@ fn test_is_public_and_cgnat_ipv4() {
     assert!(!is_public_ipv4(&relay_6to4));
 }
 
-#[test]
-fn test_validate_safe_url_endpoint_ssrf_protection() {
+#[tokio::test]
+async fn test_validate_safe_url_endpoint_ssrf_protection() {
     // 1. 允许合法公网地址
-    assert!(validate_safe_url_endpoint("https://api.ipify.org").is_ok());
-    assert!(validate_safe_url_endpoint("http://114.114.114.114/ip").is_ok());
+    assert!(
+        validate_safe_url_endpoint("https://api.ipify.org")
+            .await
+            .is_ok()
+    );
+    assert!(
+        validate_safe_url_endpoint("http://114.114.114.114/ip")
+            .await
+            .is_ok()
+    );
 
     // 2. 拦截私有 IP / 回环 / 云元数据字面量
-    assert!(validate_safe_url_endpoint("http://127.0.0.1:8080").is_err());
-    assert!(validate_safe_url_endpoint("http://10.0.0.1").is_err());
-    assert!(validate_safe_url_endpoint("http://192.168.1.1").is_err());
-    assert!(validate_safe_url_endpoint("http://172.16.0.1").is_err());
-    assert!(validate_safe_url_endpoint("http://169.254.169.254/latest/meta-data").is_err());
-    assert!(validate_safe_url_endpoint("http://[::1]:80").is_err());
+    assert!(
+        validate_safe_url_endpoint("http://127.0.0.1:8080")
+            .await
+            .is_err()
+    );
+    assert!(validate_safe_url_endpoint("http://10.0.0.1").await.is_err());
+    assert!(
+        validate_safe_url_endpoint("http://192.168.1.1")
+            .await
+            .is_err()
+    );
+    assert!(
+        validate_safe_url_endpoint("http://172.16.0.1")
+            .await
+            .is_err()
+    );
+    assert!(
+        validate_safe_url_endpoint("http://169.254.169.254/latest/meta-data")
+            .await
+            .is_err()
+    );
+    assert!(validate_safe_url_endpoint("http://[::1]:80").await.is_err());
 
     // 3. 拦截 localhost 及内部保留域名
-    assert!(validate_safe_url_endpoint("http://localhost:8080/test").is_err());
-    assert!(validate_safe_url_endpoint("http://service.local/api").is_err());
-    assert!(validate_safe_url_endpoint("http://k8s.internal/secret").is_err());
+    assert!(
+        validate_safe_url_endpoint("http://localhost:8080/test")
+            .await
+            .is_err()
+    );
+    assert!(
+        validate_safe_url_endpoint("http://service.local/api")
+            .await
+            .is_err()
+    );
+    assert!(
+        validate_safe_url_endpoint("http://k8s.internal/secret")
+            .await
+            .is_err()
+    );
 
     // 4. 拦截协议非法
-    assert!(validate_safe_url_endpoint("ftp://example.com").is_err());
-    assert!(validate_safe_url_endpoint("file:///etc/passwd").is_err());
+    assert!(
+        validate_safe_url_endpoint("ftp://example.com")
+            .await
+            .is_err()
+    );
+    assert!(
+        validate_safe_url_endpoint("file:///etc/passwd")
+            .await
+            .is_err()
+    );
 }
 
 #[test]

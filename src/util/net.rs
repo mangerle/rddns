@@ -1,8 +1,10 @@
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
+use std::time::Duration;
+use tokio::net::lookup_host;
 use url::{Host, Url};
 
 /// 自定义正则编译缓存池，避免高频任务重复编译 DFA 状态机
@@ -195,9 +197,17 @@ pub fn is_private_or_loopback(addr: &IpAddr) -> bool {
 /// - **实现初衷**: 统一验证外部主机或域名，防止指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
 /// - **核心优势**: 支持裸 IP 直接判定与域名解析穿透校验，防御 DNS 重绑定与内网穿透。
 ///
+/// 校验目标主机地址合法性（防范 SSRF 攻击与私网目标穿透）
+///
+/// # 设计原理
+/// - **实现初衷**: 统一验证目标主机地址与端口，防范指向本地回环、局域网或云厂商元数据服务。
+/// - **核心优势**: 采用非阻塞的异步 DNS 解析 (`tokio::net::lookup_host`) 并辅以 3 秒强制超时保护，
+///   避免在单线程异步运行时中因底层操作系统同步阻塞 DNS 解析挂起而导致全局事件循环冻结 (P-3)。
+/// - **代价与局限**: 校验过程需执行网络异步 DNS 查询，存在微秒至毫秒级网络 I/O 耗时。
+///
 /// # Errors
-/// 当主机指向本地回环、私网 IP、localhost 或内部保留域名时返回错误。
-pub fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), String> {
+/// 当主机指向本地回环、私网 IP、localhost、内部保留域名，或解析出的 IP 属于私网/保留网段时返回错误。
+pub async fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), String> {
     let trimmed = host_str.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -226,9 +236,13 @@ pub fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), Strin
         );
     }
 
-    // 执行实际 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名
+    // 执行异步 DNS 解析，防御 DNS 重绑定与解析指向私网/云元数据 IP 的自定义域名 (P-3)
     let check_port = port.unwrap_or(80);
-    if let Ok(addrs) = (trimmed, check_port).to_socket_addrs() {
+    let addr_str = format!("{}:{}", trimmed, check_port);
+    let lookup_timeout = Duration::from_secs(3);
+
+    let lookup_result = tokio::time::timeout(lookup_timeout, lookup_host(&addr_str)).await;
+    if let Ok(Ok(addrs)) = lookup_result {
         for socket_addr in addrs {
             let ip = socket_addr.ip();
             if is_private_or_loopback(&ip) {
@@ -246,11 +260,11 @@ pub fn validate_safe_host(host_str: &str, port: Option<u16>) -> Result<(), Strin
 ///
 /// # 设计原理
 /// - **实现初衷**: 统一验证外部 URL 端点，防止将请求指向本地回环、局域网或云厂商元数据服务（如 169.254.169.254）。
-/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性；针对域名执行 DNS 解析校验，彻底防御通过自定义域名指向 127.0.0.1 或云元数据进行 DNS 重绑定绕过。
+/// - **核心优势**: 严格校验协议（仅允许 http/https）、主机合法性；针对域名执行异步 DNS 解析校验，彻底防御通过自定义域名指向 127.0.0.1 或云元数据进行 DNS 重绑定绕过。
 ///
 /// # Errors
 /// 当协议非法、URL 格式无效、缺少主机或指向内部网络/元数据地址时返回错误描述。
-pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
+pub async fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
         return Ok(());
@@ -264,9 +278,9 @@ pub fn validate_safe_url_endpoint(raw_url: &str) -> Result<(), String> {
     let parsed =
         Url::parse(trimmed).map_err(|e| format!("URL 端点 [{}] 格式无效: {}", trimmed, e))?;
     match parsed.host() {
-        Some(Host::Ipv4(v4)) => validate_safe_host(&v4.to_string(), parsed.port()),
-        Some(Host::Ipv6(v6)) => validate_safe_host(&v6.to_string(), parsed.port()),
-        Some(Host::Domain(domain)) => validate_safe_host(domain, parsed.port()),
+        Some(Host::Ipv4(v4)) => validate_safe_host(&v4.to_string(), parsed.port()).await,
+        Some(Host::Ipv6(v6)) => validate_safe_host(&v6.to_string(), parsed.port()).await,
+        Some(Host::Domain(domain)) => validate_safe_host(domain, parsed.port()).await,
         None => Err("URL 端点缺少有效的主机地址".to_string()),
     }
 }

@@ -9,8 +9,8 @@
 use rddns::ip_fetcher::command::validate_command_str;
 use rddns::util::net::validate_safe_url_endpoint;
 
-#[test]
-fn test_ssrf_comprehensive_protection() {
+#[tokio::test]
+async fn test_ssrf_comprehensive_protection() {
     // 1. 本地回环与私有 IPv4 测试用例
     let private_ipv4_cases = [
         "http://127.0.0.1",
@@ -26,7 +26,7 @@ fn test_ssrf_comprehensive_protection() {
         "http://0.0.0.0:8000",
     ];
     for url in private_ipv4_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "SSRF 私有 IPv4 用例应当被严格拦截: {}, 实际结果: {:?}",
@@ -43,7 +43,7 @@ fn test_ssrf_comprehensive_protection() {
         "http://169.254.254.254:8080/",
     ];
     for url in cloud_metadata_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "SSRF 云元数据地址应当被严格拦截: {}, 实际结果: {:?}",
@@ -61,7 +61,7 @@ fn test_ssrf_comprehensive_protection() {
         "http://[fe80::1]/link-local",
     ];
     for url in ipv6_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "SSRF 本地与私有 IPv6 应当被严格拦截: {}, 实际结果: {:?}",
@@ -78,7 +78,7 @@ fn test_ssrf_comprehensive_protection() {
         "http://foo.bar.localhost/api",
     ];
     for url in localhost_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "SSRF Localhost 域名应当被严格拦截: {}, 实际结果: {:?}",
@@ -94,7 +94,7 @@ fn test_ssrf_comprehensive_protection() {
         "http://root:secret@192.168.1.1/config",
     ];
     for url in auth_confusion_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "带 UserInfo 混淆的私有地址应当被拦截: {}, 实际结果: {:?}",
@@ -114,7 +114,7 @@ fn test_ssrf_comprehensive_protection() {
         "data:text/html,<html>test</html>",
     ];
     for url in illegal_schemes {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_err(),
             "非 HTTP/HTTPS 协议方案应当被严格拦截: {}, 实际结果: {:?}",
@@ -132,7 +132,7 @@ fn test_ssrf_comprehensive_protection() {
         "https://8.8.8.8/dns-query",
     ];
     for url in valid_public_cases {
-        let res = validate_safe_url_endpoint(url);
+        let res = validate_safe_url_endpoint(url).await;
         assert!(
             res.is_ok(),
             "合法公网地址应当被允许访问: {}, 实际结果: {:?}",
@@ -265,8 +265,8 @@ fn test_command_injection_comprehensive_protection() {
     }
 }
 
-#[test]
-fn test_validate_safe_host_blocks_private_and_loopback() {
+#[tokio::test]
+async fn test_validate_safe_host_blocks_private_and_loopback() {
     use rddns::util::net::validate_safe_host;
 
     let blocked_hosts = [
@@ -283,7 +283,7 @@ fn test_validate_safe_host_blocks_private_and_loopback() {
     ];
 
     for host in blocked_hosts {
-        let res = validate_safe_host(host, Some(25));
+        let res = validate_safe_host(host, Some(25)).await;
         assert!(
             res.is_err(),
             "内网/保留地址应当被拦截: {}, 实际结果: {:?}",
@@ -292,5 +292,5 @@ fn test_validate_safe_host_blocks_private_and_loopback() {
         );
     }
 
-    assert!(validate_safe_host("8.8.8.8", Some(53)).is_ok());
+    assert!(validate_safe_host("8.8.8.8", Some(53)).await.is_ok());
 }
