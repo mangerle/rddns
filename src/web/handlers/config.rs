@@ -1,6 +1,6 @@
 use super::{ApiResponse, AppError, AppState};
 use crate::config::model::{
-    AppConfig, DnsTaskConfig, IpSourceType, NotificationConfig, UserAuthConfig,
+    AppConfig, DnsTaskConfig, IpSourceType, NotificationConfig, ProviderConfig, UserAuthConfig,
 };
 use crate::config::storage::ConfigError;
 use crate::util::crypto::hash_password_async;
@@ -10,7 +10,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// 获取配置响应数据包装模型（平铺配置字段，附带待重启生效提示）
 ///
@@ -156,7 +156,76 @@ fn validate_basic_limits(config: &AppConfig) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 校验 DNS 任务名称唯一性与 URL 端点合法性
+/// 校验自定义 Callback DNS 服务商配置的安全策略（SSRF、HTTP 请求走私与超大载荷防护）(P-4)
+async fn validate_callback_provider(
+    task_name: &str,
+    url: &str,
+    method: &str,
+    headers: Option<&HashMap<String, String>>,
+    body: Option<&str>,
+) -> Result<(), AppError> {
+    let trimmed_url = url.trim();
+    if trimmed_url.is_empty() {
+        return Err(AppError::bad_request(format!(
+            "任务 [{}] 配置的 Callback URL 不能为空",
+            task_name
+        )));
+    }
+
+    // 1. URL 格式与 SSRF 安全校验（防御私网穿透与 DNS 重绑定）
+    crate::util::net::validate_safe_url_endpoint(trimmed_url)
+        .await
+        .map_err(|e| {
+            AppError::bad_request(format!(
+                "任务 [{}] 的 Callback URL [{}] 非法: {}",
+                task_name, trimmed_url, e
+            ))
+        })?;
+
+    // 2. HTTP 请求方法白名单校验（仅允许无隧道特征的标准方法，严格拒绝 CONNECT/TRACE）
+    let method_upper = method.trim().to_ascii_uppercase();
+    const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
+    if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
+        return Err(AppError::bad_request(format!(
+            "任务 [{}] 的 Callback HTTP 方法 [{}] 不受支持，仅允许 GET、POST、PUT、PATCH、DELETE",
+            task_name, method
+        )));
+    }
+
+    // 3. 请求头黑名单校验（防范 HTTP 请求走私与敏感头伪造）
+    if let Some(hdrs) = headers {
+        for header_key in hdrs.keys() {
+            let key_lower = header_key.trim().to_ascii_lowercase();
+            if key_lower == "host"
+                || key_lower == "content-length"
+                || key_lower == "transfer-encoding"
+                || key_lower == "connection"
+                || key_lower == "upgrade"
+            {
+                return Err(AppError::bad_request(format!(
+                    "任务 [{}] 的 Callback 请求头包含高风险敏感标头 [{}]，已被安全策略禁止",
+                    task_name, header_key
+                )));
+            }
+        }
+    }
+
+    // 4. 请求体长度上限校验（限制 64 KB，避免超大载荷耗尽内存）
+    const MAX_CALLBACK_BODY_BYTES: usize = 65536;
+    if let Some(b) = body
+        && b.len() > MAX_CALLBACK_BODY_BYTES
+    {
+        return Err(AppError::bad_request(format!(
+            "任务 [{}] 的 Callback 请求体大小 ({} 字节) 超出 64KB 安全上限",
+            task_name,
+            b.len()
+        )));
+    }
+
+    Ok(())
+}
+
+/// 校验 DNS 任务名称唯一性、URL 端点及 Callback 服务商配置合法性
 async fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     let mut task_names = HashSet::with_capacity(tasks.len());
     for task in tasks {
@@ -169,6 +238,18 @@ async fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> 
                 "任务名称 [{}] 存在重复，各任务名称必须唯一",
                 name
             )));
+        }
+
+        // 校验自定义 Callback DNS Provider 的 URL 与安全策略 (P-4)
+        if let ProviderConfig::Callback {
+            ref url,
+            ref method,
+            ref headers,
+            ref body,
+        } = task.provider
+        {
+            validate_callback_provider(name, url, method, headers.as_ref(), body.as_deref())
+                .await?;
         }
 
         for ip_cfg in [&task.ipv4, &task.ipv6] {
@@ -548,6 +629,78 @@ type = "cloudflare"
             Some("/usr/local/bin/get_my_ip --v4".to_string());
         assert!(
             validate_task_configs(&dangerous_cmd_task.dns_tasks)
+                .await
+                .is_ok()
+        );
+
+        // 校验 Callback Provider 的 SSRF 与危险标头拦截 (P-4)
+        let mut callback_task = valid_config.clone();
+        callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
+            url: "http://127.0.0.1:8080/hook".to_string(),
+            method: "POST".to_string(),
+            headers: None,
+            body: None,
+        };
+        // 拦截指向本地私网的 Callback URL (SSRF)
+        assert!(
+            validate_task_configs(&callback_task.dns_tasks)
+                .await
+                .is_err()
+        );
+
+        // 拦截非白名单的危险 HTTP 方法 (如 TRACE)
+        callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
+            url: "https://api.example.com/hook".to_string(),
+            method: "TRACE".to_string(),
+            headers: None,
+            body: None,
+        };
+        assert!(
+            validate_task_configs(&callback_task.dns_tasks)
+                .await
+                .is_err()
+        );
+
+        // 拦截敏感请求头 (如 Host 篡改)
+        let mut dangerous_headers = HashMap::new();
+        dangerous_headers.insert("Host".to_string(), "internal.service".to_string());
+        callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
+            url: "https://api.example.com/hook".to_string(),
+            method: "POST".to_string(),
+            headers: Some(dangerous_headers),
+            body: None,
+        };
+        assert!(
+            validate_task_configs(&callback_task.dns_tasks)
+                .await
+                .is_err()
+        );
+
+        // 拦截超过 64KB 的超大请求体
+        callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
+            url: "https://api.example.com/hook".to_string(),
+            method: "POST".to_string(),
+            headers: None,
+            body: Some("a".repeat(65537)),
+        };
+        assert!(
+            validate_task_configs(&callback_task.dns_tasks)
+                .await
+                .is_err()
+        );
+
+        // 合法公网 Callback 配置应通过校验
+        callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
+            url: "https://api.example.com/hook?ip=#{ip}".to_string(),
+            method: "POST".to_string(),
+            headers: Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer token".to_string(),
+            )])),
+            body: Some(r##"{"ip": "#{ip}"}"##.to_string()),
+        };
+        assert!(
+            validate_task_configs(&callback_task.dns_tasks)
                 .await
                 .is_ok()
         );
