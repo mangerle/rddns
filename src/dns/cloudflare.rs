@@ -331,7 +331,7 @@ impl RecordOps for CloudflareProvider {
         Ok(())
     }
 
-    /// 更新既有记录 (使用 PATCH 以保持用户既有的 proxied 代理加速状态)
+    /// 更新既有记录 (使用 PATCH 更新 IP、TTL 及最新的 proxied 代理加速状态)
     async fn update_record(
         &self,
         zone: &str,
@@ -342,6 +342,7 @@ impl RecordOps for CloudflareProvider {
         let body = json!({
             "content": params.ip.to_string(),
             "ttl": Self::normalize_ttl(params.ttl),
+            "proxied": Self::resolve_proxied_flag(params.domain),
         });
 
         let resp = self
