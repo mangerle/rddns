@@ -13,8 +13,9 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::fs;
 
+#[cfg(any(windows, target_os = "linux"))]
 const SERVICE_NAME: &str = "rddns";
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
 
 /// 转义路径，使其可安全嵌入 systemd unit 的 `ExecStart=` 行 (P1-10)
@@ -30,7 +31,7 @@ const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (D
 ///
 /// # 不变式保证
 /// 返回值**必定**为单行且不含裸换行符，可安全嵌入 unit 指令值。
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", test))]
 fn escape_systemd_exec_arg(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 8);
     for ch in raw.chars() {
@@ -59,7 +60,7 @@ fn escape_systemd_exec_arg(raw: &str) -> String {
 ///
 /// # 不变式保证
 /// 返回值**必定**为合法 XML 文本节点内容，不含裸 `&`、`<`、`>`。
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", test))]
 fn escape_xml_text(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 16);
     for ch in raw.chars() {
@@ -732,7 +733,6 @@ mod tests {
         assert!(cmd_str.contains(r#""C:\\Program Files\\rddns\\rddns.exe\" -c \"C:\\Program Files\\rddns\\config.json\" --windows-service"#));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_escape_systemd_exec_arg_prevents_unit_injection() {
         // 回归用例 (P1-10)：配置文件路径由用户通过 -c 参数完全控制。
@@ -776,7 +776,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_escape_systemd_exec_arg_escapes_quotes_and_specials() {
         // 双引号与反斜杠必须转义，否则可提前闭合引号改变解析结构
@@ -798,7 +797,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_escape_xml_text_prevents_plist_corruption() {
         // 回归用例 (P1-10)：macOS 路径可合法包含 & 与 <，直接嵌入会产生

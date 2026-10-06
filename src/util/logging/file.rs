@@ -3,6 +3,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// 文件日志 Appender 配置选项
 #[derive(Debug, Clone)]
 pub struct FileAppenderConfig<P: AsRef<Path>> {
@@ -130,9 +133,7 @@ impl SizeRollingWriter {
 
         // 修正已存在文件的权限（mode 参数对已存在文件无效）
         #[cfg(unix)]
-        if let Err(e) = file.set_permissions(fs::Permissions::from(
-            std::os::unix::fs::PermissionsExt::from_mode(0o600),
-        )) {
+        if let Err(e) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
             log::warn!(
                 "收紧日志文件权限至 0600 失败（文件可能保持更宽权限）: {}",
                 e
@@ -358,8 +359,6 @@ mod tests {
         // Unix 上遵循 umask 通常为 0644（world-readable）。服务以 root
         // 运行时任何本地用户均可读取日志内容。现显式限定 0600，
         // 与配置文件（config/storage.rs）保持一致。
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = tempfile::tempdir().expect("创建临时目录失败");
         let mut writer = SizeRollingWriter::new(dir.path(), "perm.log", 10 * 1024 * 1024, 3)
             .expect("创建写入器失败");
