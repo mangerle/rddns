@@ -1,7 +1,10 @@
 use crate::config::model::dns::{DnsTaskConfig, IpSourceType};
 use crate::config::model::notification::NotificationConfig;
+use crate::config::model::provider::ProviderConfig;
+use crate::core::domain::parse_domain;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use url::Url;
 
 /// 应用全局配置结构
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,8 +106,9 @@ impl AppConfig {
     /// 校验配置的边界与合法性
     ///
     /// # 设计原理
-    /// - **实现初衷**：统一 Web API 保存、CLI 启动与直接修改磁盘文件三种场景的配置校验，消除规则双写与绕过风险。
-    /// - **核心优势**：在数据边界直接发现错误，返回详尽的中文错误原因列表。
+    /// - **实现初衷**：统一 Web API 保存、CLI 启动与直接修改磁盘文件三种场景的配置校验，消除规则双写与绕过风险 (P-8)。
+    /// - **核心优势**：在系统数据边界直接拦截非法配置（覆盖数值边界、任务名唯一性、域名根解析、命令防注入、URL 协议及 Callback 安全约束），返回详尽的中文错误列表。
+    /// - **代价与局限**：仅执行纯 CPU 静态规则解析；涉及网络探测与 DNS 穿透校验由 Web 层独立异步执行。
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
         if self.interval_secs < 5 {
@@ -131,37 +135,154 @@ impl AppConfig {
             } else if !task_names.insert(name) {
                 errs.push(format!("任务名称 [{}] 存在重复，各任务名称必须唯一", name));
             }
+            validate_task_item(task, &mut errs);
+        }
 
-            for ip_cfg in [&task.ipv4, &task.ipv6] {
-                if ip_cfg.source_type == IpSourceType::Url {
-                    for url in &ip_cfg.url_endpoints {
-                        let trimmed = url.trim();
-                        if !trimmed.is_empty()
-                            && !trimmed.starts_with("http://")
-                            && !trimmed.starts_with("https://")
-                        {
-                            errs.push(format!(
-                                "任务 [{}] 中的 URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
-                                name, trimmed
-                            ));
-                        }
-                    }
-                } else if ip_cfg.source_type == IpSourceType::Command {
-                    if let Some(ref cmd_str) = ip_cfg.cmd {
-                        if let Err(e) = crate::ip_fetcher::command::validate_command_str(cmd_str) {
-                            errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
-                        }
-                    } else {
-                        errs.push(format!(
-                            "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
-                            name
-                        ));
-                    }
+        validate_notifications(&self.notifications, &mut errs);
+
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+
+/// 校验单个 URL 的静态协议与合法格式
+fn check_static_url(url: &str, field_name: &str, errs: &mut Vec<String>) {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        errs.push(format!(
+            "{}: URL 端点 [{}] 协议非法，仅允许 http:// 或 https:// 开头的地址",
+            field_name, trimmed
+        ));
+        return;
+    }
+    if let Err(e) = Url::parse(trimmed) {
+        errs.push(format!("{}: URL [{}] 格式无效: {}", field_name, trimmed, e));
+    }
+}
+
+/// 校验通知渠道的静态参数与协议边界
+fn validate_notifications(notif: &NotificationConfig, errs: &mut Vec<String>) {
+    if let Some(ref bark) = notif.bark {
+        check_static_url(&bark.server_url, "Bark 通知服务器地址", errs);
+    }
+    if let Some(ref webhook) = notif.webhook {
+        check_static_url(&webhook.url, "自定义 Webhook 地址", errs);
+    }
+    if let Some(ref tg) = notif.telegram
+        && let Some(ref proxy) = tg.api_proxy
+    {
+        check_static_url(proxy, "Telegram API 代理地址", errs);
+    }
+    if let Some(ref wecom) = notif.wecom
+        && let Some(ref webhook_url) = wecom.webhook_url
+    {
+        check_static_url(webhook_url, "企业微信机器人 Webhook 地址", errs);
+    }
+    if let Some(ref feishu) = notif.feishu {
+        check_static_url(&feishu.webhook_url, "飞书机器人 Webhook 地址", errs);
+    }
+    if let Some(ref email) = notif.email {
+        let host = email.smtp_server.trim();
+        if !host.is_empty() && email.smtp_port == 0 {
+            errs.push("SMTP 邮件服务器端口不能为 0".to_string());
+        }
+    }
+}
+
+/// 校验单个 DNS 任务中的域名、端点、命令及 Provider 静态配置边界
+fn validate_task_item(task: &DnsTaskConfig, errs: &mut Vec<String>) {
+    let name = task.name.trim();
+
+    // 1. IP 提取配置与域名合法性
+    for ip_cfg in [&task.ipv4, &task.ipv6] {
+        if ip_cfg.enabled {
+            for domain_str in &ip_cfg.domains {
+                let trimmed = domain_str.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+                    continue;
+                }
+                if parse_domain(trimmed).is_none() {
+                    errs.push(format!(
+                        "任务 [{}] 配置的域名 [{}] 格式非法或无法识别根域名，请核对输入",
+                        name, trimmed
+                    ));
+                }
+            }
+        }
+        if ip_cfg.source_type == IpSourceType::Url {
+            for url in &ip_cfg.url_endpoints {
+                let trimmed = url.trim();
+                if !trimmed.is_empty() {
+                    check_static_url(trimmed, &format!("任务 [{}] URL 端点", name), errs);
+                }
+            }
+        } else if ip_cfg.source_type == IpSourceType::Command {
+            if let Some(ref cmd_str) = ip_cfg.cmd {
+                if let Err(e) = crate::ip_fetcher::command::validate_command_str(cmd_str) {
+                    errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
+                }
+            } else {
+                errs.push(format!(
+                    "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
+                    name
+                ));
+            }
+        }
+    }
+
+    // 2. Callback DNS 服务商安全约束与协议校验
+    if let ProviderConfig::Callback {
+        ref url,
+        ref method,
+        ref headers,
+        ref body,
+    } = task.provider
+    {
+        let trimmed_url = url.trim();
+        if trimmed_url.is_empty() {
+            errs.push(format!("任务 [{}] 配置的 Callback URL 不能为空", name));
+        } else {
+            check_static_url(trimmed_url, &format!("任务 [{}] Callback", name), errs);
+        }
+
+        let method_upper = method.trim().to_ascii_uppercase();
+        const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
+        if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
+            errs.push(format!(
+                "任务 [{}] 的 Callback HTTP 方法 [{}] 不受支持，仅允许 GET、POST、PUT、PATCH、DELETE",
+                name, method
+            ));
+        }
+
+        if let Some(hdrs) = headers {
+            for header_key in hdrs.keys() {
+                let key_lower = header_key.trim().to_ascii_lowercase();
+                if key_lower == "host"
+                    || key_lower == "content-length"
+                    || key_lower == "transfer-encoding"
+                    || key_lower == "connection"
+                    || key_lower == "upgrade"
+                {
+                    errs.push(format!(
+                        "任务 [{}] 的 Callback 请求头包含高风险敏感标头 [{}]，已被安全策略禁止",
+                        name, header_key
+                    ));
                 }
             }
         }
 
-        if errs.is_empty() { Ok(()) } else { Err(errs) }
+        const MAX_CALLBACK_BODY_BYTES: usize = 65536;
+        if let Some(b) = body
+            && b.len() > MAX_CALLBACK_BODY_BYTES
+        {
+            errs.push(format!(
+                "任务 [{}] 的 Callback 请求体大小 ({} 字节) 超出 64KB 安全上限",
+                name,
+                b.len()
+            ));
+        }
     }
 }
 

