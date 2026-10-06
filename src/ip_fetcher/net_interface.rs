@@ -2,12 +2,13 @@ use crate::ip_fetcher::linux_inet6::{
     LinuxIfInet6Entry, read_linux_if_inet6, sort_linux_interface_ipv6s,
 };
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
+use crate::util::interface::get_cached_system_interfaces;
 use crate::util::net::{
     extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4, select_best_ipv6,
 };
 use async_trait::async_trait;
 use log::warn;
-use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+use network_interface::{Addr, NetworkInterface};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -37,14 +38,13 @@ impl NetInterfaceIpFetcher {
         }
     }
 
-    /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池并附加超时保护)
+    /// 异步查找并获取指定名称的目标网卡设备 (移入后台阻塞线程池并附加超时保护，复用带 TTL 的系统网卡缓存)
     async fn get_target_interface(&self) -> Result<NetworkInterface, FetchError> {
         let name = self.interface_name.clone();
         timeout(
             INTERFACE_OP_TIMEOUT,
             spawn_blocking(move || {
-                let interfaces = NetworkInterface::show()
-                    .map_err(|e| FetchError::Other(format!("获取系统网卡列表失败: {}", e)))?;
+                let interfaces = get_cached_system_interfaces();
 
                 interfaces
                     .into_iter()
@@ -322,16 +322,14 @@ fn build_interface_info(
     }
 }
 
-/// 枚举当前系统上所有可用的物理与虚拟网卡
+/// 枚举当前系统上所有可用的物理与虚拟网卡 (复用带 TTL 的系统网卡内存缓存以减轻底层系统调用)
 pub fn list_system_interfaces() -> Vec<InterfaceInfo> {
     let linux_entries = read_linux_if_inet6(None);
-    match NetworkInterface::show() {
-        Ok(interfaces) => interfaces
-            .into_iter()
-            .map(|iface| build_interface_info(iface, linux_entries.as_deref()))
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    let interfaces = get_cached_system_interfaces();
+    interfaces
+        .into_iter()
+        .map(|iface| build_interface_info(iface, linux_entries.as_deref()))
+        .collect()
 }
 
 #[cfg(test)]
