@@ -490,9 +490,7 @@ impl DdnsEngine {
                         fast_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
                         fast_timer.reset();
                         timer = fast_timer;
-                    } else if (!has_recent_failures || !self.state_manager.has_recent_failures(u32::MAX))
-                        && in_fast_retry
-                    {
+                    } else if !has_recent_failures && in_fast_retry {
                         in_fast_retry = false;
                         info!(
                             "任务同步已恢复正常或超出快速自愈阈值，定时同步恢复为正常周期: {} 秒",
