@@ -2,6 +2,7 @@ pub mod app;
 pub mod dns;
 pub mod notification;
 pub mod provider;
+pub(crate) mod provider_mask;
 
 pub use app::*;
 pub use dns::*;
