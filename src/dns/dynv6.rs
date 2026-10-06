@@ -7,7 +7,16 @@ use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::dns::zone_cache::TtlCache;
+use log::warn;
+use std::sync::LazyLock;
+use std::time::Duration;
+
 const DYNV6_ENDPOINT: &str = "https://dynv6.com/api/v2";
+
+/// Dynv6 Zone ID 缓存（TTL 10 分钟，容量 64）
+static DYNV6_ZONE_CACHE: LazyLock<TtlCache<String, String>> =
+    LazyLock::new(|| TtlCache::new(Duration::from_secs(600), 64));
 
 /// Dynv6 免费 IPv6/IPv4 动态 DNS 提供商
 pub struct Dynv6Provider {
@@ -105,15 +114,34 @@ impl RecordOps for Dynv6Provider {
     }
 
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let cache_key = format!("{}:{}", self.token, root_domain);
+        if let Some(cached_id) = DYNV6_ZONE_CACHE.get(&cache_key) {
+            return Ok(cached_id);
+        }
+
         let zones: Vec<Dynv6Zone> = self.request(Method::GET, "/zones", None).await?;
-        let matched = zones
-            .into_iter()
-            .find(|z| {
-                root_domain.eq_ignore_ascii_case(&z.name)
-                    || root_domain.ends_with(&format!(".{}", z.name))
-            })
-            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
-        Ok(matched.id.to_string())
+        let matched = zones.iter().find(|z| {
+            root_domain.eq_ignore_ascii_case(&z.name)
+                || root_domain.ends_with(&format!(".{}", z.name))
+        });
+
+        match matched {
+            Some(z) => {
+                let zid = z.id.to_string();
+                DYNV6_ZONE_CACHE.insert(cache_key, zid.clone());
+                Ok(zid)
+            }
+            None => {
+                // 若获取到的 Zone 列表中没有匹配项，输出明确告警，
+                // 防止因列表被服务端截断或域名拼写错误导致静默排查困难 (P3-19)
+                warn!(
+                    "[Dynv6] GET /zones 共获取到 {} 个 Zone，均未匹配域名 [{}]。若账户中 Zone 数量过多导致截断，请检查账户配置",
+                    zones.len(),
+                    root_domain
+                );
+                Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
+            }
+        }
     }
 
     async fn list_records(

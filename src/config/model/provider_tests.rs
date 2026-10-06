@@ -206,3 +206,40 @@ fn test_all_frontend_provider_keys_accepted() {
         }
     }
 }
+
+#[test]
+fn test_is_configured_hipm_dnsmgr_requires_both_endpoint_and_token() {
+    // 仅配置 token 未配置 endpoint：未完成配置 (P3-18)
+    let no_endpoint = ProviderConfig::HipmDnsMgr {
+        endpoint: None,
+        api_token: "secret_token".to_string(),
+    };
+    assert!(!no_endpoint.is_configured(), "缺少 endpoint 应判定为未配置");
+
+    // endpoint 为纯空白字符
+    let blank_endpoint = ProviderConfig::HipmDnsMgr {
+        endpoint: Some("   ".to_string()),
+        api_token: "secret_token".to_string(),
+    };
+    assert!(
+        !blank_endpoint.is_configured(),
+        "空白 endpoint 应判定为未配置"
+    );
+
+    // 仅配置 endpoint 未配置 token
+    let no_token = ProviderConfig::HipmDnsMgr {
+        endpoint: Some("https://dnsmgr.example.com".to_string()),
+        api_token: String::new(),
+    };
+    assert!(!no_token.is_configured(), "缺少 token 应判定为未配置");
+
+    // 两者均完整配置
+    let complete = ProviderConfig::HipmDnsMgr {
+        endpoint: Some("https://dnsmgr.example.com".to_string()),
+        api_token: "secret_token".to_string(),
+    };
+    assert!(
+        complete.is_configured(),
+        "endpoint 与 token 齐全应判定为已配置"
+    );
+}

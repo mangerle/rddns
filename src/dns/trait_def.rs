@@ -241,6 +241,13 @@ pub enum DnsProviderError {
     #[error("缺少认证凭据: {}", format_sanitized_err(.0))]
     MissingCredentials(String),
 
+    /// 服务商不支持指定的 DNS 记录类型（如 Namecheap 仅支持 IPv4 A 记录）
+    #[error("服务商 {provider} 不支持 {record_type} 记录类型")]
+    UnsupportedRecordType {
+        provider: &'static str,
+        record_type: DnsRecordType,
+    },
+
     /// 其他服务商错误
     #[error("其他服务商错误: {}", format_sanitized_err(.0))]
     Other(String),
@@ -370,6 +377,7 @@ impl DnsProviderError {
             Self::Json(_)
             | Self::ZoneNotFound(_)
             | Self::MissingCredentials(_)
+            | Self::UnsupportedRecordType { .. }
             | Self::Other(_) => false,
         }
     }
@@ -385,6 +393,15 @@ impl DnsProviderError {
 pub trait DnsProvider: Send + Sync {
     /// 服务商名称标识
     fn provider_name(&self) -> &'static str;
+
+    /// 查询该服务商是否支持指定的记录类型（如 IPv4 A 记录或 IPv6 AAAA 记录）
+    ///
+    /// # 默认实现
+    /// 默认返回 `true`，表示支持所有标准记录类型。
+    /// 仅支持部分类型的服务商（如仅支持 IPv4 的 Namecheap）应覆写此方法返回 `false` (P2-11)。
+    fn supports_record_type(&self, _record_type: DnsRecordType) -> bool {
+        true
+    }
 
     /// 执行记录同步（查询、对比、增删改）
     ///

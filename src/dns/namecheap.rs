@@ -68,6 +68,11 @@ impl DnsProvider for NamecheapProvider {
         "Namecheap"
     }
 
+    /// Namecheap 官方动态更新接口仅支持 IPv4 (A 记录)，不支持 IPv6 (P2-11)
+    fn supports_record_type(&self, record_type: DnsRecordType) -> bool {
+        record_type == DnsRecordType::A
+    }
+
     async fn sync_record(
         &self,
         domain: &ParsedDomain,
@@ -78,11 +83,12 @@ impl DnsProvider for NamecheapProvider {
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
 
-        // Namecheap 动态更新接口仅支持 IPv4 (A 记录)
-        if record_type == DnsRecordType::AAAA {
-            return Err(DnsProviderError::Other(
-                "Namecheap 动态 DNS 官方接口目前仅支持 IPv4 (A 记录)，不支持 IPv6".to_string(),
-            ));
+        // 拦截不支持的记录类型
+        if !self.supports_record_type(record_type) {
+            return Err(DnsProviderError::UnsupportedRecordType {
+                provider: "Namecheap",
+                record_type,
+            });
         }
 
         let host = domain.sub_domain_or_at();

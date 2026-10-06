@@ -143,13 +143,52 @@ fn default_true() -> bool {
     true
 }
 
+/// 企业微信推送模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WeComMode {
+    /// 群机器人 Webhook 推送
+    #[default]
+    Bot,
+    /// 自建应用消息推送
+    App,
+}
+
+impl Serialize for WeComMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Bot => serializer.serialize_str("bot"),
+            Self::App => serializer.serialize_str("app"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WeComMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.to_ascii_lowercase().as_str() {
+            "app" => Ok(Self::App),
+            "bot" => Ok(Self::Bot),
+            other => Err(serde::de::Error::custom(format!(
+                "不支持的企业微信模式: \"{}\"，仅支持 \"bot\" 或 \"app\"",
+                other
+            ))),
+        }
+    }
+}
+
 /// 企业微信配置
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WeComConfig {
     pub enabled: bool,
-    /// 模式: "bot" (群机器人 Webhook) 或 "app" (自建应用消息推送)
-    #[serde(default = "default_wecom_mode")]
-    pub mode: String,
+    /// 推送模式: Bot (群机器人 Webhook) 或 App (自建应用消息推送)
+    #[serde(default)]
+    pub mode: WeComMode,
     /// 群机器人 Webhook Key 或完整 URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
@@ -162,10 +201,6 @@ pub struct WeComConfig {
     pub agent_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_user: Option<String>,
-}
-
-fn default_wecom_mode() -> String {
-    "bot".to_string()
 }
 
 /// Telegram 配置

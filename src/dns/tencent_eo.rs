@@ -76,18 +76,31 @@ impl TencentEoProvider {
             || domain.custom_params.contains_key("origin_group_name")
     }
 
-    /// 计算合并后的源站组记录并检测是否产生实际变动
+    /// 计算合并后的源站组记录
+    ///
+    /// # 设计原理
+    /// - **单源站场景** (`len <= 1`)：直接用当前目标 IP 覆盖源站记录，彻底避免动态公网 IP 变动时历史 IP 无限累积堆叠；
+    /// - **多源站场景**：若匹配到目标 IP 则更新权重；若指定了旧 IP 则将其替换为新目标 IP；否则追加新节点并保留组内其他合法源站。
     fn compute_updated_origin_records(
         current_records: &[TeoOriginRecord],
         target_ip: &str,
+        old_ip: Option<&str>,
         weight_val: u32,
-    ) -> (Vec<serde_json::Value>, bool) {
+    ) -> Vec<serde_json::Value> {
+        if current_records.len() <= 1 {
+            return vec![json!({
+                "Record": target_ip,
+                "Type": "IP_DOMAIN",
+                "Weight": weight_val
+            })];
+        }
+
         let mut updated_records = Vec::with_capacity(current_records.len() + 1);
-        let mut matched_existing = false;
+        let mut replaced = false;
 
         for r in current_records {
-            if r.record == target_ip {
-                matched_existing = true;
+            if r.record == target_ip || old_ip.is_some_and(|old| r.record == old) {
+                replaced = true;
                 updated_records.push(json!({
                     "Record": target_ip,
                     "Type": r.record_type,
@@ -102,29 +115,15 @@ impl TencentEoProvider {
             }
         }
 
-        if !matched_existing {
-            if current_records.is_empty() {
-                updated_records = vec![json!({
-                    "Record": target_ip,
-                    "Type": "IP_DOMAIN",
-                    "Weight": weight_val
-                })];
-            } else {
-                updated_records.push(json!({
-                    "Record": target_ip,
-                    "Type": "IP_DOMAIN",
-                    "Weight": weight_val
-                }));
-            }
+        if !replaced {
+            updated_records.push(json!({
+                "Record": target_ip,
+                "Type": "IP_DOMAIN",
+                "Weight": weight_val
+            }));
         }
 
-        let is_unchanged = matched_existing
-            && current_records.len() == updated_records.len()
-            && current_records
-                .iter()
-                .any(|r| r.record == target_ip && r.weight.unwrap_or(100) == weight_val);
-
-        (updated_records, is_unchanged)
+        updated_records
     }
 
     async fn get_origin_group(
@@ -165,7 +164,7 @@ impl TencentEoProvider {
                 } else if let Some(ref gname) = group_name_opt {
                     g.name.eq_ignore_ascii_case(gname)
                 } else {
-                    true
+                    false
                 }
             })
             .ok_or_else(|| DnsProviderError::ApiError {
@@ -278,8 +277,17 @@ impl RecordOps for TencentEoProvider {
                 .unwrap_or(100);
 
             let current_records = matched_group.records.unwrap_or_default();
-            let (updated_records, _) =
-                Self::compute_updated_origin_records(&current_records, &target_ip_str, weight_val);
+            let old_ip = if record_id.is_empty() {
+                None
+            } else {
+                Some(record_id)
+            };
+            let updated_records = Self::compute_updated_origin_records(
+                &current_records,
+                &target_ip_str,
+                old_ip,
+                weight_val,
+            );
 
             let modify_og_payload = json!({
                 "ZoneId": zone,
@@ -411,5 +419,54 @@ mod tests {
         let is_og = domain.custom_params.contains_key("GroupId")
             || domain.custom_params.contains_key("group_id");
         assert!(is_og);
+    }
+
+    #[test]
+    fn test_compute_updated_origin_records_single_and_multi() {
+        // 单源站场景：原有一个旧 IP，更新为新 IP 时应直接覆盖，不产生残留 (P3-21)
+        let single_origin = vec![TeoOriginRecord {
+            record: "1.1.1.1".to_string(),
+            record_type: "IP_DOMAIN".to_string(),
+            weight: Some(100),
+        }];
+        let updated = TencentEoProvider::compute_updated_origin_records(
+            &single_origin,
+            "2.2.2.2",
+            Some("1.1.1.1"),
+            100,
+        );
+        assert_eq!(updated.len(), 1, "单源站应覆盖为唯一新 IP");
+        assert_eq!(updated[0]["Record"], "2.2.2.2");
+
+        // 多源站场景：保留其他备用源站，仅替换指定旧 IP
+        let multi_origin = vec![
+            TeoOriginRecord {
+                record: "1.1.1.1".to_string(),
+                record_type: "IP_DOMAIN".to_string(),
+                weight: Some(50),
+            },
+            TeoOriginRecord {
+                record: "8.8.8.8".to_string(),
+                record_type: "IP_DOMAIN".to_string(),
+                weight: Some(50),
+            },
+        ];
+        let updated_multi = TencentEoProvider::compute_updated_origin_records(
+            &multi_origin,
+            "2.2.2.2",
+            Some("1.1.1.1"),
+            50,
+        );
+        assert_eq!(updated_multi.len(), 2, "多源站应保留其他节点并替换目标节点");
+        assert!(
+            updated_multi
+                .iter()
+                .any(|r| r["Record"] == "2.2.2.2" && r["Weight"] == 50)
+        );
+        assert!(
+            updated_multi
+                .iter()
+                .any(|r| r["Record"] == "8.8.8.8" && r["Weight"] == 50)
+        );
     }
 }

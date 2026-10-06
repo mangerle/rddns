@@ -1,4 +1,4 @@
-use crate::config::model::WeComConfig;
+use crate::config::model::{WeComConfig, WeComMode};
 use crate::notifier::token_cache::DclTokenCache;
 use crate::notifier::trait_def::{NotificationEvent, Notifier, NotifyError, escape_html};
 use async_trait::async_trait;
@@ -192,10 +192,9 @@ impl Notifier for WeComNotifier {
     }
 
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
-        if self.config.mode == "app" {
-            self.send_app(event).await
-        } else {
-            self.send_bot(event).await
+        match self.config.mode {
+            WeComMode::App => self.send_app(event).await,
+            WeComMode::Bot => self.send_bot(event).await,
         }
     }
 }
@@ -243,5 +242,32 @@ mod tests {
         );
         assert!(!escaped.contains('<'));
         assert!(!escaped.contains('>'));
+    }
+
+    #[test]
+    fn test_wecom_mode_case_insensitivity_and_serialization() {
+        // 测试大小写容错反序列化 (P2-10)
+        let mode_app: WeComMode = serde_json::from_str("\"App\"").expect("应能解析 App");
+        assert_eq!(mode_app, WeComMode::App);
+
+        let mode_app_lower: WeComMode = serde_json::from_str("\"app\"").expect("应能解析 app");
+        assert_eq!(mode_app_lower, WeComMode::App);
+
+        let mode_bot: WeComMode = serde_json::from_str("\"Bot\"").expect("应能解析 Bot");
+        assert_eq!(mode_bot, WeComMode::Bot);
+
+        let mode_bot_upper: WeComMode = serde_json::from_str("\"BOT\"").expect("应能解析 BOT");
+        assert_eq!(mode_bot_upper, WeComMode::Bot);
+
+        // 默认值
+        assert_eq!(WeComMode::default(), WeComMode::Bot);
+
+        // 序列化输出全小写标准形式
+        assert_eq!(serde_json::to_string(&WeComMode::App).unwrap(), "\"app\"");
+        assert_eq!(serde_json::to_string(&WeComMode::Bot).unwrap(), "\"bot\"");
+
+        // 非法模式必须报错拒绝
+        let invalid: Result<WeComMode, _> = serde_json::from_str("\"invalid_mode\"");
+        assert!(invalid.is_err(), "非法模式应反序列化报错");
     }
 }

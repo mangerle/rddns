@@ -1,16 +1,22 @@
 use crate::ip_fetcher::trait_def::FetchError;
 use crate::util::crypto::fill_random_bytes;
+use log::trace;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// STUN 协议核心常量定义 (RFC 5389 / RFC 3489)
+/// STUN 协议核心常量定义 (RFC 5389 / RFC 3489 / RFC 8489)
 pub const STUN_BINDING_REQUEST: u16 = 0x0001;
 pub const STUN_BINDING_RESPONSE: u16 = 0x0101;
+pub const STUN_BINDING_ERROR_RESPONSE: u16 = 0x0111;
 pub const STUN_MAGIC_COOKIE: u32 = 0x2112_A442;
 pub const STUN_MAGIC_COOKIE_BYTES: [u8; 4] = [0x21, 0x12, 0xa4, 0x42];
 
 pub const ATTR_MAPPED_ADDRESS: u16 = 0x0001;
+pub const ATTR_MESSAGE_INTEGRITY: u16 = 0x0008;
+pub const ATTR_ERROR_CODE: u16 = 0x0009;
+pub const ATTR_MESSAGE_INTEGRITY_SHA256: u16 = 0x001C;
 pub const ATTR_XOR_MAPPED_ADDRESS: u16 = 0x0020;
 pub const ATTR_XOR_MAPPED_ADDRESS_ALT: u16 = 0x8020;
+pub const ATTR_FINGERPRINT: u16 = 0x8028;
 
 /// 构建 STUN 20 字节 Binding Request 报文与 12 字节随机 Transaction ID (纯栈分配零堆开销)
 ///
@@ -82,12 +88,29 @@ fn parse_mapped_address(val_bytes: &[u8]) -> Option<IpAddr> {
     }
 }
 
+/// 解析 STUN ERROR-CODE 属性 (RFC 5389 §15.6)
+fn parse_error_code(val_bytes: &[u8]) -> Option<(u16, String)> {
+    if val_bytes.len() < 4 {
+        return None;
+    }
+    let class = val_bytes[2] & 0x07;
+    let number = val_bytes[3];
+    let code = (class as u16) * 100 + number as u16;
+    let reason = if val_bytes.len() > 4 {
+        String::from_utf8_lossy(&val_bytes[4..]).trim().to_string()
+    } else {
+        String::new()
+    };
+    Some((code, reason))
+}
+
 /// 解析 STUN 响应二进制报文 (支持 XOR-MAPPED-ADDRESS 与传统 MAPPED-ADDRESS)
 ///
 /// # Errors
 ///
 /// - 报文长度不足 20 字节
-/// - 消息类型非 Binding Response
+/// - 报文头类别比特非法 (最高 2 位非 0)
+/// - 收到 STUN Binding Error Response 或非期望的消息类型
 /// - Magic Cookie 或 Transaction ID 校验失败
 /// - 报文中不存在有效的反射地址属性
 pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr, FetchError> {
@@ -99,10 +122,12 @@ pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<I
     }
 
     let msg_type = u16::from_be_bytes([buf[0], buf[1]]);
-    if msg_type != STUN_BINDING_RESPONSE {
+
+    // RFC 5389 §6: STUN 报文最高 2 位 (bit 14, 15) 必须全部为 0，用于支持与 RTP/RTCP 等协议的多路复用
+    if (msg_type & 0xC000) != 0 {
         return Err(FetchError::Other(format!(
-            "STUN 响应消息类型异常: 0x{:04x} (预期: 0x{:04x})",
-            msg_type, STUN_BINDING_RESPONSE
+            "STUN 报文格式非法: 最高 2 位类别比特必须为 0 (实际首字节: 0x{:02x})",
+            buf[0]
         )));
     }
 
@@ -122,8 +147,46 @@ pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<I
 
     let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
     let end_offset = 20 + msg_len.min(buf.len() - 20);
-    let mut offset = 20;
 
+    // 针对 STUN 错误响应 (0x0111) 进行专门的 ERROR-CODE 属性提取
+    if msg_type == STUN_BINDING_ERROR_RESPONSE {
+        let mut offset = 20;
+        while offset + 4 <= end_offset {
+            let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
+            let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
+            let val_start = offset + 4;
+            let val_end = val_start + attr_len;
+
+            if val_end > end_offset {
+                break;
+            }
+
+            if attr_type == ATTR_ERROR_CODE {
+                let (code, reason) = parse_error_code(&buf[val_start..val_end])
+                    .unwrap_or((0, "未提供错误详情".to_string()));
+                return Err(FetchError::Other(format!(
+                    "STUN 服务器返回 Binding 错误响应: {} ({})",
+                    code, reason
+                )));
+            }
+
+            let padding = (4 - (attr_len % 4)) % 4;
+            offset = val_end + padding;
+        }
+
+        return Err(FetchError::Other(
+            "STUN 服务器返回 Binding 错误响应，但未包含详细错误代码".to_string(),
+        ));
+    }
+
+    if msg_type != STUN_BINDING_RESPONSE {
+        return Err(FetchError::Other(format!(
+            "STUN 响应消息类型异常: 0x{:04x} (预期: 0x{:04x})",
+            msg_type, STUN_BINDING_RESPONSE
+        )));
+    }
+
+    let mut offset = 20;
     let mut mapped_ip: Option<IpAddr> = None;
     let mut xor_mapped_ip: Option<IpAddr> = None;
 
@@ -142,6 +205,16 @@ pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<I
             xor_mapped_ip = parse_xor_mapped_address(val_bytes, expected_tx_id).or(xor_mapped_ip);
         } else if attr_type == ATTR_MAPPED_ADDRESS {
             mapped_ip = parse_mapped_address(val_bytes).or(mapped_ip);
+        } else if attr_type == ATTR_MESSAGE_INTEGRITY || attr_type == ATTR_MESSAGE_INTEGRITY_SHA256
+        {
+            // RFC 5389 / RFC 8489: 识别 MESSAGE-INTEGRITY 属性并安全步进
+            trace!(
+                "检测到 STUN 报文包含 MESSAGE-INTEGRITY 属性 (类型: 0x{:04x}, 长度: {} 字节)",
+                attr_type, attr_len
+            );
+        } else if attr_type == ATTR_FINGERPRINT {
+            // RFC 5389: 识别 FINGERPRINT 校验属性并安全步进
+            trace!("检测到 STUN 报文包含 FINGERPRINT 校验属性");
         }
 
         let padding = (4 - (attr_len % 4)) % 4;
@@ -256,5 +329,96 @@ mod tests {
 
         let parsed = parse_binding_response(&resp, &tx_id).unwrap();
         assert_eq!(parsed, IpAddr::V4(Ipv4Addr::new(223, 5, 5, 5)));
+    }
+
+    #[test]
+    fn test_invalid_header_class_bits() {
+        let tx_id = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let mut resp = vec![0u8; 20];
+        // 最高 2 位设置为 0b10 (0x8000)
+        resp[0..2].copy_from_slice(&0x8101u16.to_be_bytes());
+        resp[4..8].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
+        resp[8..20].copy_from_slice(&tx_id);
+
+        let result = parse_binding_response(&resp, &tx_id);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("最高 2 位类别比特必须为 0")
+        );
+    }
+
+    #[test]
+    fn test_parse_binding_error_response() {
+        let tx_id = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let reason = b"Unauthorized";
+        let attr_len = 4 + reason.len();
+        let padding = (4 - (attr_len % 4)) % 4;
+        let total_attr_len = attr_len + padding;
+
+        let mut resp = vec![0u8; 20 + 4 + total_attr_len];
+        // Header
+        resp[0..2].copy_from_slice(&STUN_BINDING_ERROR_RESPONSE.to_be_bytes());
+        resp[2..4].copy_from_slice(&((4 + total_attr_len) as u16).to_be_bytes());
+        resp[4..8].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
+        resp[8..20].copy_from_slice(&tx_id);
+
+        // ATTR_ERROR_CODE (0x0009)
+        resp[20..22].copy_from_slice(&ATTR_ERROR_CODE.to_be_bytes());
+        resp[22..24].copy_from_slice(&(attr_len as u16).to_be_bytes());
+        // Code 401: Class = 4, Number = 1
+        resp[24..26].copy_from_slice(&[0x00, 0x00]); // Reserved
+        resp[26] = 4; // Class 4
+        resp[27] = 1; // Number 1
+        resp[28..28 + reason.len()].copy_from_slice(reason);
+
+        let result = parse_binding_response(&resp, &tx_id);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("401"));
+        assert!(err_msg.contains("Unauthorized"));
+    }
+
+    #[test]
+    fn test_parse_with_message_integrity_and_fingerprint() {
+        let tx_id = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        // 构造包含 XOR-MAPPED-ADDRESS + MESSAGE-INTEGRITY (20B) + FINGERPRINT (4B) 的复合报文
+        let mut resp = vec![0u8; 20 + 12 + 24 + 8];
+        let msg_len = (12 + 24 + 8) as u16;
+
+        resp[0..2].copy_from_slice(&STUN_BINDING_RESPONSE.to_be_bytes());
+        resp[2..4].copy_from_slice(&msg_len.to_be_bytes());
+        resp[4..8].copy_from_slice(&STUN_MAGIC_COOKIE_BYTES);
+        resp[8..20].copy_from_slice(&tx_id);
+
+        // 1. XOR-MAPPED-ADDRESS
+        resp[20..22].copy_from_slice(&ATTR_XOR_MAPPED_ADDRESS.to_be_bytes());
+        resp[22..24].copy_from_slice(&8u16.to_be_bytes());
+        resp[24] = 0x00;
+        resp[25] = 0x01; // IPv4
+        resp[26..28].copy_from_slice(&[0x12, 0x34]);
+        let target_ip = [1, 1, 1, 1];
+        let xor_ip = [
+            target_ip[0] ^ 0x21,
+            target_ip[1] ^ 0x12,
+            target_ip[2] ^ 0xa4,
+            target_ip[3] ^ 0x42,
+        ];
+        resp[28..32].copy_from_slice(&xor_ip);
+
+        // 2. MESSAGE-INTEGRITY (20 字节 HMAC-SHA1)
+        resp[32..34].copy_from_slice(&ATTR_MESSAGE_INTEGRITY.to_be_bytes());
+        resp[34..36].copy_from_slice(&20u16.to_be_bytes());
+        resp[36..56].copy_from_slice(&[0xAA; 20]);
+
+        // 3. FINGERPRINT (4 字节 CRC32)
+        resp[56..58].copy_from_slice(&ATTR_FINGERPRINT.to_be_bytes());
+        resp[58..60].copy_from_slice(&4u16.to_be_bytes());
+        resp[60..64].copy_from_slice(&[0x55; 4]);
+
+        let parsed = parse_binding_response(&resp, &tx_id).unwrap();
+        assert_eq!(parsed, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
     }
 }

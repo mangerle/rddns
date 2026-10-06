@@ -260,3 +260,89 @@ async fn test_sync_record_with_retry_succeeds_on_third_try() {
 
     assert_eq!(res.status, SyncStatus::Created);
 }
+
+/// 仅支持 IPv4 的 Mock 服务商
+struct Ipv4OnlyProvider;
+
+#[async_trait::async_trait]
+impl DnsProvider for Ipv4OnlyProvider {
+    fn provider_name(&self) -> &'static str {
+        "ipv4_only"
+    }
+
+    fn supports_record_type(&self, record_type: DnsRecordType) -> bool {
+        record_type == DnsRecordType::A
+    }
+
+    async fn sync_record(
+        &self,
+        domain: &crate::core::domain::ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &std::net::IpAddr,
+        _ttl: Option<u32>,
+    ) -> Result<SyncRecordResult, crate::dns::trait_def::DnsProviderError> {
+        if !self.supports_record_type(record_type) {
+            return Err(
+                crate::dns::trait_def::DnsProviderError::UnsupportedRecordType {
+                    provider: "ipv4_only",
+                    record_type,
+                },
+            );
+        }
+        Ok(SyncRecordResult::created(
+            domain.full_domain(),
+            record_type,
+            ip.to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn test_spawn_protocol_sync_tasks_skips_unsupported_record_type() {
+    let mut join_set = JoinSet::new();
+    let domain = parse_domain("v6.example.com").unwrap();
+    let sem = Arc::new(Semaphore::new(1));
+    let synced = HashMap::new();
+
+    spawn_protocol_sync_tasks(
+        &mut join_set,
+        ProtocolSyncParams {
+            enabled: true,
+            task_name: "v6_skip_task".to_string(),
+            record_type: DnsRecordType::AAAA,
+            ip_opt: Some(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
+            domains: std::slice::from_ref(&domain),
+            provider: Arc::new(Ipv4OnlyProvider),
+            ttl: None,
+            synced_domains: &synced,
+            force_sync_all: true,
+            semaphore: sem,
+        },
+    );
+
+    // 服务商不支持 AAAA 时应直接返回，任务集合中不应有任何任务
+    assert!(join_set.is_empty(), "不支持的记录类型不应加入任务集合");
+}
+
+#[tokio::test]
+async fn test_sync_record_with_retry_rejects_unsupported_record_type() {
+    let domain = parse_domain("v6.example.com").unwrap();
+    let provider: Arc<dyn DnsProvider> = Arc::new(Ipv4OnlyProvider);
+    let ip = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+
+    let err = sync_record_with_retry(
+        &provider,
+        "v6_direct_task",
+        &domain,
+        DnsRecordType::AAAA,
+        &ip,
+        None,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::dns::trait_def::DnsProviderError::UnsupportedRecordType { .. }
+    ));
+}

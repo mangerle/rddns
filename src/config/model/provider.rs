@@ -243,11 +243,11 @@ impl ProviderConfig {
             }
             | Self::Gcore { api_key: password }
             | Self::NsOne { api_key: password }
-            | Self::HipmDnsMgr {
-                api_token: password,
-                ..
-            }
             | Self::Callback { url: password, .. } => not_empty(password),
+            Self::HipmDnsMgr {
+                endpoint,
+                api_token,
+            } => opt_not_empty(endpoint) && not_empty(api_token),
         }
     }
 }

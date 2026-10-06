@@ -219,7 +219,7 @@ impl NotificationDispatcher {
     ///
     /// # 设计原理
     /// - **实现初衷**: 避免任务持续失败时高频推送告警造成通知风暴，并在短时间内大量新错误涌入时防止内存无限膨胀。
-    /// - **核心优势**: 软限制 (256 条) 触发过期数据清理，硬限制 (512 条) 采用 LRU 淘汰最旧条目，确保内存恒定有界。
+    /// - **核心优势**: 软限制 (256 条) 触发过期数据清理，硬限制 (512 条) 淘汰最长未告警（即最早通知记录）条目，确保内存恒定有界。
     fn check_and_update_error_throttle(&self, task_name: &str, error_summary: String) -> bool {
         let mut trackers = self.error_trackers.write();
 
@@ -228,7 +228,7 @@ impl NotificationDispatcher {
             trackers.retain(|_, t| t.last_notified_at.elapsed() < ERROR_TRACKER_TTL);
         }
 
-        // 2. 若依然达到硬上限且当前任务不在表中，淘汰最早通知的条目 (LRU)
+        // 2. 若依然达到硬上限且当前任务不在表中，淘汰最早通知（最长未告警）的条目
         if !trackers.contains_key(task_name)
             && trackers.len() >= TRACKER_HARD_LIMIT
             && let Some(oldest_key) = trackers

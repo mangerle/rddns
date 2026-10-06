@@ -98,6 +98,17 @@ pub(crate) fn spawn_protocol_sync_tasks(
         DnsRecordType::AAAA => "AAAA 记录",
     };
 
+    // 检查服务商能力声明，对于不支持 IPv6 等特定协议记录的服务商安全跳过，避免无谓失败与误告警 (P2-11)
+    if !params.provider.supports_record_type(params.record_type) {
+        debug!(
+            "[{}] DNS 服务商 [{}] 不支持 {} 同步，跳过本轮同步",
+            params.task_name,
+            params.provider.provider_name(),
+            type_str
+        );
+        return;
+    }
+
     if let Some(ip) = params.ip_opt {
         let ip_str = ip.to_string();
         for domain in params.domains {
@@ -322,6 +333,13 @@ async fn sync_record_with_retry(
     ip: &IpAddr,
     ttl: Option<u32>,
 ) -> Result<SyncRecordResult, DnsProviderError> {
+    if !provider.supports_record_type(rec_type) {
+        return Err(DnsProviderError::UnsupportedRecordType {
+            provider: provider.provider_name(),
+            record_type: rec_type,
+        });
+    }
+
     let mut retry_count = 0usize;
     loop {
         match provider.sync_record(domain, rec_type, ip, ttl).await {
