@@ -261,7 +261,25 @@ fn test_command_injection_comprehensive_protection() {
     assert!(validate_command_str("   ").is_err());
     assert!(validate_command_str("\t\r\n").is_err());
 
-    // 8. 合法安全命令用例放行
+    // 8. 危险参数选项注入与 bash 历史扩展 (!) 拦截 (P-9)
+    let option_injection_cases = [
+        "curl --config=/etc/shadow https://api.ipify.org",
+        "fetch_ip -o=/tmp/pwn",
+        "-c whoami",
+        "--help",
+        "echo !123",
+    ];
+    for cmd in option_injection_cases {
+        let res = validate_command_str(cmd);
+        assert!(
+            res.is_err(),
+            "参数选项注入与感叹号应当被严格拦截: {}, 实际结果: {:?}",
+            cmd,
+            res
+        );
+    }
+
+    // 9. 合法安全命令用例放行
     let valid_commands = [
         "curl -s -4 https://api.ipify.org",
         "ip -6 addr show eth0",
