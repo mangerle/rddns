@@ -84,7 +84,7 @@ pub(crate) async fn probe_task_ips(task: &DnsTaskConfig) -> (Option<Ipv4Addr>, O
 ///
 /// # 设计原理
 /// - **实现初衷**: 将该协议下的所有待同步域名分别派生为异步协程并发请求。
-/// - **核心优势**: 通过共享信号量控制最大并发度（默认 5），兼顾同步吞吐量与平台 QPS 防限流；已同步且本地未变域名跳过网络请求直接产出 `Unchanged` 结果。
+/// - **核心优势**: 通过共享信号量控制最大并发度（由 `MAX_CONCURRENT_DNS_SYNCS` 约束，最大 10 并发），兼顾同步吞吐量与平台 QPS 防限流；已同步且本地未变域名跳过网络请求直接产出 `Unchanged` 结果。
 pub(crate) fn spawn_protocol_sync_tasks(
     sync_join_set: &mut JoinSet<SyncRecordResult>,
     params: ProtocolSyncParams<'_>,

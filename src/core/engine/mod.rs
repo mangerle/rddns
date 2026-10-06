@@ -38,7 +38,7 @@ const IP_PROBE_AGGREGATE_TIMEOUT: Duration = Duration::from_secs(20);
 ///
 /// # 设计原理
 /// - **实现初衷**: 统一协调与驱动定时轮询、配置热加载订阅、手动触发、故障重试、网络连通性探测以及多任务并发同步。
-/// - **核心优势**: 任务间全异步独立并发，全局通过信号量限制跨任务 DNS 同步并发度（最大 10 并发），兼顾同步吞吐量与平台 QPS 防限流；智能增量比对与缓存周期检测，极大降低公网 API 调用频次。
+/// - **核心优势**: 任务间全异步独立并发，全局通过信号量限制跨任务 DNS 同步并发度（由 `MAX_CONCURRENT_DNS_SYNCS` 约束，最大 10 并发），兼顾同步吞吐量与平台 QPS 防限流；智能增量比对与缓存周期检测，极大降低公网 API 调用频次。
 /// - **代价与局限**: 跨任务错误追踪与状态快照驻留内存，需依赖生命周期回收函数 `retain_active_tasks` 定期清理已删除任务。
 pub struct DdnsEngine {
     config_manager: Arc<ConfigManager>,
