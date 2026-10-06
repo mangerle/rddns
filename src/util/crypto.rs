@@ -157,8 +157,8 @@ pub async fn verify_password_async(password: String, hash: String) -> bool {
     })
 }
 
-/// 预置合法 bcrypt 假哈希（cost=10），用于用户名不匹配时执行常量时间耗时验证，防止时序侧信道攻击枚举用户名 (P1-8)
-pub const DUMMY_BCRYPT_HASH: &str = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+/// 预置合法 bcrypt 假哈希（cost=12，与 bcrypt::DEFAULT_COST 保持严格一致），用于用户名不匹配时执行常量时间耗时验证，防止时序侧信道攻击枚举用户名 (P1-8/P-5)
+pub const DUMMY_BCRYPT_HASH: &str = "$2b$12$BFz/a8fpzpBYZcvfvRG/V.z/jZBasZIV34dyHfiiGhB3UN8EU78ty";
 
 /// 统一常量时间凭据校验，防止利用 bcrypt 耗时与快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
 ///
@@ -339,5 +339,17 @@ mod tests {
         assert!(
             !verify_credentials_constant_time("attacker", "WrongPass", real_user, &real_hash).await
         );
+    }
+
+    #[test]
+    fn test_dummy_bcrypt_hash_cost_matches_default_cost() {
+        // 校验 DUMMY_BCRYPT_HASH 的 cost 必须与 bcrypt::DEFAULT_COST 严格一致，防止时序侧信道特征漂移 (P-5)
+        let expected_prefix = format!("$2b${:02}$", bcrypt::DEFAULT_COST);
+        assert!(
+            DUMMY_BCRYPT_HASH.starts_with(&expected_prefix),
+            "DUMMY_BCRYPT_HASH 的 cost 与生产系统默认 cost 不一致"
+        );
+        // 验证该哈希格式为有效 bcrypt 哈希，能够被安全验证
+        assert!(!bcrypt::verify("any_password", DUMMY_BCRYPT_HASH).unwrap_or(true));
     }
 }
