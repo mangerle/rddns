@@ -125,6 +125,37 @@ pub fn create_http_client_builder() -> ClientBuilder {
     builder
 }
 
+/// 内部根据具体解析出的本地源 IP 创建绑定网卡的 ClientBuilder
+fn create_task_http_client_builder_for_family_with_ip(
+    interface_name: Option<&str>,
+    bound_ip: Option<IpAddr>,
+    is_ipv6: bool,
+) -> ClientBuilder {
+    let mut builder = create_http_client_builder();
+    if let Some(iface) = interface_name {
+        if let Some(ip) = bound_ip {
+            info!(
+                "任务绑定出站物理网卡 [{}] ({}: {})",
+                iface,
+                if is_ipv6 {
+                    "IPv6 源地址"
+                } else {
+                    "IPv4 源地址"
+                },
+                ip
+            );
+            builder = builder.local_address(Some(ip));
+        } else {
+            warn!(
+                "未能在系统网卡 [{}] 中找到有效的 {} 出站地址，将回退至系统默认路由",
+                iface,
+                if is_ipv6 { "IPv6" } else { "IPv4" }
+            );
+        }
+    }
+    builder
+}
+
 /// 根据指定的网络协议族 (IPv4 或 IPv6) 创建绑定了指定出站物理网卡源 IP 的 ClientBuilder
 ///
 /// # 设计原理
@@ -133,35 +164,32 @@ pub fn create_task_http_client_builder_for_family(
     interface_name: Option<&str>,
     is_ipv6: bool,
 ) -> ClientBuilder {
+    let clean = interface_name.map(str::trim).filter(|s| !s.is_empty());
+    let bound_ip = clean.and_then(|c| {
+        if is_ipv6 {
+            find_interface_ipv6(c).map(IpAddr::V6)
+        } else {
+            find_interface_ipv4(c).map(IpAddr::V4)
+        }
+    });
+    create_task_http_client_builder_for_family_with_ip(clean, bound_ip, is_ipv6)
+}
+
+/// 内部根据具体解析出的本地源 IP 创建通用 ClientBuilder
+fn create_task_http_client_builder_with_ip(
+    interface_name: Option<&str>,
+    bound_ip: Option<IpAddr>,
+) -> ClientBuilder {
     let mut builder = create_http_client_builder();
     if let Some(iface) = interface_name {
-        let clean = iface.trim();
-        if !clean.is_empty() {
-            let local_ip = if is_ipv6 {
-                find_interface_ipv6(clean).map(IpAddr::V6)
-            } else {
-                find_interface_ipv4(clean).map(IpAddr::V4)
-            };
-
-            if let Some(ip) = local_ip {
-                info!(
-                    "任务绑定出站物理网卡 [{}] ({}: {})",
-                    clean,
-                    if is_ipv6 {
-                        "IPv6 源地址"
-                    } else {
-                        "IPv4 源地址"
-                    },
-                    ip
-                );
-                builder = builder.local_address(Some(ip));
-            } else {
-                warn!(
-                    "未能在系统网卡 [{}] 中找到有效的 {} 出站地址，将回退至系统默认路由",
-                    clean,
-                    if is_ipv6 { "IPv6" } else { "IPv4" }
-                );
-            }
+        if let Some(local_ip) = bound_ip {
+            info!("任务绑定出站物理网卡 [{}] (本地源 IP: {})", iface, local_ip);
+            builder = builder.local_address(Some(local_ip));
+        } else {
+            warn!(
+                "未能在系统网卡中找到 [{}] 对应的出站 IP，将回退至系统默认路由",
+                iface
+            );
         }
     }
     builder
@@ -169,22 +197,9 @@ pub fn create_task_http_client_builder_for_family(
 
 /// 创建绑定了指定出站物理网卡 / 源 IP 的通用 ClientBuilder (多 WAN 软路由多出口支持)
 pub fn create_task_http_client_builder(interface_name: Option<&str>) -> ClientBuilder {
-    let mut builder = create_http_client_builder();
-    if let Some(iface) = interface_name {
-        let clean = iface.trim();
-        if !clean.is_empty() {
-            if let Some(local_ip) = find_interface_ip(clean) {
-                info!("任务绑定出站物理网卡 [{}] (本地源 IP: {})", clean, local_ip);
-                builder = builder.local_address(Some(local_ip));
-            } else {
-                warn!(
-                    "未能在系统网卡中找到 [{}] 对应的出站 IP，将回退至系统默认路由",
-                    clean
-                );
-            }
-        }
-    }
-    builder
+    let clean = interface_name.map(str::trim).filter(|s| !s.is_empty());
+    let bound_ip = clean.and_then(find_interface_ip);
+    create_task_http_client_builder_with_ip(clean, bound_ip)
 }
 
 /// 创建带指定超时的 Reqwest Client
@@ -203,7 +218,9 @@ pub fn create_task_http_client(
     interface_name: Option<&str>,
     timeout: Duration,
 ) -> Result<Client, ReqwestError> {
-    create_task_http_client_builder(interface_name)
+    let clean = interface_name.map(str::trim).filter(|s| !s.is_empty());
+    let bound_ip = clean.and_then(find_interface_ip);
+    create_task_http_client_builder_with_ip(clean, bound_ip)
         .timeout(timeout)
         .build()
 }
@@ -211,6 +228,8 @@ pub fn create_task_http_client(
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 struct ClientKey {
     interface_name: Option<String>,
+    /// 绑定的本地网卡实际源 IP，拨号重新分配后变化以确保旧客户端自动淘汰 (P1-2)
+    bound_ip: Option<IpAddr>,
     timeout_ms: u64,
     skip_verify: bool,
     /// 绑定的地址族：`None` 表示不限族，`Some(true)` 为强制 IPv6 出站
@@ -225,9 +244,10 @@ struct ClientKey {
 
 impl ClientKey {
     /// 构造通用 DNS / 通知场景的缓存键
-    fn general(interface_name: Option<&str>, timeout: Duration) -> Self {
+    fn general(interface_name: Option<&str>, bound_ip: Option<IpAddr>, timeout: Duration) -> Self {
         Self {
             interface_name: normalize_interface(interface_name),
+            bound_ip,
             timeout_ms: timeout.as_millis() as u64,
             skip_verify: is_skip_verify(),
             ipv6_only: None,
@@ -255,11 +275,19 @@ pub fn clear_http_client_cache() {
 ///
 /// # 设计原理
 /// - **实现初衷**：Reqwest Client 内部维持高昂的 TCP 连接池与 TLS 会话缓存，避免每次轮询重复创建与握手。
-/// - **核心优势**：基于网卡名、超时时间与 TLS 选项多维键缓存，依托分段锁容器 `DashMap` 实现高并发零锁竞争读取与零重复建连。
+/// - **核心优势**：基于网卡名、本地绑定 IP、超时时间与 TLS 选项多维键缓存，依托分段锁容器 `DashMap` 实现高并发零锁竞争读取与零重复建连。
 pub fn get_task_http_client(interface_name: Option<&str>, timeout: Duration) -> Client {
+    let clean = interface_name.map(str::trim).filter(|s| !s.is_empty());
+    let bound_ip = clean.and_then(find_interface_ip);
+    let key = ClientKey::general(interface_name, bound_ip, timeout);
+
     get_or_create_client(
-        ClientKey::general(interface_name, timeout),
-        || create_task_http_client(interface_name, timeout),
+        key,
+        || {
+            create_task_http_client_builder_with_ip(clean, bound_ip)
+                .timeout(timeout)
+                .build()
+        },
         interface_name,
     )
 }
@@ -275,8 +303,18 @@ pub fn get_family_http_client(
     timeout: Duration,
     user_agent: &str,
 ) -> Client {
+    let clean = interface_name.map(str::trim).filter(|s| !s.is_empty());
+    let bound_ip = clean.and_then(|c| {
+        if is_ipv6 {
+            find_interface_ipv6(c).map(IpAddr::V6)
+        } else {
+            find_interface_ipv4(c).map(IpAddr::V4)
+        }
+    });
+
     let key = ClientKey {
         interface_name: normalize_interface(interface_name),
+        bound_ip,
         timeout_ms: timeout.as_millis() as u64,
         skip_verify: is_skip_verify(),
         ipv6_only: Some(is_ipv6),
@@ -286,7 +324,7 @@ pub fn get_family_http_client(
     get_or_create_client(
         key,
         || {
-            create_task_http_client_builder_for_family(interface_name, is_ipv6)
+            create_task_http_client_builder_for_family_with_ip(clean, bound_ip, is_ipv6)
                 .timeout(timeout)
                 .user_agent(user_agent)
                 .build()
@@ -334,6 +372,16 @@ where
             }
         }
     };
+
+    // 若同一网卡且同协议族存在历史绑定的旧 IP 客户端，主动淘汰以释放套接字与内存 (P1-2)
+    if key.interface_name.is_some() {
+        CLIENT_CACHE.retain(|k, _| {
+            !(k.interface_name == key.interface_name
+                && k.ipv6_only == key.ipv6_only
+                && k.bound_ip != key.bound_ip)
+        });
+    }
+
     CLIENT_CACHE
         .entry(key)
         .or_insert_with(|| client.clone())
@@ -417,7 +465,8 @@ mod tests {
         let _guard = TEST_CACHE_LOCK.lock();
         let timeout = Duration::from_secs(15);
         let iface = "unique_test_eth0_for_cache_reuse";
-        let key1 = ClientKey::general(Some(iface), timeout);
+        let bound_ip = find_interface_ip(iface);
+        let key1 = ClientKey::general(Some(iface), bound_ip, timeout);
         CLIENT_CACHE.remove(&key1);
 
         let _first = get_task_http_client(Some(iface), timeout);
@@ -430,7 +479,7 @@ mod tests {
         );
 
         // 不同超时时间应产生新条目
-        let key2 = ClientKey::general(Some(iface), Duration::from_secs(30));
+        let key2 = ClientKey::general(Some(iface), bound_ip, Duration::from_secs(30));
         CLIENT_CACHE.remove(&key2);
         let _other = get_task_http_client(Some(iface), Duration::from_secs(30));
         assert!(
@@ -447,8 +496,8 @@ mod tests {
     fn test_client_cache_key_normalizes_blank_interface() {
         let _guard = TEST_CACHE_LOCK.lock();
         let timeout = Duration::from_secs(15);
-        let key = ClientKey::general(None, timeout);
-        let key_blank = ClientKey::general(Some("   "), timeout);
+        let key = ClientKey::general(None, None, timeout);
+        let key_blank = ClientKey::general(Some("   "), None, timeout);
         assert_eq!(key, key_blank, "空白网卡名与 None 生成的缓存键必须完全一致");
 
         let _blank = get_task_http_client(Some("   "), timeout);
@@ -472,6 +521,7 @@ mod tests {
 
         let key_v4 = ClientKey {
             interface_name: Some(iface.to_string()),
+            bound_ip: find_interface_ipv4(iface).map(IpAddr::V4),
             timeout_ms: timeout.as_millis() as u64,
             skip_verify: is_skip_verify(),
             ipv6_only: Some(false),
@@ -479,6 +529,7 @@ mod tests {
         };
         let key_v6 = ClientKey {
             interface_name: Some(iface.to_string()),
+            bound_ip: find_interface_ipv6(iface).map(IpAddr::V6),
             timeout_ms: timeout.as_millis() as u64,
             skip_verify: is_skip_verify(),
             ipv6_only: Some(true),
@@ -501,6 +552,34 @@ mod tests {
 
         CLIENT_CACHE.remove(&key_v4);
         CLIENT_CACHE.remove(&key_v6);
+    }
+
+    #[test]
+    fn test_client_cache_invalidates_old_ip_on_rebind() {
+        let _guard = TEST_CACHE_LOCK.lock();
+        let timeout = Duration::from_secs(15);
+        let iface = "dialup_eth0_test";
+        let old_ip = "192.168.1.10".parse::<IpAddr>().unwrap();
+        let new_ip = "192.168.1.20".parse::<IpAddr>().unwrap();
+
+        let old_key = ClientKey::general(Some(iface), Some(old_ip), timeout);
+        let new_key = ClientKey::general(Some(iface), Some(new_ip), timeout);
+
+        // 模拟旧 IP 客户端写入
+        let _old_client =
+            get_or_create_client(old_key.clone(), || create_http_client(timeout), Some(iface));
+        assert!(CLIENT_CACHE.contains_key(&old_key));
+
+        // 模拟重新拨号后使用新 IP 获取客户端
+        let _new_client =
+            get_or_create_client(new_key.clone(), || create_http_client(timeout), Some(iface));
+        assert!(CLIENT_CACHE.contains_key(&new_key));
+        assert!(
+            !CLIENT_CACHE.contains_key(&old_key),
+            "网卡重新绑定新 IP 后，旧 IP 客户端必须被自动淘汰"
+        );
+
+        CLIENT_CACHE.remove(&new_key);
     }
 
     #[test]
