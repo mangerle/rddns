@@ -16,7 +16,7 @@ use crate::util::logging::LogBuffer;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use log::error;
+use log::{debug, error};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -110,7 +110,28 @@ impl std::error::Error for AppError {}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        error!("Web API 请求失败 [{}]: {}", self.status, self.message);
+        // 对消息换行进行转义并限制日志输出最大长度，杜绝换行日志注入伪造日志行 (P-7)
+        let safe_msg = if self.message.contains('\n') || self.message.contains('\r') {
+            self.message.replace('\r', "\\r").replace('\n', "\\n")
+        } else {
+            self.message.clone()
+        };
+        let truncated_msg = if safe_msg.len() > 256 {
+            format!("{}...(截断)", &safe_msg[..256])
+        } else {
+            safe_msg
+        };
+
+        // 遵循 AGENTS.md 日志分级契约：仅 5xx 服务端故障记录 error!，4xx 客户端输入错误记录 debug! (P-7)
+        if self.status.is_server_error() {
+            error!("Web API 服务端故障 [{}]: {}", self.status, truncated_msg);
+        } else {
+            debug!(
+                "Web API 客户端请求未通过 [{}]: {}",
+                self.status, truncated_msg
+            );
+        }
+
         (self.status, Json(ApiResponse::<()>::err(self.message))).into_response()
     }
 }
@@ -126,5 +147,21 @@ impl IntoResponse for AppError {
 impl From<crate::config::storage::ConfigError> for AppError {
     fn from(err: crate::config::storage::ConfigError) -> Self {
         Self::internal(format!("配置读写失败: {}", err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_app_error_into_response_formatting_and_status() {
+        let err_400 = AppError::bad_request("无效的输入\n伪造的日志行");
+        let resp_400 = err_400.into_response();
+        assert_eq!(resp_400.status(), StatusCode::BAD_REQUEST);
+
+        let err_500 = AppError::internal("系统内部异常");
+        let resp_500 = err_500.into_response();
+        assert_eq!(resp_500.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
