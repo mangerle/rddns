@@ -42,16 +42,31 @@ pub struct AppConfig {
     pub dns_tasks: Vec<DnsTaskConfig>,
 }
 
+/// Web 服务默认监听端口
+pub const DEFAULT_LISTEN_PORT: u16 = 9876;
+
+/// 全局默认同步检查间隔（秒）
+pub const DEFAULT_INTERVAL_SECS: u64 = 300;
+
+/// 强制校对云端记录默认周期轮数
+pub const DEFAULT_CACHE_TIMES: u32 = 10;
+
+/// 同步检查间隔最小允许值（秒）
+pub const MIN_INTERVAL_SECS: u64 = 5;
+
+/// 强制校对云端记录最小允许周期数
+pub const MIN_CACHE_TIMES: u32 = 1;
+
 fn default_listen_port() -> u16 {
-    9876
+    DEFAULT_LISTEN_PORT
 }
 
 fn default_interval_secs() -> u64 {
-    300
+    DEFAULT_INTERVAL_SECS
 }
 
 fn default_cache_times() -> u32 {
-    10
+    DEFAULT_CACHE_TIMES
 }
 
 fn default_not_allow_wan_access() -> bool {
@@ -111,16 +126,16 @@ impl AppConfig {
     /// - **代价与局限**：仅执行纯 CPU 静态规则解析；涉及网络探测与 DNS 穿透校验由 Web 层独立异步执行。
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
-        if self.interval_secs < 5 {
+        if self.interval_secs < MIN_INTERVAL_SECS {
             errs.push(format!(
-                "同步检查间隔时间必须大于或等于 5 秒，当前为 {}",
-                self.interval_secs
+                "同步检查间隔时间必须大于或等于 {} 秒，当前为 {}",
+                MIN_INTERVAL_SECS, self.interval_secs
             ));
         }
-        if self.cache_times < 1 {
+        if self.cache_times < MIN_CACHE_TIMES {
             errs.push(format!(
-                "强制校对云端记录间隔次数必须大于或等于 1 次，当前为 {}",
-                self.cache_times
+                "强制校对云端记录间隔次数必须大于或等于 {} 次，当前为 {}",
+                MIN_CACHE_TIMES, self.cache_times
             ));
         }
         if self.listen_port == 0 {

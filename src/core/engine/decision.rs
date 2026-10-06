@@ -107,6 +107,12 @@ pub(crate) fn is_protocol_all_ok(
     success_count == domain_count
 }
 
+/// 连续获取 IP 失败触发指数退避的最小失败次数阈值
+pub(crate) const BACKOFF_TRIGGER_THRESHOLD: u32 = 3;
+
+/// 指数退避阶梯位移上限（2^3 = 最大 8 倍周期）
+pub(crate) const BACKOFF_MAX_SHIFT: u32 = 3;
+
 /// 判定是否因 IP 获取连续失败而需要按退避周期跳过当前轮次 (P-2, F-5)
 ///
 /// # 设计原理
@@ -121,10 +127,11 @@ pub(crate) fn should_backoff(
         return false;
     }
     let fail = state.ipv4_fail_count.max(state.ipv6_fail_count);
-    if fail < 3 {
+    if fail < BACKOFF_TRIGGER_THRESHOLD {
         return false;
     }
-    let rounds = 1u32 << ((fail.saturating_sub(3)).min(3));
+    let shift = (fail.saturating_sub(BACKOFF_TRIGGER_THRESHOLD)).min(BACKOFF_MAX_SHIFT);
+    let rounds = 1u32 << shift;
     state.check_counter < cache_times.saturating_mul(rounds)
 }
 
