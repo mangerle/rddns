@@ -3,11 +3,12 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use log::{debug, warn};
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -57,6 +58,24 @@ impl Drop for SseConnectionGuard {
     }
 }
 
+/// 带有连接配额 RAII 守卫的日志事件流包装器
+///
+/// # 设计原理
+/// - **实现初衷**: 确保 SSE 连接在整个推流生命周期内持有配额守卫，直到客户端断开或流结束随 HTTP 连接析构，彻底消除闭包反直觉捕获保活与冗余 _ref 的写法。
+/// - **核心优势**: 将 Guard 生命周期与底层响应流强绑定，支持优雅停机与断流自动计数回收。
+pub(crate) struct GuardedStream {
+    stream: futures_util::stream::BoxStream<'static, Result<Event, Infallible>>,
+    _guard: SseConnectionGuard,
+}
+
+impl Stream for GuardedStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.stream.as_mut().poll_next(cx)
+    }
+}
+
 /// 实时日志 SSE 推流处理器 (支持并发连接数硬上限防护、连接初次自动回放历史快照与优雅降级)
 ///
 /// # 设计原理
@@ -64,7 +83,7 @@ impl Drop for SseConnectionGuard {
 /// - **核心优势**: 通过先订阅广播通道后拉取历史快照，并基于自增 `id` 过滤掉连接瞬间产生的重复项，杜绝日志遗漏与乱序。
 pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse {
     let guard = match SseConnectionGuard::try_acquire() {
-        Some(g) => Arc::new(g),
+        Some(g) => g,
         None => {
             warn!(
                 "SSE 实时日志连接数已达上限 ({})，拒绝新连接",
@@ -84,7 +103,6 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
     let last_history_id = recent.last().map(|e| e.id).unwrap_or(0);
 
     let cancel = state.cancel_token.clone();
-    let stream_guard = guard.clone();
 
     // 2. 构造历史日志快照流
     let history_stream = futures_util::stream::iter(recent.into_iter().filter_map(|entry| {
@@ -94,23 +112,19 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
     }));
 
     // 3. 构造实时增量广播流，过滤快照中已包含的旧日志 (id <= last_history_id)
-    let live_stream = BroadcastStream::new(rx).filter_map(move |item| {
-        let _g = stream_guard.clone();
-        async move {
-            let _ref = &_g;
-            match item {
-                Ok(entry) => {
-                    if entry.id <= last_history_id {
-                        return None;
-                    }
-                    serde_json::to_string(&entry)
-                        .ok()
-                        .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str)))
+    let live_stream = BroadcastStream::new(rx).filter_map(move |item| async move {
+        match item {
+            Ok(entry) => {
+                if entry.id <= last_history_id {
+                    return None;
                 }
-                Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                    debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
-                    None
-                }
+                serde_json::to_string(&entry)
+                    .ok()
+                    .map(|json_str| Ok::<Event, Infallible>(Event::default().data(json_str)))
+            }
+            Err(BroadcastStreamRecvError::Lagged(missed)) => {
+                debug!("SSE 客户端消费落后，跳过了 {} 条历史日志", missed);
+                None
             }
         }
     });
@@ -119,9 +133,12 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
         cancel.cancelled().await;
     });
 
-    drop(guard);
+    let guarded_stream = GuardedStream {
+        stream: Box::pin(stream),
+        _guard: guard,
+    };
 
-    Sse::new(stream)
+    Sse::new(guarded_stream)
         .keep_alive(
             KeepAlive::new()
                 .interval(Duration::from_secs(15))
@@ -133,6 +150,23 @@ pub async fn sse_log_handler(State(state): State<AppState>) -> impl IntoResponse
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_guarded_stream_releases_guard_on_drop() {
+        let initial = SseConnectionGuard::active_count();
+        let guard = SseConnectionGuard::try_acquire().unwrap();
+        assert_eq!(SseConnectionGuard::active_count(), initial + 1);
+
+        let stream = Box::pin(futures_util::stream::empty::<Result<Event, Infallible>>());
+        let guarded = GuardedStream {
+            stream,
+            _guard: guard,
+        };
+        // drop 流包装器，验证守卫确定性析构并释放计数
+        drop(guarded);
+        assert_eq!(SseConnectionGuard::active_count(), initial);
+    }
 
     #[test]
     fn test_sse_connection_guard_lifecycle_and_limit() {
