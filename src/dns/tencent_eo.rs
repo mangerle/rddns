@@ -1,12 +1,11 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::tencent_eo_types::*;
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
 use serde_json::json;
-use std::net::IpAddr;
 
 const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
     host: "teo.tencentcloudapi.com",
@@ -235,22 +234,18 @@ impl RecordOps for TencentEoProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let target_ip_str = ip.to_string();
-        if Self::is_origin_group(domain) {
-            self.update_record(zone, "", domain, record_type, ip, ttl)
-                .await
+        let target_ip_str = params.ip.to_string();
+        if Self::is_origin_group(params.domain) {
+            self.update_record(zone, "", params).await
         } else {
-            let full_domain = domain.full_domain();
-            let ttl_val = ttl.unwrap_or(600).max(1);
+            let full_domain = params.domain.full_domain();
+            let ttl_val = default_ttl(params.ttl);
             let create_payload = json!({
                 "ZoneId": zone,
                 "Name": full_domain,
-                "Type": record_type.to_string(),
+                "Type": params.record_type.to_string(),
                 "Content": target_ip_str,
                 "Location": "Default",
                 "TTL": ttl_val
@@ -269,18 +264,16 @@ impl RecordOps for TencentEoProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let target_ip_str = ip.to_string();
-        if Self::is_origin_group(domain) {
-            let matched_group = self.get_origin_group(zone, domain).await?;
-            let weight_val = domain
+        let target_ip_str = params.ip.to_string();
+        if Self::is_origin_group(params.domain) {
+            let matched_group = self.get_origin_group(zone, params.domain).await?;
+            let weight_val = params
+                .domain
                 .custom_params
                 .get("Weight")
-                .or_else(|| domain.custom_params.get("weight"))
+                .or_else(|| params.domain.custom_params.get("weight"))
                 .and_then(|w| w.parse::<u32>().ok())
                 .unwrap_or(100);
 
@@ -303,8 +296,8 @@ impl RecordOps for TencentEoProvider {
 
             Ok(())
         } else {
-            let full_domain = domain.full_domain();
-            let ttl_val = ttl.unwrap_or(600).max(1);
+            let full_domain = params.domain.full_domain();
+            let ttl_val = default_ttl(params.ttl);
             let modify_payload = json!({
                 "ZoneId": zone,
                 "DnsRecords": [
@@ -312,7 +305,7 @@ impl RecordOps for TencentEoProvider {
                         "RecordId": record_id,
                         "ZoneId": zone,
                         "Name": full_domain,
-                        "Type": _record_type.to_string(),
+                        "Type": params.record_type.to_string(),
                         "Content": target_ip_str,
                         "Location": "Default",
                         "TTL": ttl_val
@@ -329,10 +322,15 @@ impl RecordOps for TencentEoProvider {
         }
     }
 
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let delete_payload = json!({
             "ZoneId": zone,
-            "RecordIds": [record_id]
+            "RecordIds": [&record.id]
         });
 
         let _act: TeoActionResp = self

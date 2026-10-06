@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -8,9 +8,9 @@ use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const NAME_COM_ENDPOINT: &str = "https://api.name.com/core/v1/domains";
+const NAME_COM_DEFAULT_TTL: u32 = 300;
 
 /// Name.com DNS 提供商
 pub struct NameComProvider {
@@ -144,24 +144,24 @@ impl RecordOps for NameComProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(300).max(1);
-        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+        let ttl_val = clamp_ttl(params.ttl, NAME_COM_DEFAULT_TTL, MIN_DNS_TTL);
+        let sub_name = if params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@" {
             ""
         } else {
-            &domain.sub_domain
+            &params.domain.sub_domain
         };
-        let target_ip_str = ip.to_string();
+        let target_ip_str = params.ip.to_string();
 
-        let create_url = format!("{}/{}/records", NAME_COM_ENDPOINT, domain.root_domain);
+        let create_url = format!(
+            "{}/{}/records",
+            NAME_COM_ENDPOINT, params.domain.root_domain
+        );
 
         let payload = json!({
             "host": sub_name,
-            "type": record_type.to_string(),
+            "type": params.record_type.to_string(),
             "answer": target_ip_str,
             "ttl": ttl_val
         });
@@ -185,27 +185,24 @@ impl RecordOps for NameComProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(300).max(1);
-        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+        let ttl_val = clamp_ttl(params.ttl, NAME_COM_DEFAULT_TTL, MIN_DNS_TTL);
+        let sub_name = if params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@" {
             ""
         } else {
-            &domain.sub_domain
+            &params.domain.sub_domain
         };
-        let target_ip_str = ip.to_string();
+        let target_ip_str = params.ip.to_string();
 
         let update_url = format!(
             "{}/{}/records/{}",
-            NAME_COM_ENDPOINT, domain.root_domain, record_id
+            NAME_COM_ENDPOINT, params.domain.root_domain, record_id
         );
 
         let payload = json!({
             "host": sub_name,
-            "type": record_type.to_string(),
+            "type": params.record_type.to_string(),
             "answer": target_ip_str,
             "ttl": ttl_val
         });

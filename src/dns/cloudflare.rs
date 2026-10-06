@@ -1,5 +1,5 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
@@ -8,7 +8,6 @@ use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -278,8 +277,13 @@ impl RecordOps for CloudflareProvider {
     /// `Unchanged` —— 用户界面显示"未变动"，而云端记录实际已消失，
     /// DDNS 静默失效。现改为由模板在比对完成后，对未被选中的冗余条目
     /// 逐条调用本方法执行清理。
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
-        let del_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone, record_id);
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
+        let del_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone, record.id);
         let resp = self
             .client
             .delete(&del_url)
@@ -294,7 +298,7 @@ impl RecordOps for CloudflareProvider {
             let text = resp.text().await.unwrap_or_default();
             warn!(
                 "清理 Cloudflare 冗余记录 {} 失败，HTTP 状态码: {}，详情: {}",
-                record_id, status, text
+                record.id, status, text
             );
         }
         Ok(())
@@ -303,19 +307,16 @@ impl RecordOps for CloudflareProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let create_url = format!("{}/zones/{}/dns_records", CF_API_BASE, zone);
         let body = json!({
-            "type": record_type.to_string(),
-            "name": domain.full_domain(),
-            "content": ip.to_string(),
-            "ttl": Self::normalize_ttl(ttl),
+            "type": params.record_type.to_string(),
+            "name": params.domain.full_domain(),
+            "content": params.ip.to_string(),
+            "ttl": Self::normalize_ttl(params.ttl),
             // 读取自定义参数 ?proxied=true 决定是否开启 CDN 代理加速
-            "proxied": Self::resolve_proxied_flag(domain),
+            "proxied": Self::resolve_proxied_flag(params.domain),
         });
 
         let resp = self
@@ -335,15 +336,12 @@ impl RecordOps for CloudflareProvider {
         &self,
         zone: &str,
         record_id: &str,
-        _domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let update_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone, record_id);
         let body = json!({
-            "content": ip.to_string(),
-            "ttl": Self::normalize_ttl(ttl),
+            "content": params.ip.to_string(),
+            "ttl": Self::normalize_ttl(params.ttl),
         });
 
         let resp = self

@@ -1,12 +1,11 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DEFAULT_DNS_TTL, DnsProviderError, DnsRecordType};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const PORKBUN_ENDPOINT: &str = "https://api.porkbun.com/api/json/v3/dns";
 
@@ -58,7 +57,7 @@ impl PorkbunProvider {
     /// - **实现初衷**: Porkbun API 强制要求 DNS 记录 TTL 必须 >= 600 秒，否则直接报错拒绝。
     /// - **核心优势**: 当用户配置的 TTL 低于 600 秒时，输出清晰提示日志并自动平滑调整，杜绝静默改动导致用户疑惑 (P2-18)。
     fn resolve_ttl(ttl: Option<u32>) -> String {
-        const PORKBUN_MIN_TTL: u32 = 600;
+        const PORKBUN_MIN_TTL: u32 = DEFAULT_DNS_TTL;
         let configured = ttl.unwrap_or(PORKBUN_MIN_TTL);
         if configured < PORKBUN_MIN_TTL {
             log::info!(
@@ -142,24 +141,25 @@ impl RecordOps for PorkbunProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = Self::resolve_ttl(ttl);
-        let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
-        let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
+        let ttl_val = Self::resolve_ttl(params.ttl);
+        let is_root = params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@";
+        let sub_domain_param = if is_root {
+            ""
+        } else {
+            &params.domain.sub_domain
+        };
 
         let create_url = format!(
             "{}/create/{}",
             PORKBUN_ENDPOINT,
-            url_encode(&domain.root_domain)
+            url_encode(&params.domain.root_domain)
         );
         let mut create_payload = self.auth_payload();
         create_payload["name"] = json!(sub_domain_param);
-        create_payload["type"] = json!(record_type.to_string());
-        create_payload["content"] = json!(ip.to_string());
+        create_payload["type"] = json!(params.record_type.to_string());
+        create_payload["content"] = json!(params.ip.to_string());
         create_payload["ttl"] = json!(ttl_val);
 
         let create_resp = self
@@ -192,34 +192,35 @@ impl RecordOps for PorkbunProvider {
         &self,
         _zone: &str,
         _record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = Self::resolve_ttl(ttl);
-        let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
-        let sub_domain_param = if is_root { "" } else { &domain.sub_domain };
+        let ttl_val = Self::resolve_ttl(params.ttl);
+        let is_root = params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@";
+        let sub_domain_param = if is_root {
+            ""
+        } else {
+            &params.domain.sub_domain
+        };
 
         let edit_url = if sub_domain_param.is_empty() {
             format!(
                 "{}/editByNameType/{}/{}",
                 PORKBUN_ENDPOINT,
-                url_encode(&domain.root_domain),
-                record_type
+                url_encode(&params.domain.root_domain),
+                params.record_type
             )
         } else {
             format!(
                 "{}/editByNameType/{}/{}/{}",
                 PORKBUN_ENDPOINT,
-                url_encode(&domain.root_domain),
-                record_type,
+                url_encode(&params.domain.root_domain),
+                params.record_type,
                 url_encode(sub_domain_param)
             )
         };
 
         let mut edit_payload = self.auth_payload();
-        edit_payload["content"] = json!(ip.to_string());
+        edit_payload["content"] = json!(params.ip.to_string());
         edit_payload["ttl"] = json!(ttl_val);
 
         let edit_resp = self

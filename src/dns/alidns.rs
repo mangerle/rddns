@@ -1,14 +1,13 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
-use crate::util::crypto::{append_ntp_hint_if_expired, hmac_sha1_base64, pop_url_encode};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
+use crate::util::crypto::{append_ntp_hint_if_expired, build_pop_signed_query};
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 
 const DEFAULT_ALIDNS_ENDPOINT: &str = "https://alidns.aliyuncs.com";
 
@@ -74,12 +73,7 @@ impl AliDnsProvider {
             params.insert(k.to_string(), v);
         }
 
-        let (canonicalized_query_str, signature) =
-            Self::compute_pop_signature(&self.access_key_secret, &params);
-
-        let mut query_with_sign = canonicalized_query_str;
-        query_with_sign.push_str(&format!("&Signature={}", pop_url_encode(&signature)));
-
+        let query_with_sign = build_pop_signed_query("GET", &self.access_key_secret, &params);
         let url = format!("{}/?{}", self.endpoint, query_with_sign);
 
         let resp = self.client.get(&url).send().await?;
@@ -119,33 +113,6 @@ impl AliDnsProvider {
 
         let parsed: T = serde_json::from_str(body_text)?;
         Ok(parsed)
-    }
-
-    /// 计算 POP-HMAC-SHA1 待签名串与签名
-    ///
-    /// # 设计原理
-    /// - **实现初衷**: 将签名计算逻辑与网络 I/O 彻底解耦，使得签名算法能够独立进行确定性单元测试验证 (P0-7)。
-    /// - **核心优势**: 消除网络和随机状态干扰，在编译期与本地测试阶段确保 POP 签名规范与阿里云官方规范严格一致。
-    pub(crate) fn compute_pop_signature(
-        secret: &str,
-        params: &BTreeMap<String, String>,
-    ) -> (String, String) {
-        let canonicalized_query: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
-            .collect();
-        let canonicalized_query_str = canonicalized_query.join("&");
-
-        let string_to_sign = format!(
-            "GET&{}&{}",
-            pop_url_encode("/"),
-            pop_url_encode(&canonicalized_query_str)
-        );
-
-        let sign_key = format!("{}&", secret);
-        let signature = hmac_sha1_base64(sign_key.as_bytes(), string_to_sign.as_bytes());
-
-        (canonicalized_query_str, signature)
     }
 
     /// 获取域名自定义参数中指定的解析线路
@@ -213,14 +180,11 @@ impl RecordOps for AliDnsProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let rr = domain.sub_domain_or_at().to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let record_line = Self::resolve_line(domain).to_string();
+        let rr = params.domain.sub_domain_or_at().to_string();
+        let ttl_val = default_ttl(params.ttl);
+        let record_line = Self::resolve_line(params.domain).to_string();
 
         let _: serde_json::Value = self
             .request_pop_api(
@@ -228,8 +192,8 @@ impl RecordOps for AliDnsProvider {
                 vec![
                     ("DomainName", zone.to_string()),
                     ("RR", rr),
-                    ("Type", record_type.to_string()),
-                    ("Value", ip.to_string()),
+                    ("Type", params.record_type.to_string()),
+                    ("Value", params.ip.to_string()),
                     ("TTL", ttl_val.to_string()),
                     ("Line", record_line),
                 ],
@@ -244,14 +208,11 @@ impl RecordOps for AliDnsProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let rr = domain.sub_domain_or_at().to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let record_line = Self::resolve_line(domain).to_string();
+        let rr = params.domain.sub_domain_or_at().to_string();
+        let ttl_val = default_ttl(params.ttl);
+        let record_line = Self::resolve_line(params.domain).to_string();
 
         let _: serde_json::Value = self
             .request_pop_api(
@@ -259,8 +220,8 @@ impl RecordOps for AliDnsProvider {
                 vec![
                     ("RecordId", record_id.to_string()),
                     ("RR", rr),
-                    ("Type", record_type.to_string()),
-                    ("Value", ip.to_string()),
+                    ("Type", params.record_type.to_string()),
+                    ("Value", params.ip.to_string()),
                     ("TTL", ttl_val.to_string()),
                     ("Line", record_line),
                 ],
@@ -442,7 +403,7 @@ mod tests {
         params.insert("SignatureNonce".to_string(), "123456".to_string());
 
         let secret = "testsecret";
-        let (query, sign) = AliDnsProvider::compute_pop_signature(secret, &params);
+        let (query, sign) = crate::util::crypto::compute_pop_signature("GET", secret, &params);
 
         // 验证签名非空且具有确定的 HMAC-SHA1 签名
         assert!(!sign.is_empty());
@@ -450,7 +411,7 @@ mod tests {
         assert!(query.contains("AccessKeyId=testid"));
 
         // 再次计算必须保持确定性（幂等性）
-        let (query2, sign2) = AliDnsProvider::compute_pop_signature(secret, &params);
+        let (query2, sign2) = crate::util::crypto::compute_pop_signature("GET", secret, &params);
         assert_eq!(query, query2);
         assert_eq!(sign, sign2);
     }

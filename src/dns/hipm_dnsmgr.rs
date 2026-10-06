@@ -1,13 +1,12 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -295,21 +294,18 @@ impl RecordOps for HipmDnsMgrProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let domain_id: i64 = zone
             .parse()
             .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
-        let sub = domain.sub_domain_or_at();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = params.domain.sub_domain_or_at();
+        let target_ip_str = params.ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
 
         let create_payload = json!({
             "name": sub,
-            "type": record_type.to_string(),
+            "type": params.record_type.to_string(),
             "value": target_ip_str,
             "ttl": ttl_val,
             "line": "0"
@@ -326,21 +322,18 @@ impl RecordOps for HipmDnsMgrProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let domain_id: i64 = zone
             .parse()
             .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
-        let sub = domain.sub_domain_or_at();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = params.domain.sub_domain_or_at();
+        let target_ip_str = params.ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
 
         let update_payload = json!({
             "name": sub,
-            "type": record_type.to_string(),
+            "type": params.record_type.to_string(),
             "value": target_ip_str,
             "ttl": ttl_val,
             "line": "0"
@@ -353,11 +346,16 @@ impl RecordOps for HipmDnsMgrProvider {
         Ok(())
     }
 
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let domain_id: i64 = zone
             .parse()
             .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
-        let path = format!("/domains/{}/records/{}", domain_id, record_id);
+        let path = format!("/domains/{}/records/{}", domain_id, record.id);
         self.request_api(reqwest::Method::DELETE, &path, &[], None)
             .await?;
         Ok(())

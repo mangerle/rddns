@@ -1,11 +1,10 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const DNSPOD_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
     host: "dnspod.tencentcloudapi.com",
@@ -125,21 +124,18 @@ impl RecordOps for TencentCloudProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub_domain = domain.sub_domain_or_at();
-        let record_line = Self::resolve_line(domain);
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub_domain = params.domain.sub_domain_or_at();
+        let record_line = Self::resolve_line(params.domain);
+        let ttl_val = default_ttl(params.ttl);
 
         let create_payload = json!({
             "Domain": zone,
             "SubDomain": sub_domain,
-            "RecordType": record_type.to_string(),
+            "RecordType": params.record_type.to_string(),
             "RecordLine": record_line,
-            "Value": ip.to_string(),
+            "Value": params.ip.to_string(),
             "TTL": ttl_val,
         });
 
@@ -152,14 +148,11 @@ impl RecordOps for TencentCloudProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub_domain = domain.sub_domain_or_at();
-        let record_line = Self::resolve_line(domain);
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub_domain = params.domain.sub_domain_or_at();
+        let record_line = Self::resolve_line(params.domain);
+        let ttl_val = default_ttl(params.ttl);
         let record_id_num = record_id.parse::<u64>().map_err(|e| {
             DnsProviderError::api(
                 "InvalidRecordId",
@@ -171,9 +164,9 @@ impl RecordOps for TencentCloudProvider {
             "Domain": zone,
             "RecordId": record_id_num,
             "SubDomain": sub_domain,
-            "RecordType": record_type.to_string(),
+            "RecordType": params.record_type.to_string(),
             "RecordLine": record_line,
-            "Value": ip.to_string(),
+            "Value": params.ip.to_string(),
             "TTL": ttl_val,
         });
 

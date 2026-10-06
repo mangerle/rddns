@@ -44,24 +44,38 @@ use std::net::IpAddr;
 /// 服务商侧的远端记录视图
 ///
 /// # 设计原理
-/// 各服务商的响应结构千差万别，但在「是否同一条解析记录」这一判断上
-/// 语义是一致的。故抽象出最小信息集：标识、当前值、以及可选的
-/// 冗余清理句柄。
+/// 各服务商的响应结构千差万别，但在「是否同一条解析记录」这一判断上语义是一致的。
+/// - **独立记录服务商**（Cloudflare、火山引擎、AliDNS、DNSPod 等）：`id` 承载服务商分配的真实唯一标识符，可用于精准更新或按 ID 删除；
+/// - **整组记录覆盖型服务商**（GoDaddy、NS1 等）：无单条记录 ID，通过 [`RemoteRecord::set_managed`] 标识，更新时按记录集整组替换，无需也不执行独立按 ID 删除；
+/// - **属性定位型服务商**（Spaceship 等）：通过记录值（IP）标识，清理时结合完整记录上下文参数进行精准删除。
 #[derive(Debug, Clone)]
 pub struct RemoteRecord {
-    /// 服务商侧记录标识（用于更新/ 删除），如 Cloudflare 的 record id
+    /// 服务商侧记录标识（用于更新/删除），若服务商为整组覆盖管理则为空字符串
     pub id: String,
     /// 当前指向的 IP 文本
     pub value: String,
 }
 
 impl RemoteRecord {
-    /// 构造远端记录视图
+    /// 构造具备唯一标识的远端记录视图
     pub fn new(id: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             value: value.into(),
         }
+    }
+
+    /// 构造受整组记录集管理的远端记录视图（无独立单条 ID）
+    pub fn set_managed(value: impl Into<String>) -> Self {
+        Self {
+            id: String::new(),
+            value: value.into(),
+        }
+    }
+
+    /// 当前记录是否具备独立的远端记录标识符
+    pub fn has_id(&self) -> bool {
+        !self.id.is_empty()
     }
 
     /// 判断当前值是否与目标 IP 一致
@@ -71,6 +85,36 @@ impl RemoteRecord {
     /// 避免格式差异误判为变更。
     pub fn matches_target(&self, target: &IpAddr) -> bool {
         crate::dns::trait_def::ip_value_matches(&self.value, target)
+    }
+}
+
+/// 写入与更新 DNS 记录的通用参数上下文
+///
+/// # 设计原理
+/// - **参数收敛**: 消除 `create_record` (6 参) 与 `update_record` (7 参) 过于冗长的平铺形参，符合复杂度控制规范 (P2-9)；
+/// - **数据复用**: 在单次同步调用链路中构造一次即可穿透传递，减少重复解包。
+#[derive(Debug, Clone)]
+pub struct RecordParams<'a> {
+    pub domain: &'a ParsedDomain,
+    pub record_type: DnsRecordType,
+    pub ip: &'a IpAddr,
+    pub ttl: Option<u32>,
+}
+
+impl<'a> RecordParams<'a> {
+    /// 构造记录操作参数
+    pub fn new(
+        domain: &'a ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &'a IpAddr,
+        ttl: Option<u32>,
+    ) -> Self {
+        Self {
+            domain,
+            record_type,
+            ip,
+            ttl,
+        }
     }
 }
 
@@ -112,10 +156,7 @@ pub trait RecordOps: Send + Sync {
     /// 创建一条解析记录
     ///
     /// # 参数设计
-    /// 接收完整的 [`ParsedDomain`] 而非仅域名文本：部分服务商需读取
-    /// 域名的自定义参数才能确定记录属性（如 Cloudflare 的 `?proxied=true`
-    /// 决定是否开启 CDN 代理、DNSPod 的 `line=telecom` 指定线路）。
-    /// 传字符串会丢失这些信息，导致行为退化。
+    /// 通过 [`RecordParams`] 聚合传递域名、记录类型、目标 IP 与 TTL，控制形参数量在 4 个以内。
     ///
     /// # Errors
     ///
@@ -123,17 +164,13 @@ pub trait RecordOps: Send + Sync {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError>;
 
     /// 更新一条既有解析记录
     ///
     /// # 参数设计
-    /// 接收完整的 [`ParsedDomain`] 与 [`DnsRecordType`]：多数主流服务商（如 AliDNS、DNSPod 等）
-    /// 在更新记录时仍强制要求提交主机记录（RR）、记录类型及线路等属性。
+    /// 接收所属 Zone、记录唯一标识符以及封装好的 [`RecordParams`]。
     ///
     /// # Errors
     ///
@@ -142,10 +179,7 @@ pub trait RecordOps: Send + Sync {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError>;
 
     /// 删除一条解析记录（可选，用于在多条同名同类型冲突记录时清理冗余项）
@@ -155,10 +189,14 @@ pub trait RecordOps: Send + Sync {
     /// **之后**清理未被选中的冗余记录。
     ///
     /// # 不变式要求
-    /// 清理动作必须发生在模板完成「比对」之后，且绝不可在比对前删除
-    /// 任何尚未参与判定的记录——否则内存中的记录快照将与远端真实状态
-    /// 脱节，模板可能基于已失效的快照做出错误判定。
-    async fn delete_record(&self, _zone: &str, _record_id: &str) -> Result<(), DnsProviderError> {
+    /// - 清理动作必须发生在模板完成「比对」之后，且绝不可在比对前删除任何尚未参与判定的记录；
+    /// - 接收待删除记录条目及完整操作参数上下文，支持按记录 ID、记录属性或整组模式安全调度。
+    async fn delete_record(
+        &self,
+        _zone: &str,
+        _record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         Ok(())
     }
 }
@@ -187,12 +225,12 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
     let full_domain = domain.full_domain();
     let target_ip = ip.to_string();
     let zone = ops.resolve_zone(&domain.root_domain).await?;
+    let params = RecordParams::new(domain, record_type, ip, ttl);
 
     let records = ops.list_records(&zone, domain, record_type).await?;
 
     if records.is_empty() {
-        ops.create_record(&zone, domain, record_type, ip, ttl)
-            .await?;
+        ops.create_record(&zone, &params).await?;
         return Ok(SyncRecordResult::created_log(
             ops.provider_name(),
             full_domain,
@@ -228,13 +266,14 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         if records.len() > 1 {
             for (i, rec) in records.iter().enumerate() {
                 if i != idx
-                    && let Err(e) = ops.delete_record(&zone, &rec.id).await
+                    && let Err(e) = ops.delete_record(&zone, rec, &params).await
                 {
                     log::warn!(
-                        "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}) 失败: {}",
+                        "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
                         ops.provider_name(),
                         full_domain,
                         rec.id,
+                        rec.value,
                         e
                     );
                 }
@@ -250,17 +289,17 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
 
     // 所有现有记录均未匹配目标 IP：更新首条记录，并对其余多余旧记录尝试清理
     let primary = &records[0];
-    ops.update_record(&zone, &primary.id, domain, record_type, ip, ttl)
-        .await?;
+    ops.update_record(&zone, &primary.id, &params).await?;
 
     if records.len() > 1 {
         for rec in &records[1..] {
-            if let Err(e) = ops.delete_record(&zone, &rec.id).await {
+            if let Err(e) = ops.delete_record(&zone, rec, &params).await {
                 log::warn!(
-                    "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}) 失败: {}",
+                    "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
                     ops.provider_name(),
                     full_domain,
                     rec.id,
+                    rec.value,
                     e
                 );
             }

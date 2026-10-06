@@ -23,6 +23,28 @@ impl fmt::Display for DnsRecordType {
     }
 }
 
+/// 全局通用 DNS TTL 默认值（600 秒 / 10 分钟）
+pub const DEFAULT_DNS_TTL: u32 = 600;
+
+/// 标准 DNS 记录生存时间安全下限（60 秒）
+pub const MIN_DNS_TTL: u32 = 60;
+
+/// 规范化 DNS TTL：未设置时采用 `default_ttl`，且不得低于 `min_ttl`
+///
+/// # 设计原理
+/// - 若用户未指定 TTL，回退至 provider 默认配置（如 `DEFAULT_DNS_TTL` 或厂商特定推荐值）；
+/// - 钳制至不低于 `min_ttl`（标准通常为 60s），防止传入 0 或极小值导致权威 DNS 报错拒绝。
+#[inline]
+pub fn clamp_ttl(ttl: Option<u32>, default_ttl: u32, min_ttl: u32) -> u32 {
+    ttl.unwrap_or(default_ttl).max(min_ttl)
+}
+
+/// 采用全局默认配置（600s 默认，60s 下限）规范化 TTL
+#[inline]
+pub fn default_ttl(ttl: Option<u32>) -> u32 {
+    clamp_ttl(ttl, DEFAULT_DNS_TTL, MIN_DNS_TTL)
+}
+
 /// DNS 同步状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncStatus {

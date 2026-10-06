@@ -1,14 +1,13 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
-use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
+use crate::util::crypto::build_pop_signed_query;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 
 const DEFAULT_ALIESA_ENDPOINT: &str = "https://esa.cn-hangzhou.aliyuncs.com";
 
@@ -127,25 +126,7 @@ impl AliEsaProvider {
             params.insert(k.to_string(), v);
         }
 
-        let canonicalized_query: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
-            .collect();
-        let canonicalized_query_str = canonicalized_query.join("&");
-
-        let string_to_sign = format!(
-            "{}&{}&{}",
-            method,
-            pop_url_encode("/"),
-            pop_url_encode(&canonicalized_query_str)
-        );
-
-        let sign_key = format!("{}&", self.access_key_secret);
-        let signature = hmac_sha1_base64(sign_key.as_bytes(), string_to_sign.as_bytes());
-
-        let mut query_with_sign = canonicalized_query_str;
-        query_with_sign.push_str(&format!("&Signature={}", pop_url_encode(&signature)));
-
+        let query_with_sign = build_pop_signed_query(method, &self.access_key_secret, &params);
         let url = format!("{}/?{}", self.endpoint, query_with_sign);
 
         let resp = if method == "POST" {
@@ -259,14 +240,11 @@ impl RecordOps for AliEsaProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let full_domain = params.domain.full_domain();
+        let target_ip_str = params.ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
         let data_json = format!(r#"{{"Value":"{}"}}"#, target_ip_str);
 
         let act: AliEsaActionResp = self
@@ -276,7 +254,7 @@ impl RecordOps for AliEsaProvider {
                 vec![
                     ("SiteId", zone.to_string()),
                     ("RecordName", full_domain),
-                    ("Type", record_type.to_string()),
+                    ("Type", params.record_type.to_string()),
                     ("Data", data_json),
                     ("Ttl", ttl_val.to_string()),
                 ],
@@ -297,13 +275,10 @@ impl RecordOps for AliEsaProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        _domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let target_ip_str = params.ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
         let data_json = format!(r#"{{"Value":"{}"}}"#, target_ip_str);
 
         let act: AliEsaActionResp = self
@@ -312,7 +287,7 @@ impl RecordOps for AliEsaProvider {
                 "UpdateRecord",
                 vec![
                     ("RecordId", record_id.to_string()),
-                    ("Type", record_type.to_string()),
+                    ("Type", params.record_type.to_string()),
                     ("Data", data_json),
                     ("Ttl", ttl_val.to_string()),
                 ],
@@ -329,12 +304,17 @@ impl RecordOps for AliEsaProvider {
         }
     }
 
-    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        _zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let act: AliEsaActionResp = self
             .request_pop(
                 "POST",
                 "DeleteRecord",
-                vec![("RecordId", record_id.to_string())],
+                vec![("RecordId", record.id.to_string())],
             )
             .await?;
 

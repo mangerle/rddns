@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use crate::util::crypto::hmac_sha256_hex;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -8,10 +8,10 @@ use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const BAIDU_ENDPOINT: &str = "https://bcd.baidubce.com";
 const BAIDU_HOST: &str = "bcd.baidubce.com";
+const BAIDU_DEFAULT_TTL: u32 = 300;
 
 /// 百度云 BCE-AUTH-V1 默认签名有效时间（1800 秒）
 pub const DEFAULT_BCE_EXPIRATION_SECS: u32 = 1800;
@@ -180,21 +180,18 @@ impl RecordOps for BaiduCloudProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub = domain.sub_domain_or_at();
-        let ttl_val = ttl.unwrap_or(300).max(1);
-        let target_ip_str = ip.to_string();
+        let sub = params.domain.sub_domain_or_at();
+        let ttl_val = clamp_ttl(params.ttl, BAIDU_DEFAULT_TTL, MIN_DNS_TTL);
+        let target_ip_str = params.ip.to_string();
 
         let add_payload = json!({
             "domain": sub,
-            "rdType": record_type.to_string(),
+            "rdType": params.record_type.to_string(),
             "ttl": ttl_val,
             "rdata": target_ip_str,
-            "zoneName": domain.root_domain
+            "zoneName": params.domain.root_domain
         });
 
         let _: serde_json::Value = self
@@ -208,23 +205,20 @@ impl RecordOps for BaiduCloudProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub = domain.sub_domain_or_at();
-        let ttl_val = ttl.unwrap_or(300).max(1);
-        let target_ip_str = ip.to_string();
+        let sub = params.domain.sub_domain_or_at();
+        let ttl_val = clamp_ttl(params.ttl, BAIDU_DEFAULT_TTL, MIN_DNS_TTL);
+        let target_ip_str = params.ip.to_string();
         let rec_id_num: u64 = record_id.parse().unwrap_or_default();
 
         let edit_payload = json!({
             "recordId": rec_id_num,
             "domain": sub,
-            "rdType": record_type.to_string(),
+            "rdType": params.record_type.to_string(),
             "ttl": ttl_val,
             "rdata": target_ip_str,
-            "zoneName": domain.root_domain,
+            "zoneName": params.domain.root_domain,
             "view": "default"
         });
 
@@ -235,8 +229,13 @@ impl RecordOps for BaiduCloudProvider {
         Ok(())
     }
 
-    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
-        let rec_id_num: u64 = record_id.parse().unwrap_or_default();
+    async fn delete_record(
+        &self,
+        _zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
+        let rec_id_num: u64 = record.id.parse().unwrap_or_default();
         let del_payload = json!({
             "recordId": rec_id_num,
         });

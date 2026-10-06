@@ -1,13 +1,13 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::net::IpAddr;
 
 const CLOUDNS_ENDPOINT: &str = "https://api.cloudns.net/dns";
+const CLOUDNS_DEFAULT_TTL: u32 = 3600;
 
 /// ClouDNS 提供商
 pub struct ClouDnsProvider {
@@ -109,21 +109,18 @@ impl RecordOps for ClouDnsProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub = domain.sub_domain_or_at();
-        let target_ip_str = ip.to_string();
-        let record_type_str = record_type.to_string();
-        let ttl_val = ttl.unwrap_or(3600).max(60).to_string();
+        let sub = params.domain.sub_domain_or_at();
+        let target_ip_str = params.ip.to_string();
+        let record_type_str = params.record_type.to_string();
+        let ttl_val = clamp_ttl(params.ttl, CLOUDNS_DEFAULT_TTL, MIN_DNS_TTL).to_string();
 
         let add_url = format!("{}/add-record.json", CLOUDNS_ENDPOINT);
         let add_form = [
             ("auth-id", self.auth_id.as_str()),
             ("auth-password", self.auth_password.as_str()),
-            ("domain-name", domain.root_domain.as_str()),
+            ("domain-name", params.domain.root_domain.as_str()),
             ("host", sub),
             ("type", record_type_str.as_str()),
             ("record", target_ip_str.as_str()),
@@ -152,20 +149,17 @@ impl RecordOps for ClouDnsProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub = domain.sub_domain_or_at();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(3600).max(60).to_string();
+        let sub = params.domain.sub_domain_or_at();
+        let target_ip_str = params.ip.to_string();
+        let ttl_val = clamp_ttl(params.ttl, CLOUDNS_DEFAULT_TTL, MIN_DNS_TTL).to_string();
 
         let modify_url = format!("{}/modify-record.json", CLOUDNS_ENDPOINT);
         let modify_form = [
             ("auth-id", self.auth_id.as_str()),
             ("auth-password", self.auth_password.as_str()),
-            ("domain-name", domain.root_domain.as_str()),
+            ("domain-name", params.domain.root_domain.as_str()),
             ("record-id", record_id),
             ("host", sub),
             ("record", target_ip_str.as_str()),
@@ -196,12 +190,17 @@ impl RecordOps for ClouDnsProvider {
         }
     }
 
-    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        _zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let delete_url = format!("{}/delete-record.json", CLOUDNS_ENDPOINT);
         let delete_form = [
             ("auth-id", self.auth_id.as_str()),
             ("auth-password", self.auth_password.as_str()),
-            ("record-id", record_id),
+            ("record-id", record.id.as_str()),
         ];
 
         let resp = self

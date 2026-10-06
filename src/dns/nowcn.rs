@@ -1,13 +1,12 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
-use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
+use crate::util::crypto::build_pop_signed_query;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 
 pub const NOWCN_ENDPOINT: &str = "https://api.now.cn";
 pub const ERANET_ENDPOINT: &str = "https://www.eranet.com";
@@ -134,28 +133,7 @@ impl NowcnProvider {
         params.insert("SignatureNonce".to_string(), nonce);
         params.insert("Timestamp".to_string(), timestamp);
 
-        let canonicalized_query: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
-            .collect();
-        let canonicalized_query_str = canonicalized_query.join("&");
-
-        let string_to_sign = format!(
-            "GET&{}&{}",
-            pop_url_encode("/"),
-            pop_url_encode(&canonicalized_query_str)
-        );
-
-        let sign_key = format!("{}&", self.secret_key);
-        let signature = hmac_sha1_base64(sign_key.as_bytes(), string_to_sign.as_bytes());
-
-        params.insert("Signature".to_string(), signature);
-
-        let final_query: Vec<String> = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
-            .collect();
-        let final_query_str = final_query.join("&");
+        let final_query_str = build_pop_signed_query("GET", &self.secret_key, &params);
 
         let path_prefix = if api_path.starts_with('/') {
             api_path.to_string()
@@ -234,19 +212,16 @@ impl RecordOps for NowcnProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
 
         let mut add_params = BTreeMap::new();
-        add_params.insert("Domain".to_string(), domain.root_domain.clone());
+        add_params.insert("Domain".to_string(), params.domain.root_domain.clone());
         add_params.insert("Host".to_string(), sub.to_string());
-        add_params.insert("Type".to_string(), record_type.to_string());
-        add_params.insert("Value".to_string(), ip.to_string());
+        add_params.insert("Type".to_string(), params.record_type.to_string());
+        add_params.insert("Value".to_string(), params.ip.to_string());
         add_params.insert("Ttl".to_string(), ttl_val.to_string());
 
         let act_resp: NowcnActionResp = self
@@ -266,20 +241,17 @@ impl RecordOps for NowcnProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
 
         let mut mod_params = BTreeMap::new();
         mod_params.insert("Id".to_string(), record_id.to_string());
-        mod_params.insert("Domain".to_string(), domain.root_domain.clone());
+        mod_params.insert("Domain".to_string(), params.domain.root_domain.clone());
         mod_params.insert("Host".to_string(), sub.to_string());
-        mod_params.insert("Type".to_string(), record_type.to_string());
-        mod_params.insert("Value".to_string(), ip.to_string());
+        mod_params.insert("Type".to_string(), params.record_type.to_string());
+        mod_params.insert("Value".to_string(), params.ip.to_string());
         mod_params.insert("Ttl".to_string(), ttl_val.to_string());
 
         let act_resp: NowcnActionResp = self

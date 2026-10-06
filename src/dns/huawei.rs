@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use crate::util::crypto::{
     append_ntp_hint_if_expired, build_canonical_query_string, hmac_sha256_hex, sha256_hex,
 };
@@ -10,9 +10,9 @@ use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const DEFAULT_HUAWEI_ENDPOINT: &str = "https://dns.myhuaweicloud.com";
+const HUAWEI_DEFAULT_TTL: u32 = 300;
 
 /// 华为云 DNS 提供商
 pub struct HuaweiDnsProvider {
@@ -212,16 +212,17 @@ impl RecordOps for HuaweiDnsProvider {
                 r.name.eq_ignore_ascii_case(&hw_domain_name)
                     && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
             })
-            .flat_map(|r| {
+            .map(|r| {
                 let rec_id = r.id;
                 let recs = r.records.unwrap_or_default();
-                if recs.is_empty() {
-                    vec![RemoteRecord::new(rec_id, "")]
+                let value = if recs.len() == 1 {
+                    recs.into_iter().next().unwrap_or_default()
                 } else {
-                    recs.into_iter()
-                        .map(|val| RemoteRecord::new(rec_id.clone(), val))
-                        .collect()
-                }
+                    // 若存在多值 RRSet，拼接所有值使 matches_target 失败，
+                    // 从而触发 update_record 将其原子重写为单一权威目标 IP，消除脏值残留 (P3-20)
+                    recs.join(",")
+                };
+                RemoteRecord::new(rec_id, value)
             })
             .collect();
 
@@ -232,18 +233,15 @@ impl RecordOps for HuaweiDnsProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let hw_domain_name = format!("{}.", domain.full_domain());
-        let ttl_val = ttl.unwrap_or(300).max(1);
+        let hw_domain_name = format!("{}.", params.domain.full_domain());
+        let ttl_val = clamp_ttl(params.ttl, HUAWEI_DEFAULT_TTL, MIN_DNS_TTL);
         let path = format!("/v2.1/zones/{zone}/recordsets");
         let body = json!({
             "name": hw_domain_name,
-            "type": record_type.to_string(),
-            "records": [ip.to_string()],
+            "type": params.record_type.to_string(),
+            "records": [params.ip.to_string()],
             "ttl": ttl_val,
         })
         .to_string();
@@ -260,15 +258,12 @@ impl RecordOps for HuaweiDnsProvider {
         &self,
         zone: &str,
         record_id: &str,
-        _domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(300).max(1);
+        let ttl_val = clamp_ttl(params.ttl, HUAWEI_DEFAULT_TTL, MIN_DNS_TTL);
         let path = format!("/v2.1/zones/{zone}/recordsets/{record_id}");
         let body = json!({
-            "records": [ip.to_string()],
+            "records": [params.ip.to_string()],
             "ttl": ttl_val,
         })
         .to_string();

@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -8,7 +8,6 @@ use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const DNSLA_RECORD_LIST_URL: &str = "https://api.dns.la/api/recordList";
 const DNSLA_RECORD_URL: &str = "https://api.dns.la/api/record";
@@ -140,18 +139,15 @@ impl RecordOps for DnsLaProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
-        let type_int = Self::record_type_to_int(record_type);
-        let target_ip_str = ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
+        let type_int = Self::record_type_to_int(params.record_type);
+        let target_ip_str = params.ip.to_string();
 
         let create_payload = json!({
-            "Domain": domain.root_domain,
+            "Domain": params.domain.root_domain,
             "Host": sub,
             "Type": type_int,
             "Data": target_ip_str,
@@ -188,15 +184,12 @@ impl RecordOps for DnsLaProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
-        let type_int = Self::record_type_to_int(record_type);
-        let target_ip_str = ip.to_string();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
+        let type_int = Self::record_type_to_int(params.record_type);
+        let target_ip_str = params.ip.to_string();
 
         let modify_payload = json!({
             "Id": record_id,
@@ -231,12 +224,17 @@ impl RecordOps for DnsLaProvider {
         }
     }
 
-    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        _zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let resp = self
             .client
             .delete(DNSLA_RECORD_URL)
             .headers(self.build_headers())
-            .query(&[("id", record_id)])
+            .query(&[("id", &record.id)])
             .send()
             .await?;
 

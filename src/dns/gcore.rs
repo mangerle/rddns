@@ -1,15 +1,15 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const GCORE_API_BASE: &str = "https://api.gcore.com/dns/v2";
+const GCORE_DEFAULT_TTL: u32 = 120;
 
 /// Gcore DNS 提供商
 pub struct GcoreProvider {
@@ -177,26 +177,24 @@ impl RecordOps for GcoreProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(120).max(1);
-        let target_ip_str = ip.to_string();
+        let ttl_val = clamp_ttl(params.ttl, GCORE_DEFAULT_TTL, MIN_DNS_TTL);
+        let target_ip_str = params.ip.to_string();
 
-        let full_record_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
-            zone.to_string()
-        } else {
-            format!("{}.{}", domain.sub_domain, zone)
-        };
+        let full_record_name =
+            if params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@" {
+                zone.to_string()
+            } else {
+                format!("{}.{}", params.domain.sub_domain, zone)
+            };
 
         let target_url = format!(
             "{}/zones/{}/{}/{}",
             GCORE_API_BASE,
             url_encode(zone),
             url_encode(&full_record_name),
-            record_type
+            params.record_type
         );
 
         let payload = json!({
@@ -228,26 +226,24 @@ impl RecordOps for GcoreProvider {
         &self,
         zone: &str,
         _record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(120).max(1);
-        let target_ip_str = ip.to_string();
+        let ttl_val = clamp_ttl(params.ttl, GCORE_DEFAULT_TTL, MIN_DNS_TTL);
+        let target_ip_str = params.ip.to_string();
 
-        let full_record_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
-            zone.to_string()
-        } else {
-            format!("{}.{}", domain.sub_domain, zone)
-        };
+        let full_record_name =
+            if params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@" {
+                zone.to_string()
+            } else {
+                format!("{}.{}", params.domain.sub_domain, zone)
+            };
 
         let target_url = format!(
             "{}/zones/{}/{}/{}",
             GCORE_API_BASE,
             url_encode(zone),
             url_encode(&full_record_name),
-            record_type
+            params.record_type
         );
 
         let payload = json!({
@@ -275,8 +271,13 @@ impl RecordOps for GcoreProvider {
         Ok(())
     }
 
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
-        let _ = (zone, record_id);
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
+        let _ = (zone, record, params);
         Ok(())
     }
 }

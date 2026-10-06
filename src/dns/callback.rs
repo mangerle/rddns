@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{
-    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus,
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, SyncStatus, default_ttl,
 };
 use crate::util::http::{create_default_dns_client, url_encode_if};
 use async_trait::async_trait;
@@ -51,7 +51,7 @@ impl CallbackProvider {
         let root_domain = domain.root_domain.clone();
         let sub_domain = domain.sub_domain_or_at();
         let record_type_str = record_type.to_string();
-        let ttl_str = ttl.unwrap_or(600).to_string();
+        let ttl_str = default_ttl(ttl).to_string();
 
         template
             .replace("#{ip}", &url_encode_if(&ip_str, url_encode))

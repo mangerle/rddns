@@ -269,6 +269,49 @@ pub fn build_canonical_query_string<K: AsRef<str>, V: AsRef<str>>(query: &[(K, V
         .join("&")
 }
 
+/// 计算 POP-HMAC-SHA1 待签名串与签名
+///
+/// # 设计原理
+/// - **实现初衷**: 集中统一阿里云 POP 规范 (AliDNS、AliESA、NowCN) 的签名计算与规范化查询构造，消除多处逐行重复代码。
+/// - **核心优势**: 集中保障 URL 编码规范、HMAC-SHA1 签名与参数排序严格一致。
+pub fn compute_pop_signature(
+    method: &str,
+    secret: &str,
+    params: &std::collections::BTreeMap<String, String>,
+) -> (String, String) {
+    let canonicalized_query: Vec<String> = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", pop_url_encode(k), pop_url_encode(v)))
+        .collect();
+    let canonicalized_query_str = canonicalized_query.join("&");
+
+    let string_to_sign = format!(
+        "{}&{}&{}",
+        method,
+        pop_url_encode("/"),
+        pop_url_encode(&canonicalized_query_str)
+    );
+
+    let sign_key = format!("{}&", secret);
+    let signature = hmac_sha1_base64(sign_key.as_bytes(), string_to_sign.as_bytes());
+
+    (canonicalized_query_str, signature)
+}
+
+/// 构造包含 Signature 签名的完整 POP 查询字符串
+pub fn build_pop_signed_query(
+    method: &str,
+    secret: &str,
+    params: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let (canonicalized_query_str, signature) = compute_pop_signature(method, secret, params);
+    format!(
+        "{}&Signature={}",
+        canonicalized_query_str,
+        pop_url_encode(&signature)
+    )
+}
+
 /// 若错误信息或错误码中包含时间戳/时钟过期特征，自动追加 NTP 时间同步提示
 pub fn append_ntp_hint_if_expired(msg: &mut String, code: &str) {
     let lower_msg = msg.to_ascii_lowercase();

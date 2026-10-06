@@ -1,12 +1,11 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const DYNV6_ENDPOINT: &str = "https://dynv6.com/api/v2";
 
@@ -167,16 +166,13 @@ impl RecordOps for Dynv6Provider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        _ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let zone_id: u64 = zone
             .parse()
             .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
+        let full_domain = params.domain.full_domain();
+        let target_ip_str = params.ip.to_string();
 
         let zone_detail: Dynv6Zone = self
             .request(Method::GET, &format!("/zones/{}", zone_id), None)
@@ -184,7 +180,7 @@ impl RecordOps for Dynv6Provider {
         let is_main_domain = full_domain.eq_ignore_ascii_case(&zone_detail.name);
 
         if is_main_domain {
-            let patch_body = match record_type {
+            let patch_body = match params.record_type {
                 DnsRecordType::A => json!({ "ipv4address": target_ip_str }),
                 DnsRecordType::AAAA => json!({ "ipv6prefix": target_ip_str }),
             };
@@ -198,10 +194,10 @@ impl RecordOps for Dynv6Provider {
         } else {
             let sub_name = full_domain
                 .strip_suffix(&format!(".{}", zone_detail.name))
-                .unwrap_or(&domain.sub_domain);
+                .unwrap_or(&params.domain.sub_domain);
             let post_body = json!({
                 "name": sub_name,
-                "type": record_type.to_string(),
+                "type": params.record_type.to_string(),
                 "data": target_ip_str
             });
             let _: serde_json::Value = self
@@ -220,20 +216,17 @@ impl RecordOps for Dynv6Provider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         if record_id == "zone" {
-            self.create_record(zone, domain, record_type, ip, ttl).await
+            self.create_record(zone, params).await
         } else {
             let zone_id: u64 = zone
                 .parse()
                 .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
-            let target_ip_str = ip.to_string();
+            let target_ip_str = params.ip.to_string();
             let patch_body = json!({
-                "type": record_type.to_string(),
+                "type": params.record_type.to_string(),
                 "data": target_ip_str
             });
             let _: serde_json::Value = self
@@ -247,15 +240,20 @@ impl RecordOps for Dynv6Provider {
         }
     }
 
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
-        if record_id != "zone" {
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
+        if record.id != "zone" {
             let zone_id: u64 = zone
                 .parse()
                 .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
             let _: serde_json::Value = self
                 .request(
                     Method::DELETE,
-                    &format!("/zones/{}/records/{}", zone_id, record_id),
+                    &format!("/zones/{}/records/{}", zone_id, record.id),
                     None,
                 )
                 .await?;

@@ -1,13 +1,12 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 
@@ -244,18 +243,15 @@ impl RecordOps for RainYunProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
         let create_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, zone);
         let create_payload = json!({
             "host": sub,
-            "type": record_type.to_string(),
-            "value": ip.to_string(),
+            "type": params.record_type.to_string(),
+            "value": params.ip.to_string(),
             "line": "DEFAULT",
             "ttl": ttl_val,
             "level": 10,
@@ -296,13 +292,10 @@ impl RecordOps for RainYunProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
         let rid = record_id.parse::<i64>().map_err(|e| {
             DnsProviderError::api(
                 "InvalidRecordId",
@@ -312,8 +305,8 @@ impl RecordOps for RainYunProvider {
         let update_url = format!("{}/product/domain/{}/dns", RAINYUN_ENDPOINT, zone);
         let update_payload = json!({
             "host": sub,
-            "type": record_type.to_string(),
-            "value": ip.to_string(),
+            "type": params.record_type.to_string(),
+            "value": params.ip.to_string(),
             "line": "DEFAULT",
             "ttl": ttl_val,
             "level": 10,

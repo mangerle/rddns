@@ -244,3 +244,22 @@ fn test_dns_provider_error_truncation_precedes_sanitization() {
         text.len()
     );
 }
+
+#[test]
+fn test_clamp_ttl_and_default_ttl() {
+    // 默认行为：None 回退为 DEFAULT_DNS_TTL (600)
+    assert_eq!(default_ttl(None), DEFAULT_DNS_TTL);
+    assert_eq!(default_ttl(Some(300)), 300);
+    // 下限钳制：低于 MIN_DNS_TTL (60) 自动抬升至 60
+    assert_eq!(default_ttl(Some(0)), MIN_DNS_TTL);
+    assert_eq!(default_ttl(Some(10)), MIN_DNS_TTL);
+    assert_eq!(default_ttl(Some(60)), MIN_DNS_TTL);
+
+    // 自定义默认值与下限
+    assert_eq!(clamp_ttl(None, 300, 60), 300);
+    assert_eq!(clamp_ttl(Some(120), 300, 60), 120);
+    assert_eq!(clamp_ttl(Some(10), 300, 60), 60);
+    assert_eq!(clamp_ttl(None, 3600, 3600), 3600);
+    assert_eq!(clamp_ttl(Some(1800), 3600, 3600), 3600);
+    assert_eq!(clamp_ttl(Some(7200), 3600, 3600), 7200);
+}

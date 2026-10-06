@@ -1,12 +1,11 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 
 const NSONE_API_ENDPOINT: &str = "https://api.nsone.net/v1/zones";
 
@@ -185,9 +184,9 @@ impl RecordOps for NsOneProvider {
                 .and_then(|ans| ans.first())
                 .and_then(|a| a.answer.first());
             if let Some(ip_str) = current_ip {
-                // NS1 API 以完整的 FQDN (/{zone}/{domain}/{type}) 作为记录唯一主键，
-                // 不存在独立分配的数字 record_id，因此传递 full_domain 作为定位标识 (P2-19)。
-                remotes.push(RemoteRecord::new(full_domain, ip_str));
+                // NS1 API 以完整的 FQDN (/{zone}/{domain}/{type}) 组织记录集，
+                // 每次更新均为 answers 列表原子重写，无独立分配的单条删除 ID (P1-4)。
+                remotes.push(RemoteRecord::set_managed(ip_str));
             }
         }
         Ok(remotes)
@@ -196,21 +195,18 @@ impl RecordOps for NsOneProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let ttl_val = ttl.unwrap_or(60).max(1);
+        let full_domain = params.domain.full_domain();
+        let ttl_val = clamp_ttl(params.ttl, MIN_DNS_TTL, MIN_DNS_TTL);
         let answers = vec![NsOneAnswer {
-            answer: vec![ip.to_string()],
+            answer: vec![params.ip.to_string()],
         }];
 
         let req_payload = NsOneRecordReq {
             zone,
             domain: &full_domain,
-            record_type: &record_type.to_string(),
+            record_type: &params.record_type.to_string(),
             ttl: ttl_val,
             answers,
         };
@@ -220,7 +216,7 @@ impl RecordOps for NsOneProvider {
             NSONE_API_ENDPOINT,
             url_encode(zone),
             url_encode(&full_domain),
-            record_type
+            params.record_type
         );
 
         let resp = self
@@ -240,28 +236,25 @@ impl RecordOps for NsOneProvider {
         &self,
         zone: &str,
         _record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let ttl_val = ttl.unwrap_or(60).max(1);
+        let full_domain = params.domain.full_domain();
+        let ttl_val = clamp_ttl(params.ttl, MIN_DNS_TTL, MIN_DNS_TTL);
         let answers = vec![NsOneAnswer {
-            answer: vec![ip.to_string()],
+            answer: vec![params.ip.to_string()],
         }];
 
         let req_payload = NsOneRecordReq {
             zone,
             domain: &full_domain,
-            record_type: &record_type.to_string(),
+            record_type: &params.record_type.to_string(),
             ttl: ttl_val,
             answers,
         };
 
         let url = format!(
             "{}/{}/{}/{}",
-            NSONE_API_ENDPOINT, zone, full_domain, record_type
+            NSONE_API_ENDPOINT, zone, full_domain, params.record_type
         );
 
         let resp = self

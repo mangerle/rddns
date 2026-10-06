@@ -1,12 +1,11 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const GODADDY_API_BASE: &str = "https://api.godaddy.com/v1";
 
@@ -52,21 +51,18 @@ impl GoDaddyProvider {
     async fn put_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub = domain.sub_domain_or_at();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = params.domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
         let path = format!(
             "{}/domains/{}/records/{}/{}",
-            GODADDY_API_BASE, zone, record_type, sub
+            GODADDY_API_BASE, zone, params.record_type, sub
         );
 
         let body = json!([
             {
-                "data": ip.to_string(),
+                "data": params.ip.to_string(),
                 "ttl": ttl_val
             }
         ]);
@@ -152,10 +148,10 @@ impl RecordOps for GoDaddyProvider {
 
         let records = serde_json::from_str::<Vec<GoDaddyRecord>>(&body)?;
         // GoDaddy DNS REST API 原生未提供独立记录 ID，
-        // 其资源端点按 /{type}/{name} 组织，子域名即为记录集逻辑主键 (P2-19)。
+        // 其资源端点按 /{type}/{name} 组织，更新时以全量 PUT 覆盖记录集，无独立删除 ID (P1-4)。
         let matched = records
             .into_iter()
-            .filter_map(|r| r.data.map(|d| RemoteRecord::new(sub, d)))
+            .filter_map(|r| r.data.map(RemoteRecord::set_managed))
             .collect();
 
         Ok(matched)
@@ -165,12 +161,9 @@ impl RecordOps for GoDaddyProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        self.put_record(zone, domain, record_type, ip, ttl).await
+        self.put_record(zone, params).await
     }
 
     /// 更新既有解析记录
@@ -178,12 +171,9 @@ impl RecordOps for GoDaddyProvider {
         &self,
         zone: &str,
         _record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        self.put_record(zone, domain, record_type, ip, ttl).await
+        self.put_record(zone, params).await
     }
 }
 

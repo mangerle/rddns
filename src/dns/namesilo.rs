@@ -1,9 +1,8 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use reqwest::Client;
-use std::net::IpAddr;
 
 const NAMESILO_API_BASE: &str = "https://www.namesilo.com/api";
 
@@ -125,15 +124,12 @@ impl RecordOps for NameSiloProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub_host = Self::resolve_sub_host(domain);
-        let ttl_val = Self::resolve_ttl(ttl);
-        let rec_type_str = record_type.to_string();
-        let target_ip_str = ip.to_string();
+        let sub_host = Self::resolve_sub_host(params.domain);
+        let ttl_val = Self::resolve_ttl(params.ttl);
+        let rec_type_str = params.record_type.to_string();
+        let target_ip_str = params.ip.to_string();
 
         let add_url = format!("{}/dnsAddRecord", NAMESILO_API_BASE);
         let add_resp = self
@@ -170,14 +166,11 @@ impl RecordOps for NameSiloProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let sub_host = Self::resolve_sub_host(domain);
-        let ttl_val = Self::resolve_ttl(ttl);
-        let target_ip_str = ip.to_string();
+        let sub_host = Self::resolve_sub_host(params.domain);
+        let ttl_val = Self::resolve_ttl(params.ttl);
+        let target_ip_str = params.ip.to_string();
 
         let update_url = format!("{}/dnsUpdateRecord", NAMESILO_API_BASE);
         let update_resp = self

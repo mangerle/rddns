@@ -82,10 +82,7 @@ impl RecordOps for MockOps {
     async fn create_record(
         &self,
         zone: &str,
-        _domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        _ip: &IpAddr,
-        _ttl: Option<u32>,
+        _params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let mut log = self.log.lock();
         log.created += 1;
@@ -97,10 +94,7 @@ impl RecordOps for MockOps {
         &self,
         zone: &str,
         _record_id: &str,
-        _domain: &ParsedDomain,
-        _record_type: DnsRecordType,
-        _ip: &IpAddr,
-        _ttl: Option<u32>,
+        _params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
         let mut log = self.log.lock();
         log.updated += 1;
@@ -108,10 +102,15 @@ impl RecordOps for MockOps {
         Ok(())
     }
 
-    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(
+        &self,
+        zone: &str,
+        record: &RemoteRecord,
+        _params: &RecordParams<'_>,
+    ) -> Result<(), DnsProviderError> {
         let mut log = self.log.lock();
         log.deleted += 1;
-        log.deleted_ids.push(record_id.to_string());
+        log.deleted_ids.push(record.id.to_string());
         log.last_zone = Some(zone.to_string());
         Ok(())
     }
@@ -313,10 +312,7 @@ async fn test_template_uses_default_zone_resolution() {
         async fn create_record(
             &self,
             zone: &str,
-            _domain: &ParsedDomain,
-            _record_type: DnsRecordType,
-            _ip: &IpAddr,
-            _ttl: Option<u32>,
+            _params: &RecordParams<'_>,
         ) -> Result<(), DnsProviderError> {
             *self.captured_zone.lock() = Some(zone.to_string());
             Ok(())
@@ -326,10 +322,7 @@ async fn test_template_uses_default_zone_resolution() {
             &self,
             zone: &str,
             _record_id: &str,
-            _domain: &ParsedDomain,
-            _record_type: DnsRecordType,
-            _ip: &IpAddr,
-            _ttl: Option<u32>,
+            _params: &RecordParams<'_>,
         ) -> Result<(), DnsProviderError> {
             *self.captured_zone.lock() = Some(zone.to_string());
             Ok(())
@@ -381,10 +374,7 @@ async fn test_template_propagates_list_failure() {
         async fn create_record(
             &self,
             _zone: &str,
-            _domain: &ParsedDomain,
-            _record_type: DnsRecordType,
-            _ip: &IpAddr,
-            _ttl: Option<u32>,
+            _params: &RecordParams<'_>,
         ) -> Result<(), DnsProviderError> {
             panic!("查询失败时不应进入创建分支");
         }
@@ -393,10 +383,7 @@ async fn test_template_propagates_list_failure() {
             &self,
             _zone: &str,
             _record_id: &str,
-            _domain: &ParsedDomain,
-            _record_type: DnsRecordType,
-            _ip: &IpAddr,
-            _ttl: Option<u32>,
+            _params: &RecordParams<'_>,
         ) -> Result<(), DnsProviderError> {
             panic!("查询失败时不应进入更新分支");
         }
@@ -412,4 +399,17 @@ async fn test_template_propagates_list_failure() {
     .await;
 
     assert!(result.is_err(), "查询失败时应向上传播错误");
+}
+
+#[test]
+fn test_remote_record_set_managed_and_has_id() {
+    let discrete = RemoteRecord::new("rec-123", "1.2.3.4");
+    assert!(discrete.has_id());
+    assert_eq!(discrete.id, "rec-123");
+    assert_eq!(discrete.value, "1.2.3.4");
+
+    let managed = RemoteRecord::set_managed("5.6.7.8");
+    assert!(!managed.has_id());
+    assert!(managed.id.is_empty());
+    assert_eq!(managed.value, "5.6.7.8");
 }

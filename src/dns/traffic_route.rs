@@ -1,6 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
 use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -8,7 +8,6 @@ use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 const VOLC_HOST: &str = "open.volcengineapi.com";
 const VOLC_ENDPOINT: &str = "https://open.volcengineapi.com";
@@ -223,19 +222,16 @@ impl RecordOps for TrafficRouteProvider {
     async fn create_record(
         &self,
         zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
         let zid_num = Self::parse_zid(zone)?;
         let create_body = json!({
             "ZID": zid_num,
             "Host": sub,
-            "Type": record_type.to_string(),
-            "Value": ip.to_string(),
+            "Type": params.record_type.to_string(),
+            "Value": params.ip.to_string(),
             "TTL": ttl_val
         });
 
@@ -249,20 +245,17 @@ impl RecordOps for TrafficRouteProvider {
         &self,
         zone: &str,
         record_id: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(600).max(1);
-        let sub = domain.sub_domain_or_at();
+        let ttl_val = default_ttl(params.ttl);
+        let sub = params.domain.sub_domain_or_at();
         let zid_num = Self::parse_zid(zone)?;
         let update_body = json!({
             "RecordID": record_id,
             "ZID": zid_num,
             "Host": sub,
-            "Type": record_type.to_string(),
-            "Value": ip.to_string(),
+            "Type": params.record_type.to_string(),
+            "Value": params.ip.to_string(),
             "TTL": ttl_val
         });
 

@@ -1,13 +1,12 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::ops::{RecordOps, RemoteRecord};
-use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::net::IpAddr;
 
 /// Vercel API 基础服务地址
 const VERCEL_API_BASE: &str = "https://api.vercel.com";
@@ -192,28 +191,25 @@ impl RecordOps for VercelProvider {
     async fn create_record(
         &self,
         _zone: &str,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(60).max(60);
-        let sub_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+        let ttl_val = clamp_ttl(params.ttl, MIN_DNS_TTL, MIN_DNS_TTL);
+        let sub_name = if params.domain.sub_domain.is_empty() || params.domain.sub_domain == "@" {
             ""
         } else {
-            &domain.sub_domain
+            &params.domain.sub_domain
         };
 
         let create_url = self.append_team_id(&format!(
             "{}/v2/domains/{}/records",
             VERCEL_API_BASE,
-            url_encode(&domain.root_domain)
+            url_encode(&params.domain.root_domain)
         ));
 
         let create_payload = json!({
             "name": sub_name,
-            "type": record_type.to_string(),
-            "value": ip.to_string(),
+            "type": params.record_type.to_string(),
+            "value": params.ip.to_string(),
             "ttl": ttl_val,
             "comment": "Created by rddns"
         });
@@ -236,12 +232,9 @@ impl RecordOps for VercelProvider {
         &self,
         _zone: &str,
         record_id: &str,
-        _domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
-        let ttl_val = ttl.unwrap_or(60).max(60);
+        let ttl_val = clamp_ttl(params.ttl, MIN_DNS_TTL, MIN_DNS_TTL);
         let update_url = self.append_team_id(&format!(
             "{}/v1/domains/records/{}",
             VERCEL_API_BASE,
@@ -249,8 +242,8 @@ impl RecordOps for VercelProvider {
         ));
 
         let update_payload = json!({
-            "type": record_type.to_string(),
-            "value": ip.to_string(),
+            "type": params.record_type.to_string(),
+            "value": params.ip.to_string(),
             "ttl": ttl_val
         });
 

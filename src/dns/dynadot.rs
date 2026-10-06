@@ -1,5 +1,7 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::trait_def::{
+    DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult, default_ttl,
+};
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -109,7 +111,7 @@ impl DnsProvider for DynadotProvider {
     ) -> Result<SyncRecordResult, DnsProviderError> {
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1).to_string();
+        let ttl_val = default_ttl(ttl).to_string();
         let record_type_str = record_type.to_string();
 
         let is_root = domain.sub_domain.is_empty() || domain.sub_domain == "@";
