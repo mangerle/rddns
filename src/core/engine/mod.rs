@@ -6,10 +6,10 @@ pub(crate) mod sync;
 mod tests;
 
 use crate::config::storage::ConfigManager;
-use crate::core::domain::parse_domain_list_with_invalid;
+use crate::core::domain::parse_domain_list_split_invalid;
 use crate::core::state::StateManager;
 use crate::dns::create_dns_provider;
-use crate::dns::trait_def::DnsRecordType;
+use crate::dns::trait_def::{DnsRecordType, SyncRecordResult};
 use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::util::wait_internet::wait_for_internet;
 use chrono::Local;
@@ -79,6 +79,31 @@ impl DdnsEngine {
     /// 供上层（如集成测试、状态查询端点）读取引擎所持有的状态实例。
     pub fn state_manager(&self) -> StateManager {
         self.state_manager.clone()
+    }
+
+    /// 将格式非法的域名条目转换为同步失败记录 (P1-17)
+    ///
+    /// # 设计原理
+    /// 非法域名的存在本身必须反映到同步结果中——若被静默忽略，引擎会判定
+    /// 本轮为全绿健康，用户将完全无从察觉自己的域名配置有误。
+    ///
+    /// 此处构造逻辑从 `core::domain` 上移至引擎层，使该模块得以回归纯基础
+    /// 设施（不依赖 `dns`），从而解除 `config → core` 的逆向依赖。
+    fn build_invalid_domain_results(
+        invalid_domains: Vec<String>,
+        record_type: DnsRecordType,
+    ) -> Vec<SyncRecordResult> {
+        invalid_domains
+            .into_iter()
+            .map(|domain| {
+                SyncRecordResult::failed(
+                    domain,
+                    record_type,
+                    "未知/解析失败",
+                    "域名格式非法或无法识别有效根域名",
+                )
+            })
+            .collect()
     }
 
     /// 执行单次全量任务检查与同步 (多任务并发执行)
@@ -197,13 +222,24 @@ impl DdnsEngine {
             }
         }
 
+        // 域名解析与失败记录构造在此处编排（P1-17）：
+        // `core::domain` 已回归纯基础设施（不再构造 DNS 同步结果），
+        // 同步失败记录的生成上移至引擎层，保持 `domain` 不依赖 `dns`。
         let (parsed_v4, invalid_v4) = if task.ipv4.enabled {
-            parse_domain_list_with_invalid(&task.ipv4.domains, DnsRecordType::A)
+            let (ok, bad) = parse_domain_list_split_invalid(&task.ipv4.domains);
+            (
+                ok,
+                Self::build_invalid_domain_results(bad, DnsRecordType::A),
+            )
         } else {
             (Vec::new(), Vec::new())
         };
         let (parsed_v6, invalid_v6) = if task.ipv6.enabled {
-            parse_domain_list_with_invalid(&task.ipv6.domains, DnsRecordType::AAAA)
+            let (ok, bad) = parse_domain_list_split_invalid(&task.ipv6.domains);
+            (
+                ok,
+                Self::build_invalid_domain_results(bad, DnsRecordType::AAAA),
+            )
         } else {
             (Vec::new(), Vec::new())
         };

@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::model::{AppConfig, DnsTaskConfig, IpFetchConfig, IpSourceType, ProviderConfig};
-use crate::core::domain::{ParsedDomain, parse_domain_list, parse_domain_list_with_invalid};
+use crate::core::domain::{ParsedDomain, parse_domain_list, parse_domain_list_split_invalid};
+use crate::core::engine::DdnsEngine;
 use crate::core::state::TaskRuntimeState;
 use crate::dns::trait_def::{DnsRecordType, SyncRecordResult, SyncStatus};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -500,17 +501,27 @@ async fn test_run_loop_cancelled_via_token_when_running() {
 }
 
 #[test]
-fn test_parse_domain_list_with_invalid_captures_errors() {
+fn test_parse_domain_list_split_invalid_captures_errors() {
+    // 回归用例 (P1-17)：非法域名必须被显式收集并最终生成同步失败记录，
+    // 否则引擎会判定本轮全绿健康，用户无从察觉域名配置有误。
+    // 本用例覆盖拆分后的两阶段职责：先由 domain 层分离合法/非法条目，
+    // 再由引擎层将非法条目构造成失败记录。
     let raw = vec![
         "valid.example.com".to_string(),
         "localhost".to_string(),
         "".to_string(),
         "# 这是注释".to_string(),
     ];
-    let (parsed, invalid) = parse_domain_list_with_invalid(&raw, DnsRecordType::A);
+    let (parsed, invalid) = parse_domain_list_split_invalid(&raw);
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].full_domain(), "valid.example.com");
+    // 空串与注释行被跳过，不计入非法条目
     assert_eq!(invalid.len(), 1);
-    assert_eq!(invalid[0].domain, "localhost");
-    assert_eq!(invalid[0].status, SyncStatus::Failed);
+    assert_eq!(invalid[0], "localhost");
+
+    // 引擎层将非法条目构造成失败记录
+    let results = DdnsEngine::build_invalid_domain_results(invalid, DnsRecordType::A);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].domain, "localhost");
+    assert_eq!(results[0].status, SyncStatus::Failed);
 }

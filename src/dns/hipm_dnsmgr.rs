@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -254,87 +255,112 @@ impl HipmDnsMgrProvider {
 }
 
 #[async_trait]
-impl DnsProvider for HipmDnsMgrProvider {
+impl RecordOps for HipmDnsMgrProvider {
     fn provider_name(&self) -> &'static str {
         "HiPM DNSMgr"
     }
 
-    async fn sync_record(
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let domain_id = self.get_domain_id(root_domain).await?;
+        Ok(domain_id.to_string())
+    }
+
+    async fn list_records(
         &self,
+        zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let domain_id: i64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
         let sub = domain.sub_domain_or_at();
-
-        // 1. 获取 Domain ID
-        let domain_id = self.get_domain_id(&domain.root_domain).await?;
-
-        // 2. 查询已有记录
         let existing = self
             .get_record(domain_id, sub, &record_type.to_string())
             .await?;
 
-        if let Some(record) = existing {
-            if record.value == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        Ok(existing
+            .into_iter()
+            .map(|record| {
+                let record_id_str = match &record.id {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    _ => record.id.to_string(),
+                };
+                RemoteRecord::new(record_id_str, record.value)
+            })
+            .collect())
+    }
 
-            let record_id_str = match &record.id {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                _ => record.id.to_string(),
-            };
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let domain_id: i64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
+        let sub = domain.sub_domain_or_at();
+        let target_ip_str = ip.to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
 
-            // 更新记录 (PUT)
-            let update_payload = json!({
-                "name": sub,
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "ttl": ttl_val,
-                "line": "0"
-            });
+        let create_payload = json!({
+            "name": sub,
+            "type": record_type.to_string(),
+            "value": target_ip_str,
+            "ttl": ttl_val,
+            "line": "0"
+        });
 
-            let path = format!("/domains/{}/records/{}", domain_id, record_id_str);
-            self.request_api(reqwest::Method::PUT, &path, &[], Some(update_payload))
-                .await?;
+        let path = format!("/domains/{}/records", domain_id);
+        self.request_api(reqwest::Method::POST, &path, &[], Some(create_payload))
+            .await?;
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 创建记录 (POST)
-            let create_payload = json!({
-                "name": sub,
-                "type": record_type.to_string(),
-                "value": target_ip_str,
-                "ttl": ttl_val,
-                "line": "0"
-            });
+        Ok(())
+    }
 
-            let path = format!("/domains/{}/records", domain_id);
-            self.request_api(reqwest::Method::POST, &path, &[], Some(create_payload))
-                .await?;
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let domain_id: i64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
+        let sub = domain.sub_domain_or_at();
+        let target_ip_str = ip.to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
 
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        let update_payload = json!({
+            "name": sub,
+            "type": record_type.to_string(),
+            "value": target_ip_str,
+            "ttl": ttl_val,
+            "line": "0"
+        });
+
+        let path = format!("/domains/{}/records/{}", domain_id, record_id);
+        self.request_api(reqwest::Method::PUT, &path, &[], Some(update_payload))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let domain_id: i64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
+        let path = format!("/domains/{}/records/{}", domain_id, record_id);
+        self.request_api(reqwest::Method::DELETE, &path, &[], None)
+            .await?;
+        Ok(())
     }
 }
 

@@ -33,7 +33,7 @@ pub enum NotifyError {
 /// `Display` 与 `Debug` 两个格式化出口共用本函数，确保二者行为一致，
 /// 杜绝因实现分叉导致某一出口漏脱敏。
 fn sanitized_text(msg: &str) -> String {
-    crate::dns::trait_def::sanitize_sensitive_url_params(msg)
+    crate::util::text::sanitize_sensitive_params(msg)
 }
 
 impl fmt::Debug for NotifyError {

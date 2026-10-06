@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::crypto::hmac_sha256_hex;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -27,7 +28,6 @@ struct BaiduRecord {
     #[serde(rename = "recordId")]
     record_id: u64,
     domain: String,
-    view: Option<String>,
     #[serde(rename = "rdtype")]
     rd_type: String,
     rdata: String,
@@ -142,24 +142,18 @@ impl BaiduCloudProvider {
 }
 
 #[async_trait]
-impl DnsProvider for BaiduCloudProvider {
+impl RecordOps for BaiduCloudProvider {
     fn provider_name(&self) -> &'static str {
         "百度智能云 (Baidu Cloud)"
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(300).max(1);
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
-
-        // 1. 查询当前根域下的所有解析记录
         let list_payload = json!({
             "domain": domain.root_domain,
             "pageNum": 1,
@@ -171,63 +165,87 @@ impl DnsProvider for BaiduCloudProvider {
             .await?;
 
         let records = list_resp.result.unwrap_or_default();
-        let matched = records.into_iter().find(|r| {
-            r.domain.eq_ignore_ascii_case(sub)
-                && r.rd_type.eq_ignore_ascii_case(&record_type.to_string())
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                r.domain.eq_ignore_ascii_case(sub)
+                    && r.rd_type.eq_ignore_ascii_case(&record_type.to_string())
+            })
+            .map(|r| RemoteRecord::new(r.record_id.to_string(), r.rdata))
+            .collect();
+
+        Ok(matched)
+    }
+
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let ttl_val = ttl.unwrap_or(300).max(1);
+        let target_ip_str = ip.to_string();
+
+        let add_payload = json!({
+            "domain": sub,
+            "rdType": record_type.to_string(),
+            "ttl": ttl_val,
+            "rdata": target_ip_str,
+            "zoneName": domain.root_domain
         });
 
-        if let Some(existing) = matched {
-            if existing.rdata == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        let _: serde_json::Value = self
+            .post_json("/v1/domain/resolve/add", add_payload)
+            .await?;
 
-            // 修改记录
-            let edit_payload = json!({
-                "recordId": existing.record_id,
-                "domain": sub,
-                "rdType": record_type.to_string(),
-                "ttl": ttl_val,
-                "rdata": target_ip_str,
-                "zoneName": domain.root_domain,
-                "view": existing.view.unwrap_or_else(|| "default".to_string())
-            });
+        Ok(())
+    }
 
-            let _: serde_json::Value = self
-                .post_json("/v1/domain/resolve/edit", edit_payload)
-                .await?;
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let ttl_val = ttl.unwrap_or(300).max(1);
+        let target_ip_str = ip.to_string();
+        let rec_id_num: u64 = record_id.parse().unwrap_or_default();
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        } else {
-            // 创建记录
-            let add_payload = json!({
-                "domain": sub,
-                "rdType": record_type.to_string(),
-                "ttl": ttl_val,
-                "rdata": target_ip_str,
-                "zoneName": domain.root_domain
-            });
+        let edit_payload = json!({
+            "recordId": rec_id_num,
+            "domain": sub,
+            "rdType": record_type.to_string(),
+            "ttl": ttl_val,
+            "rdata": target_ip_str,
+            "zoneName": domain.root_domain,
+            "view": "default"
+        });
 
-            let _: serde_json::Value = self
-                .post_json("/v1/domain/resolve/add", add_payload)
-                .await?;
+        let _: serde_json::Value = self
+            .post_json("/v1/domain/resolve/edit", edit_payload)
+            .await?;
 
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        Ok(())
+    }
+
+    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let rec_id_num: u64 = record_id.parse().unwrap_or_default();
+        let del_payload = json!({
+            "recordId": rec_id_num,
+        });
+
+        let _: serde_json::Value = self
+            .post_json("/v1/domain/resolve/delete", del_payload)
+            .await?;
+
+        Ok(())
     }
 }
 

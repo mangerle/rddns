@@ -1,10 +1,10 @@
 use crate::core::domain::ParsedDomain;
+use crate::dns::ops::{RecordOps, RemoteRecord};
 use crate::dns::tencent_eo_types::*;
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
-use log::{debug, info};
 use serde_json::json;
 use std::net::IpAddr;
 
@@ -43,10 +43,9 @@ impl TencentEoProvider {
 
         // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
         let client = create_default_dns_client(http_interface);
+        let tc3 = Tc3Client::new(client, secret_id, secret_key, TEO_ENDPOINT);
 
-        Ok(Self {
-            tc3: Tc3Client::new(client, secret_id, secret_key, TEO_ENDPOINT),
-        })
+        Ok(Self { tc3 })
     }
 
     /// 获取 Zone ID
@@ -62,13 +61,6 @@ impl TencentEoProvider {
 
         let resp: TeoZoneResp = self.tc3.request_api("DescribeZones", payload).await?;
 
-        if let Some(err) = resp.response.error {
-            return Err(DnsProviderError::ApiError {
-                code: err.code,
-                message: err.message,
-            });
-        }
-
         let zones = resp.response.zones.unwrap_or_default();
         let matched = zones
             .into_iter()
@@ -76,6 +68,13 @@ impl TencentEoProvider {
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
         Ok(matched.zone_id)
+    }
+
+    fn is_origin_group(domain: &ParsedDomain) -> bool {
+        domain.custom_params.contains_key("GroupId")
+            || domain.custom_params.contains_key("group_id")
+            || domain.custom_params.contains_key("OriginGroupName")
+            || domain.custom_params.contains_key("origin_group_name")
     }
 
     /// 计算合并后的源站组记录并检测是否产生实际变动
@@ -105,7 +104,7 @@ impl TencentEoProvider {
         }
 
         if !matched_existing {
-            if current_records.len() <= 1 {
+            if current_records.is_empty() {
                 updated_records = vec![json!({
                     "Record": target_ip,
                     "Type": "IP_DOMAIN",
@@ -129,15 +128,11 @@ impl TencentEoProvider {
         (updated_records, is_unchanged)
     }
 
-    /// 同步 EdgeOne 源站组 (OriginGroup) 中的后端源站 IP
-    async fn sync_origin_group(
+    async fn get_origin_group(
         &self,
         zone_id: &str,
         domain: &ParsedDomain,
-        target_ip_str: &str,
-        record_type: DnsRecordType,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
+    ) -> Result<TeoOriginGroup, DnsProviderError> {
         let group_id_opt = domain
             .custom_params
             .get("GroupId")
@@ -148,13 +143,6 @@ impl TencentEoProvider {
             .get("OriginGroupName")
             .or_else(|| domain.custom_params.get("origin_group_name"))
             .cloned();
-
-        let weight_val = domain
-            .custom_params
-            .get("Weight")
-            .or_else(|| domain.custom_params.get("weight"))
-            .and_then(|w| w.parse::<u32>().ok())
-            .unwrap_or(100);
 
         let mut og_filters = Vec::new();
         if let Some(ref gid) = group_id_opt {
@@ -169,15 +157,8 @@ impl TencentEoProvider {
             .request_api("DescribeOriginGroup", og_describe_payload)
             .await?;
 
-        if let Some(err) = og_resp.response.error {
-            return Err(DnsProviderError::ApiError {
-                code: err.code,
-                message: format!("查询 EdgeOne 源站组失败: {}", err.message),
-            });
-        }
-
         let groups = og_resp.response.origin_groups.unwrap_or_default();
-        let matched_group = groups
+        groups
             .into_iter()
             .find(|g| {
                 if let Some(ref gid) = group_id_opt {
@@ -194,143 +175,80 @@ impl TencentEoProvider {
                     "未找到指定的 EdgeOne 源站组 (ZoneId: {}, GroupId: {:?}, GroupName: {:?})",
                     zone_id, group_id_opt, group_name_opt
                 ),
-            })?;
+            })
+    }
+}
 
-        let current_records = matched_group.records.unwrap_or_default();
-        let (updated_records, is_unchanged) =
-            Self::compute_updated_origin_records(&current_records, target_ip_str, weight_val);
-
-        if is_unchanged {
-            debug!(
-                "[{}] EdgeOne 源站组 [{}] 记录未变化 ({}), 跳过更新",
-                self.provider_name(),
-                matched_group.name,
-                target_ip_str
-            );
-            return Ok(SyncRecordResult::unchanged(
-                full_domain,
-                record_type,
-                target_ip_str,
-            ));
-        }
-
-        let modify_og_payload = json!({
-            "ZoneId": zone_id,
-            "GroupId": matched_group.group_id,
-            "Name": matched_group.name,
-            "Type": "GENERAL",
-            "Records": updated_records
-        });
-
-        let act_resp: TeoActionResp = self
-            .tc3
-            .request_api("ModifyOriginGroup", modify_og_payload)
-            .await?;
-
-        if let Some(err) = act_resp.response.error {
-            return Err(DnsProviderError::ApiError {
-                code: err.code,
-                message: format!("修改 EdgeOne 源站组失败: {}", err.message),
-            });
-        }
-
-        info!(
-            "[{}] 成功同步 EdgeOne 源站组 [{}] -> IP: {}",
-            self.provider_name(),
-            matched_group.name,
-            target_ip_str
-        );
-
-        Ok(SyncRecordResult::updated(
-            full_domain,
-            record_type,
-            target_ip_str,
-        ))
+#[async_trait]
+impl RecordOps for TencentEoProvider {
+    fn provider_name(&self) -> &'static str {
+        "腾讯云 EdgeOne (EO)"
     }
 
-    /// 同步 EdgeOne 普通权威 DNS 解析记录
-    async fn sync_standard_dns_record(
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        self.get_zone_id(root_domain).await
+    }
+
+    async fn list_records(
         &self,
-        zone_id: &str,
+        zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        target_ip_str: &str,
-        ttl_val: u32,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let describe_payload = json!({
-            "ZoneId": zone_id,
-            "Filters": [
-                { "Name": "name", "Values": [full_domain] },
-                { "Name": "type", "Values": [record_type.to_string()] }
-            ]
-        });
-
-        let rec_resp: TeoRecordResp = self
-            .tc3
-            .request_api("DescribeDnsRecords", describe_payload)
-            .await?;
-
-        if let Some(err) = rec_resp.response.error {
-            return Err(DnsProviderError::ApiError {
-                code: err.code,
-                message: err.message,
-            });
-        }
-
-        let records = rec_resp.response.dns_records.unwrap_or_default();
-        let matched = records.into_iter().find(|r| {
-            domain.matches_record_name(&r.name)
-                && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
-        });
-
-        if let Some(existing) = matched {
-            if existing.content == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            let record_id = existing.record_id.unwrap_or_default();
-            let modify_payload = json!({
-                "ZoneId": zone_id,
-                "DnsRecords": [
-                    {
-                        "RecordId": record_id,
-                        "ZoneId": zone_id,
-                        "Name": full_domain,
-                        "Type": record_type.to_string(),
-                        "Content": target_ip_str,
-                        "Location": "Default",
-                        "TTL": ttl_val
-                    }
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        if Self::is_origin_group(domain) {
+            let matched_group = self.get_origin_group(zone, domain).await?;
+            let current_records = matched_group.records.unwrap_or_default();
+            let remotes = current_records
+                .into_iter()
+                .map(|r| RemoteRecord::new(r.record.clone(), r.record))
+                .collect();
+            Ok(remotes)
+        } else {
+            let full_domain = domain.full_domain();
+            let describe_payload = json!({
+                "ZoneId": zone,
+                "Filters": [
+                    { "Name": "name", "Values": [full_domain] },
+                    { "Name": "type", "Values": [record_type.to_string()] }
                 ]
             });
 
-            let act_resp: TeoActionResp = self
+            let rec_resp: TeoRecordResp = self
                 .tc3
-                .request_api("ModifyDnsRecords", modify_payload)
+                .request_api("DescribeDnsRecords", describe_payload)
                 .await?;
 
-            if let Some(err) = act_resp.response.error {
-                return Err(DnsProviderError::ApiError {
-                    code: err.code,
-                    message: format!("EdgeOne 更新记录失败: {}", err.message),
-                });
-            }
+            let records = rec_resp.response.dns_records.unwrap_or_default();
+            let matched = records
+                .into_iter()
+                .filter(|r| {
+                    domain.matches_record_name(&r.name)
+                        && r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+                })
+                .map(|r| RemoteRecord::new(r.record_id.unwrap_or_default(), r.content))
+                .collect();
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+            Ok(matched)
+        }
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let target_ip_str = ip.to_string();
+        if Self::is_origin_group(domain) {
+            self.update_record(zone, "", domain, record_type, ip, ttl)
+                .await
         } else {
+            let full_domain = domain.full_domain();
+            let ttl_val = ttl.unwrap_or(600).max(1);
             let create_payload = json!({
-                "ZoneId": zone_id,
+                "ZoneId": zone,
                 "Name": full_domain,
                 "Type": record_type.to_string(),
                 "Content": target_ip_str,
@@ -338,57 +256,91 @@ impl TencentEoProvider {
                 "TTL": ttl_val
             });
 
-            let act_resp: TeoActionResp = self
+            let _act: TeoActionResp = self
                 .tc3
                 .request_api("CreateDnsRecord", create_payload)
                 .await?;
 
-            if let Some(err) = act_resp.response.error {
-                return Err(DnsProviderError::ApiError {
-                    code: err.code,
-                    message: format!("EdgeOne 创建记录失败: {}", err.message),
-                });
-            }
-
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+            Ok(())
         }
     }
-}
 
-#[async_trait]
-impl DnsProvider for TencentEoProvider {
-    fn provider_name(&self) -> &'static str {
-        "腾讯云 EdgeOne (EO)"
-    }
-
-    async fn sync_record(
+    async fn update_record(
         &self,
+        zone: &str,
+        record_id: &str,
         domain: &ParsedDomain,
-        record_type: DnsRecordType,
+        _record_type: DnsRecordType,
         ip: &IpAddr,
         ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let zone_id = self.get_zone_id(&domain.root_domain).await?;
+    ) -> Result<(), DnsProviderError> {
         let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+        if Self::is_origin_group(domain) {
+            let matched_group = self.get_origin_group(zone, domain).await?;
+            let weight_val = domain
+                .custom_params
+                .get("Weight")
+                .or_else(|| domain.custom_params.get("weight"))
+                .and_then(|w| w.parse::<u32>().ok())
+                .unwrap_or(100);
 
-        let is_origin_group = domain.custom_params.contains_key("GroupId")
-            || domain.custom_params.contains_key("group_id")
-            || domain.custom_params.contains_key("OriginGroupName")
-            || domain.custom_params.contains_key("origin_group_name");
+            let current_records = matched_group.records.unwrap_or_default();
+            let (updated_records, _) =
+                Self::compute_updated_origin_records(&current_records, &target_ip_str, weight_val);
 
-        if is_origin_group {
-            self.sync_origin_group(&zone_id, domain, &target_ip_str, record_type)
-                .await
+            let modify_og_payload = json!({
+                "ZoneId": zone,
+                "GroupId": matched_group.group_id,
+                "Name": matched_group.name,
+                "Type": "GENERAL",
+                "Records": updated_records
+            });
+
+            let _act: TeoActionResp = self
+                .tc3
+                .request_api("ModifyOriginGroup", modify_og_payload)
+                .await?;
+
+            Ok(())
         } else {
-            self.sync_standard_dns_record(&zone_id, domain, record_type, &target_ip_str, ttl_val)
-                .await
+            let full_domain = domain.full_domain();
+            let ttl_val = ttl.unwrap_or(600).max(1);
+            let modify_payload = json!({
+                "ZoneId": zone,
+                "DnsRecords": [
+                    {
+                        "RecordId": record_id,
+                        "ZoneId": zone,
+                        "Name": full_domain,
+                        "Type": _record_type.to_string(),
+                        "Content": target_ip_str,
+                        "Location": "Default",
+                        "TTL": ttl_val
+                    }
+                ]
+            });
+
+            let _act: TeoActionResp = self
+                .tc3
+                .request_api("ModifyDnsRecords", modify_payload)
+                .await?;
+
+            Ok(())
         }
+    }
+
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let delete_payload = json!({
+            "ZoneId": zone,
+            "RecordIds": [record_id]
+        });
+
+        let _act: TeoActionResp = self
+            .tc3
+            .request_api("DeleteDnsRecords", delete_payload)
+            .await?;
+
+        Ok(())
     }
 }
 

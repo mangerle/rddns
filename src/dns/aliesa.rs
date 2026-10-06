@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::crypto::{hmac_sha1_base64, pop_url_encode};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -212,33 +213,30 @@ impl AliEsaProvider {
 }
 
 #[async_trait]
-impl DnsProvider for AliEsaProvider {
+impl RecordOps for AliEsaProvider {
     fn provider_name(&self) -> &'static str {
         "阿里云 ESA (Edge Security Acceleration)"
     }
 
-    async fn sync_record(
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let site_id = self.get_site_id(root_domain).await?;
+        Ok(site_id.to_string())
+    }
+
+    async fn list_records(
         &self,
+        zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
-
-        // 1. 获取站点 ID
-        let site_id = self.get_site_id(&domain.root_domain).await?;
-
-        // 2. 获取现有记录
         let rec_resp: AliEsaRecordResp = self
             .request_pop(
                 "GET",
                 "ListRecords",
                 vec![
-                    ("SiteId", site_id.to_string()),
-                    ("RecordName", full_domain.clone()),
+                    ("SiteId", zone.to_string()),
+                    ("RecordName", full_domain),
                     ("Type", record_type.to_string()),
                 ],
             )
@@ -247,83 +245,106 @@ impl DnsProvider for AliEsaProvider {
         let records = rec_resp.records.unwrap_or_default();
         let matched = records
             .into_iter()
-            .find(|r| domain.matches_record_name(&r.record_name));
+            .filter(|r| domain.matches_record_name(&r.record_name))
+            .filter_map(|r| {
+                r.data
+                    .and_then(|d| d.value)
+                    .map(|v| RemoteRecord::new(r.record_id.to_string(), v))
+            })
+            .collect();
 
+        Ok(matched)
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let full_domain = domain.full_domain();
+        let target_ip_str = ip.to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
         let data_json = format!(r#"{{"Value":"{}"}}"#, target_ip_str);
 
-        if let Some(existing) = matched {
-            let is_matched = existing
-                .data
-                .as_ref()
-                .and_then(|d| d.value.as_deref())
-                .map(|v| v == target_ip_str)
-                .unwrap_or(false);
+        let act: AliEsaActionResp = self
+            .request_pop(
+                "POST",
+                "CreateRecord",
+                vec![
+                    ("SiteId", zone.to_string()),
+                    ("RecordName", full_domain),
+                    ("Type", record_type.to_string()),
+                    ("Data", data_json),
+                    ("Ttl", ttl_val.to_string()),
+                ],
+            )
+            .await?;
 
-            if is_matched {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
-            // 更新记录 (POST UpdateRecord)
-            let act: AliEsaActionResp = self
-                .request_pop(
-                    "POST",
-                    "UpdateRecord",
-                    vec![
-                        ("RecordId", existing.record_id.to_string()),
-                        ("Type", record_type.to_string()),
-                        ("Data", data_json),
-                        ("Ttl", ttl_val.to_string()),
-                    ],
-                )
-                .await?;
-
-            if act.record_id.is_some() || act.request_id.is_some() {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                Err(DnsProviderError::ApiError {
-                    code: "AliEsaUpdateError".to_string(),
-                    message: "阿里云 ESA 更新解析记录未返回有效结果".to_string(),
-                })
-            }
+        if act.record_id.is_some() || act.request_id.is_some() {
+            Ok(())
         } else {
-            // 创建记录 (POST CreateRecord)
-            let act: AliEsaActionResp = self
-                .request_pop(
-                    "POST",
-                    "CreateRecord",
-                    vec![
-                        ("SiteId", site_id.to_string()),
-                        ("RecordName", full_domain.clone()),
-                        ("Type", record_type.to_string()),
-                        ("Data", data_json),
-                        ("Ttl", ttl_val.to_string()),
-                    ],
-                )
-                .await?;
+            Err(DnsProviderError::ApiError {
+                code: "AliEsaCreateError".to_string(),
+                message: "阿里云 ESA 创建解析记录未返回有效结果".to_string(),
+            })
+        }
+    }
 
-            if act.record_id.is_some() || act.request_id.is_some() {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                Err(DnsProviderError::ApiError {
-                    code: "AliEsaCreateError".to_string(),
-                    message: "阿里云 ESA 创建解析记录未返回有效结果".to_string(),
-                })
-            }
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        _domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let target_ip_str = ip.to_string();
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let data_json = format!(r#"{{"Value":"{}"}}"#, target_ip_str);
+
+        let act: AliEsaActionResp = self
+            .request_pop(
+                "POST",
+                "UpdateRecord",
+                vec![
+                    ("RecordId", record_id.to_string()),
+                    ("Type", record_type.to_string()),
+                    ("Data", data_json),
+                    ("Ttl", ttl_val.to_string()),
+                ],
+            )
+            .await?;
+
+        if act.record_id.is_some() || act.request_id.is_some() {
+            Ok(())
+        } else {
+            Err(DnsProviderError::ApiError {
+                code: "AliEsaUpdateError".to_string(),
+                message: "阿里云 ESA 更新解析记录未返回有效结果".to_string(),
+            })
+        }
+    }
+
+    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let act: AliEsaActionResp = self
+            .request_pop(
+                "POST",
+                "DeleteRecord",
+                vec![("RecordId", record_id.to_string())],
+            )
+            .await?;
+
+        if act.record_id.is_some() || act.request_id.is_some() {
+            Ok(())
+        } else {
+            Err(DnsProviderError::ApiError {
+                code: "AliEsaDeleteError".to_string(),
+                message: "阿里云 ESA 删除解析记录未返回有效结果".to_string(),
+            })
         }
     }
 }

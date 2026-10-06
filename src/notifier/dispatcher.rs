@@ -16,8 +16,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use serde::{Deserialize, Serialize};
-
 /// 错误追踪表触发过期清理的软阈值条数
 const TRACKER_SOFT_LIMIT: usize = 256;
 /// 错误追踪表绝对硬上限，防止内存无限膨胀
@@ -68,28 +66,10 @@ pub struct ErrorTracker {
 
 pub type ErrorTrackerMap = Arc<RwLock<HashMap<String, ErrorTracker>>>;
 
-/// 单个通知渠道的最新投递状态快照
-///
-/// # 设计原理
-/// - **实现初衷**: 聚合多渠道异步推送的投递结果，使 Web 管理面板可以直观展示各渠道投递成功/失败状态，杜绝通知失败静默。
-/// - **核心优势**: 包含错误时间、累计计数与截断错误原因，避免敏感信息泄露的同时提供可观测性。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ChannelDeliveryStatus {
-    /// 渠道名称
-    pub channel_name: String,
-    /// 最近一次投递成功时间
-    pub last_success_time: Option<String>,
-    /// 最近一次投递失败时间
-    pub last_failure_time: Option<String>,
-    /// 最近一次投递失败错误原因
-    pub last_error: Option<String>,
-    /// 累计成功次数
-    pub success_count: u64,
-    /// 累计失败次数
-    pub failure_count: u64,
-}
-
-pub type DeliveryStatusMap = Arc<RwLock<HashMap<String, ChannelDeliveryStatus>>>;
+// 投递状态类型已下沉至 `core::state`（P1-17）：状态类型应与「谁拥有状态」
+// 同层，而非与「谁写入状态」同层。此处反向消费以保持
+// `core → notifier` 的单向依赖方向。
+pub use crate::core::state::{ChannelDeliveryStatus, DeliveryStatusMap};
 
 /// 全局多渠道通知分发器
 ///

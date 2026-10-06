@@ -1,7 +1,8 @@
 use crate::config::model::dns::{DnsTaskConfig, IpSourceType};
 use crate::config::model::notification::NotificationConfig;
 use crate::config::model::provider::ProviderConfig;
-use crate::core::domain::parse_domain;
+use crate::util::command::validate_command_str;
+use crate::util::domain::parse_domain;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use url::Url;
@@ -292,7 +293,7 @@ fn validate_task_item(task: &DnsTaskConfig, errs: &mut Vec<String>) {
             }
         } else if ip_cfg.source_type == IpSourceType::Command {
             if let Some(ref cmd_str) = ip_cfg.cmd {
-                if let Err(e) = crate::ip_fetcher::command::validate_command_str(cmd_str) {
+                if let Err(e) = validate_command_str(cmd_str) {
                     errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
                 }
             } else {

@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
@@ -42,25 +43,20 @@ impl ClouDnsProvider {
 }
 
 #[async_trait]
-impl DnsProvider for ClouDnsProvider {
+impl RecordOps for ClouDnsProvider {
     fn provider_name(&self) -> &'static str {
         "ClouDNS"
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(3600).max(60).to_string();
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
         let record_type_str = record_type.to_string();
 
-        // 1. 查询现有解析记录
         let list_url = format!("{}/records.json", CLOUDNS_ENDPOINT);
         let list_form = [
             ("auth-id", self.auth_id.as_str()),
@@ -94,101 +90,140 @@ impl DnsProvider for ClouDnsProvider {
             });
         }
 
-        // 鲁棒解析字典或数组格式
-        let mut matched: Option<ClouDnsRecordItem> = None;
+        let mut matched = Vec::new();
         if let Ok(records_map) =
             serde_json::from_str::<HashMap<String, ClouDnsRecordItem>>(&list_text)
         {
-            matched = records_map.into_values().find(|r| {
-                r.record_type.eq_ignore_ascii_case(&record_type_str)
+            for r in records_map.into_values() {
+                if r.record_type.eq_ignore_ascii_case(&record_type_str)
                     && r.host.eq_ignore_ascii_case(sub)
-            });
+                {
+                    matched.push(RemoteRecord::new(r.id, r.record));
+                }
+            }
         }
 
-        if let Some(existing) = matched {
-            if existing.record == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        Ok(matched)
+    }
 
-            // 更新记录
-            let modify_url = format!("{}/modify-record.json", CLOUDNS_ENDPOINT);
-            let modify_form = [
-                ("auth-id", self.auth_id.as_str()),
-                ("auth-password", self.auth_password.as_str()),
-                ("domain-name", domain.root_domain.as_str()),
-                ("record-id", existing.id.as_str()),
-                ("host", sub),
-                ("record", target_ip_str.as_str()),
-                ("ttl", ttl_val.as_str()),
-            ];
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let target_ip_str = ip.to_string();
+        let record_type_str = record_type.to_string();
+        let ttl_val = ttl.unwrap_or(3600).max(60).to_string();
 
-            let modify_resp = self
-                .client
-                .post(&modify_url)
-                .form(&modify_form)
-                .send()
-                .await?;
-            let modify_text = modify_resp.text().await?;
-            let res: ClouDnsActionResp =
-                serde_json::from_str(&modify_text).unwrap_or(ClouDnsActionResp {
-                    status: None,
-                    status_description: None,
-                });
+        let add_url = format!("{}/add-record.json", CLOUDNS_ENDPOINT);
+        let add_form = [
+            ("auth-id", self.auth_id.as_str()),
+            ("auth-password", self.auth_password.as_str()),
+            ("domain-name", domain.root_domain.as_str()),
+            ("host", sub),
+            ("type", record_type_str.as_str()),
+            ("record", target_ip_str.as_str()),
+            ("ttl", ttl_val.as_str()),
+        ];
 
-            if res.status.as_deref() == Some("Success") {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_msg = res.status_description.unwrap_or(modify_text);
-                Err(DnsProviderError::ApiError {
-                    code: "ClouDnsModifyError".to_string(),
-                    message: format!("ClouDNS 更新失败: {}", err_msg),
-                })
-            }
+        let add_resp = self.client.post(&add_url).form(&add_form).send().await?;
+        let add_text = add_resp.text().await?;
+        let res: ClouDnsActionResp = serde_json::from_str(&add_text).unwrap_or(ClouDnsActionResp {
+            status: None,
+            status_description: None,
+        });
+
+        if res.status.as_deref() == Some("Success") {
+            Ok(())
         } else {
-            // 创建记录
-            let add_url = format!("{}/add-record.json", CLOUDNS_ENDPOINT);
-            let add_form = [
-                ("auth-id", self.auth_id.as_str()),
-                ("auth-password", self.auth_password.as_str()),
-                ("domain-name", domain.root_domain.as_str()),
-                ("host", sub),
-                ("type", record_type_str.as_str()),
-                ("record", target_ip_str.as_str()),
-                ("ttl", ttl_val.as_str()),
-            ];
+            let err_msg = res.status_description.unwrap_or(add_text);
+            Err(DnsProviderError::ApiError {
+                code: "ClouDnsAddError".to_string(),
+                message: format!("ClouDNS 创建记录失败: {}", err_msg),
+            })
+        }
+    }
 
-            let add_resp = self.client.post(&add_url).form(&add_form).send().await?;
-            let add_text = add_resp.text().await?;
-            let res: ClouDnsActionResp =
-                serde_json::from_str(&add_text).unwrap_or(ClouDnsActionResp {
-                    status: None,
-                    status_description: None,
-                });
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        _record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let sub = domain.sub_domain_or_at();
+        let target_ip_str = ip.to_string();
+        let ttl_val = ttl.unwrap_or(3600).max(60).to_string();
 
-            if res.status.as_deref() == Some("Success") {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_msg = res.status_description.unwrap_or(add_text);
-                Err(DnsProviderError::ApiError {
-                    code: "ClouDnsAddError".to_string(),
-                    message: format!("ClouDNS 创建记录失败: {}", err_msg),
-                })
-            }
+        let modify_url = format!("{}/modify-record.json", CLOUDNS_ENDPOINT);
+        let modify_form = [
+            ("auth-id", self.auth_id.as_str()),
+            ("auth-password", self.auth_password.as_str()),
+            ("domain-name", domain.root_domain.as_str()),
+            ("record-id", record_id),
+            ("host", sub),
+            ("record", target_ip_str.as_str()),
+            ("ttl", ttl_val.as_str()),
+        ];
+
+        let modify_resp = self
+            .client
+            .post(&modify_url)
+            .form(&modify_form)
+            .send()
+            .await?;
+        let modify_text = modify_resp.text().await?;
+        let res: ClouDnsActionResp =
+            serde_json::from_str(&modify_text).unwrap_or(ClouDnsActionResp {
+                status: None,
+                status_description: None,
+            });
+
+        if res.status.as_deref() == Some("Success") {
+            Ok(())
+        } else {
+            let err_msg = res.status_description.unwrap_or(modify_text);
+            Err(DnsProviderError::ApiError {
+                code: "ClouDnsModifyError".to_string(),
+                message: format!("ClouDNS 更新失败: {}", err_msg),
+            })
+        }
+    }
+
+    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let delete_url = format!("{}/delete-record.json", CLOUDNS_ENDPOINT);
+        let delete_form = [
+            ("auth-id", self.auth_id.as_str()),
+            ("auth-password", self.auth_password.as_str()),
+            ("record-id", record_id),
+        ];
+
+        let resp = self
+            .client
+            .post(&delete_url)
+            .form(&delete_form)
+            .send()
+            .await?;
+        let text = resp.text().await?;
+        let res: ClouDnsActionResp = serde_json::from_str(&text).unwrap_or(ClouDnsActionResp {
+            status: None,
+            status_description: None,
+        });
+
+        if res.status.as_deref() == Some("Success") {
+            Ok(())
+        } else {
+            let err_msg = res.status_description.unwrap_or(text);
+            Err(DnsProviderError::ApiError {
+                code: "ClouDnsDeleteError".to_string(),
+                message: format!("ClouDNS 删除记录失败: {}", err_msg),
+            })
         }
     }
 }

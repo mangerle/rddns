@@ -7,9 +7,9 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum FetchError {
     #[error("网络请求错误: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
     #[error("系统 I/O 或命令执行错误: {0}")]
-    Io(#[from] io::Error),
+    Io(String),
     #[error("命令执行超时")]
     Timeout,
     #[error("未找到指定的网卡: {0}")]
@@ -22,6 +22,18 @@ pub enum FetchError {
     NoValidIp(String),
     #[error("其他提取错误: {0}")]
     Other(String),
+}
+
+impl From<reqwest::Error> for FetchError {
+    fn from(err: reqwest::Error) -> Self {
+        Self::Http(err.to_string())
+    }
+}
+
+impl From<io::Error> for FetchError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err.to_string())
+    }
 }
 
 /// IP 提取器统一抽象接口

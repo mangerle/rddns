@@ -56,7 +56,7 @@ impl LogBuffer {
     /// 插入一条新日志 (自动脱敏敏感凭据并广播给 SSE 订阅者)
     pub fn push(&self, level: Level, target: &str, message: String) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let sanitized_msg = crate::dns::trait_def::sanitize_sensitive_url_params(&message);
+        let sanitized_msg = crate::util::text::sanitize_sensitive_params(&message);
         let mut inner = self.inner.write();
         inner.counter = inner.counter.wrapping_add(1);
         let entry = LogEntry {

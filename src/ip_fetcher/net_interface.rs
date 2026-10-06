@@ -49,7 +49,7 @@ impl NetInterfaceIpFetcher {
                 interfaces
                     .into_iter()
                     .find(|iface| iface.name.eq_ignore_ascii_case(&name))
-                    .ok_or_else(|| FetchError::InterfaceNotFound(name))
+                    .ok_or(FetchError::InterfaceNotFound(name))
             }),
         )
         .await

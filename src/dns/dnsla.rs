@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -79,26 +80,21 @@ impl DnsLaProvider {
 }
 
 #[async_trait]
-impl DnsProvider for DnsLaProvider {
+impl RecordOps for DnsLaProvider {
     fn provider_name(&self) -> &'static str {
         "DNS.LA"
     }
 
-    async fn sync_record(
+    async fn list_records(
         &self,
+        _zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(600).max(1);
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let sub = domain.sub_domain_or_at();
         let type_int = Self::record_type_to_int(record_type);
-
-        // 1. 查询现有解析记录（采用结构化 query 参数，杜绝字符拼接参数注入）
         let type_int_str = type_int.to_string();
+
         let list_resp = self
             .client
             .get(DNSLA_RECORD_LIST_URL)
@@ -132,98 +128,132 @@ impl DnsProvider for DnsLaProvider {
         }
 
         let records = parsed.data.and_then(|d| d.results).unwrap_or_default();
-
         let matched = records
             .into_iter()
-            .find(|r| r.record_type == type_int && r.host.eq_ignore_ascii_case(sub));
+            .filter(|r| r.record_type == type_int && r.host.eq_ignore_ascii_case(sub))
+            .map(|r| RemoteRecord::new(r.id, r.data))
+            .collect();
 
-        if let Some(existing) = matched {
-            if existing.data == target_ip_str {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        Ok(matched)
+    }
 
-            // 更新记录 (PUT)
-            let modify_payload = json!({
-                "Id": existing.id,
-                "Host": sub,
-                "Type": type_int,
-                "Data": target_ip_str,
-                "TTL": ttl_val
+    async fn create_record(
+        &self,
+        _zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let type_int = Self::record_type_to_int(record_type);
+        let target_ip_str = ip.to_string();
+
+        let create_payload = json!({
+            "Domain": domain.root_domain,
+            "Host": sub,
+            "Type": type_int,
+            "Data": target_ip_str,
+            "TTL": ttl_val
+        });
+
+        let post_resp = self
+            .client
+            .post(DNSLA_RECORD_URL)
+            .headers(self.build_headers())
+            .json(&create_payload)
+            .send()
+            .await?;
+
+        let post_text = post_resp.text().await?;
+        let act_res: DnsLaActionResp =
+            serde_json::from_str(&post_text).unwrap_or(DnsLaActionResp {
+                code: -1,
+                msg: Some(post_text.clone()),
             });
 
-            let put_resp = self
-                .client
-                .put(DNSLA_RECORD_URL)
-                .headers(self.build_headers())
-                .json(&modify_payload)
-                .send()
-                .await?;
-
-            let put_text = put_resp.text().await?;
-            let act_res: DnsLaActionResp =
-                serde_json::from_str(&put_text).unwrap_or(DnsLaActionResp {
-                    code: -1,
-                    msg: Some(put_text.clone()),
-                });
-
-            if act_res.code == 200 {
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_msg = act_res.msg.unwrap_or(put_text);
-                Err(DnsProviderError::ApiError {
-                    code: act_res.code.to_string(),
-                    message: format!("DNS.LA 更新记录失败: {}", err_msg),
-                })
-            }
+        if act_res.code == 200 {
+            Ok(())
         } else {
-            // 创建记录 (POST)
-            let create_payload = json!({
-                "Domain": domain.root_domain,
-                "Host": sub,
-                "Type": type_int,
-                "Data": target_ip_str,
-                "TTL": ttl_val
-            });
+            let err_msg = act_res.msg.unwrap_or(post_text);
+            Err(DnsProviderError::ApiError {
+                code: act_res.code.to_string(),
+                message: format!("DNS.LA 创建记录失败: {}", err_msg),
+            })
+        }
+    }
 
-            let post_resp = self
-                .client
-                .post(DNSLA_RECORD_URL)
-                .headers(self.build_headers())
-                .json(&create_payload)
-                .send()
-                .await?;
+    async fn update_record(
+        &self,
+        _zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(600).max(1);
+        let sub = domain.sub_domain_or_at();
+        let type_int = Self::record_type_to_int(record_type);
+        let target_ip_str = ip.to_string();
 
-            let post_text = post_resp.text().await?;
-            let act_res: DnsLaActionResp =
-                serde_json::from_str(&post_text).unwrap_or(DnsLaActionResp {
-                    code: -1,
-                    msg: Some(post_text.clone()),
-                });
+        let modify_payload = json!({
+            "Id": record_id,
+            "Host": sub,
+            "Type": type_int,
+            "Data": target_ip_str,
+            "TTL": ttl_val
+        });
 
-            if act_res.code == 200 {
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                let err_msg = act_res.msg.unwrap_or(post_text);
-                Err(DnsProviderError::ApiError {
-                    code: act_res.code.to_string(),
-                    message: format!("DNS.LA 创建记录失败: {}", err_msg),
-                })
-            }
+        let put_resp = self
+            .client
+            .put(DNSLA_RECORD_URL)
+            .headers(self.build_headers())
+            .json(&modify_payload)
+            .send()
+            .await?;
+
+        let put_text = put_resp.text().await?;
+        let act_res: DnsLaActionResp = serde_json::from_str(&put_text).unwrap_or(DnsLaActionResp {
+            code: -1,
+            msg: Some(put_text.clone()),
+        });
+
+        if act_res.code == 200 {
+            Ok(())
+        } else {
+            let err_msg = act_res.msg.unwrap_or(put_text);
+            Err(DnsProviderError::ApiError {
+                code: act_res.code.to_string(),
+                message: format!("DNS.LA 更新记录失败: {}", err_msg),
+            })
+        }
+    }
+
+    async fn delete_record(&self, _zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let resp = self
+            .client
+            .delete(DNSLA_RECORD_URL)
+            .headers(self.build_headers())
+            .query(&[("id", record_id)])
+            .send()
+            .await?;
+
+        let text = resp.text().await?;
+        let act_res: DnsLaActionResp = serde_json::from_str(&text).unwrap_or(DnsLaActionResp {
+            code: -1,
+            msg: Some(text.clone()),
+        });
+
+        if act_res.code == 200 {
+            Ok(())
+        } else {
+            let err_msg = act_res.msg.unwrap_or(text);
+            Err(DnsProviderError::ApiError {
+                code: act_res.code.to_string(),
+                message: format!("DNS.LA 删除记录失败: {}", err_msg),
+            })
         }
     }
 }

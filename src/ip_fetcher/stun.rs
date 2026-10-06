@@ -249,7 +249,7 @@ impl StunIpFetcher {
                     e
                 ))
             } else {
-                FetchError::Io(e)
+                FetchError::from(e)
             }
         })?;
 
@@ -259,7 +259,7 @@ impl StunIpFetcher {
             let (req_bytes, tx_id) = Self::build_binding_request();
             if let Err(e) = socket.send_to(&req_bytes, target_addr).await {
                 debug!("向 STUN 目标 [{}] 发送数据包失败: {}", target_addr, e);
-                last_err = Some(FetchError::Io(e));
+                last_err = Some(FetchError::from(e));
                 continue;
             }
 
@@ -271,7 +271,7 @@ impl StunIpFetcher {
                 Ok(Ok(pair)) => pair,
                 Ok(Err(e)) => {
                     debug!("从 STUN 目标 [{}] 接收数据失败: {}", target_addr, e);
-                    last_err = Some(FetchError::Io(e));
+                    last_err = Some(FetchError::from(e));
                     continue;
                 }
                 Err(_) => {
@@ -397,7 +397,7 @@ impl StunIpFetcher {
                             server,
                             if is_ipv6 { "IPv6" } else { "IPv4" },
                             // 节点地址来自用户配置，理论上可内嵌凭据 (P1-3)
-                            crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+                            crate::util::text::sanitize_sensitive_params(&e.to_string())
                         );
                         last_err = Some(e);
                     }
@@ -426,7 +426,7 @@ impl StunIpFetcher {
                 "全部 {} 个 STUN 服务器均探测失败（目标协议: {}），最后一次错误: {}",
                 server_list.len(),
                 if is_ipv6 { "IPv6" } else { "IPv4" },
-                crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string())
+                crate::util::text::sanitize_sensitive_params(&e.to_string())
             );
         }
 

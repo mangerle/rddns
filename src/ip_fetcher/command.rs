@@ -9,51 +9,9 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-/// 外部命令标准输出的最大读取字节上限 (64KB，与 URL 探测保持一致防范 OOM 风险)
-pub const MAX_COMMAND_OUTPUT_BYTES: usize = 65536;
-
-/// 危险 Shell 注入与逃逸元字符集合 (包含 Unix 与 Windows cmd 敏感元字符及命令组合符)
-pub const DANGEROUS_SHELL_CHARS: &[char] = &[
-    '|', ';', '&', '`', '$', '>', '<', '\n', '\r', '^', '%', '{', '}', '(', ')', '!',
-];
-
-/// 校验外部命令字符串的安全性与非空限制 (S-9/P-9)
-///
-/// # 设计原理
-/// - **实现初衷**: 统一 Web 配置保存、应用启动配置加载与调度引擎各处命令的合法性校验，杜绝 Shell 注入。
-/// - **核心优势**: 严格拦截命令拼接、转义、bash 历史扩展与变量扩展元字符，禁止首个可执行文件以 '-' 开头避免参数被误当命令，且拒绝以 '-' 开头且含 '=' 的危险参数选项注入（如 `--config=/etc/passwd`）。
-///
-/// # Errors
-/// 若命令为空、包含空字符、危险元字符或高危参数格式时返回中文错误提示。
-pub fn validate_command_str(cmd: &str) -> Result<(), &'static str> {
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        return Err("命令内容不能为空");
-    }
-    if trimmed.contains('\0') {
-        return Err("命令包含非法的空字符 (NULL Byte)");
-    }
-    if trimmed.chars().any(|c| DANGEROUS_SHELL_CHARS.contains(&c)) {
-        return Err(
-            "命令包含高风险 Shell 注入字符 (|;&`$><^%{}()!)，仅允许执行单个独立脚本或可执行文件及常规参数",
-        );
-    }
-
-    // 检查首个可执行程序 token 与参数形式，防止参数注入攻击 (P-9)
-    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-    if let Some(&first_token) = tokens.first()
-        && first_token.starts_with('-')
-    {
-        return Err("命令的可执行程序名称不能以 '-' 开头");
-    }
-    for &token in &tokens[1..] {
-        if token.starts_with('-') && token.contains('=') {
-            return Err("命令参数禁止包含以 '-' 开头且带有 '=' 的选项注入格式 (如 --config=xxx)");
-        }
-    }
-
-    Ok(())
-}
+pub use crate::util::command::{
+    DANGEROUS_SHELL_CHARS, MAX_COMMAND_OUTPUT_BYTES, validate_command_str,
+};
 
 /// 基于外部命令/脚本提取 IP 的探测器
 pub struct CommandIpFetcher {
@@ -106,7 +64,7 @@ impl CommandIpFetcher {
         // 丢弃标准错误，避免因无读取方导致操作系统管道缓冲区写满（Windows 仅 4KB）引发子进程死锁与超时
         command.stderr(Stdio::null());
 
-        let mut child = command.spawn().map_err(FetchError::Io)?;
+        let mut child = command.spawn().map_err(FetchError::from)?;
         let mut stdout = child
             .stdout
             .take()
@@ -138,7 +96,7 @@ impl CommandIpFetcher {
                 if !status.success() {
                     // 命令串由用户配置，可能内嵌凭据（如 curl -H 'Authorization: Bearer xxx'），
                     // 打印前统一经脱敏出口 (P1-3)
-                    let safe_cmd = crate::dns::trait_def::sanitize_sensitive_url_params(&self.cmd);
+                    let safe_cmd = crate::util::text::sanitize_sensitive_params(&self.cmd);
                     warn!("执行命令 '{}' 退出码异常: {:?}", safe_cmd, status.code());
                     return Err(FetchError::Other(format!(
                         "命令执行退出码异常 ({:?})",
@@ -149,7 +107,7 @@ impl CommandIpFetcher {
             }
             Ok(Err(io_err)) => {
                 let _ = child.kill().await;
-                Err(FetchError::Io(io_err))
+                Err(FetchError::from(io_err))
             }
             Err(_) => {
                 let _ = child.kill().await;

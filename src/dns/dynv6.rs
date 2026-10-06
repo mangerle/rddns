@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Method};
@@ -99,140 +100,166 @@ impl Dynv6Provider {
 }
 
 #[async_trait]
-impl DnsProvider for Dynv6Provider {
+impl RecordOps for Dynv6Provider {
     fn provider_name(&self) -> &'static str {
         "Dynv6"
     }
 
-    async fn sync_record(
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let zones: Vec<Dynv6Zone> = self.request(Method::GET, "/zones", None).await?;
+        let matched = zones
+            .into_iter()
+            .find(|z| {
+                root_domain.eq_ignore_ascii_case(&z.name)
+                    || root_domain.ends_with(&format!(".{}", z.name))
+            })
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
+        Ok(matched.id.to_string())
+    }
+
+    async fn list_records(
         &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let zone_id: u64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
+        let full_domain = domain.full_domain();
+
+        let zone_detail: Dynv6Zone = self
+            .request(Method::GET, &format!("/zones/{}", zone_id), None)
+            .await?;
+        let is_main_domain = full_domain.eq_ignore_ascii_case(&zone_detail.name);
+
+        if is_main_domain {
+            let cur_ip = match record_type {
+                DnsRecordType::A => zone_detail.ipv4_address,
+                DnsRecordType::AAAA => zone_detail.ipv6_prefix,
+            };
+            return Ok(cur_ip
+                .map(|ip| vec![RemoteRecord::new("zone", ip)])
+                .unwrap_or_default());
+        }
+
+        let sub_name = full_domain
+            .strip_suffix(&format!(".{}", zone_detail.name))
+            .unwrap_or(&domain.sub_domain);
+
+        let records: Vec<Dynv6Record> = self
+            .request(Method::GET, &format!("/zones/{}/records", zone_id), None)
+            .await?;
+
+        let record_type_str = record_type.to_string();
+        let matched: Vec<RemoteRecord> = records
+            .into_iter()
+            .filter(|r| {
+                r.name.as_deref() == Some(sub_name)
+                    && r.record_type.as_deref() == Some(&record_type_str)
+            })
+            .filter_map(|r| r.data.map(|d| RemoteRecord::new(r.id.to_string(), d)))
+            .collect();
+
+        Ok(matched)
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
         domain: &ParsedDomain,
         record_type: DnsRecordType,
         ip: &IpAddr,
         _ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
+    ) -> Result<(), DnsProviderError> {
+        let zone_id: u64 = zone
+            .parse()
+            .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
         let full_domain = domain.full_domain();
         let target_ip_str = ip.to_string();
 
-        // 1. 查询账户下的所有 Zones
-        let zones: Vec<Dynv6Zone> = self.request(Method::GET, "/zones", None).await?;
-
-        let matched_zone = zones
-            .into_iter()
-            .find(|z| full_domain == z.name || full_domain.ends_with(&format!(".{}", z.name)));
-
-        let zone =
-            matched_zone.ok_or_else(|| DnsProviderError::ZoneNotFound(full_domain.to_string()))?;
-
-        let is_main_domain = full_domain.eq_ignore_ascii_case(&zone.name);
+        let zone_detail: Dynv6Zone = self
+            .request(Method::GET, &format!("/zones/{}", zone_id), None)
+            .await?;
+        let is_main_domain = full_domain.eq_ignore_ascii_case(&zone_detail.name);
 
         if is_main_domain {
-            // 2. 主域名更新: 对比当前 IP 并 PATCH /zones/{zone_id}
-            let cur_ip = match record_type {
-                DnsRecordType::A => zone.ipv4_address.as_deref(),
-                DnsRecordType::AAAA => zone.ipv6_prefix.as_deref(),
-            };
-
-            if cur_ip.is_some_and(|c| crate::dns::trait_def::ip_value_matches(c, ip)) {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
-
             let patch_body = match record_type {
                 DnsRecordType::A => json!({ "ipv4address": target_ip_str }),
                 DnsRecordType::AAAA => json!({ "ipv6prefix": target_ip_str }),
             };
-
             let _: serde_json::Value = self
                 .request(
                     Method::PATCH,
-                    &format!("/zones/{}", zone.id),
+                    &format!("/zones/{}", zone_id),
                     Some(patch_body),
                 )
                 .await?;
-
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
         } else {
-            // 3. 子域名更新: 计算子域名前缀
             let sub_name = full_domain
-                .strip_suffix(&format!(".{}", zone.name))
+                .strip_suffix(&format!(".{}", zone_detail.name))
                 .unwrap_or(&domain.sub_domain);
-
-            // 查询 Zone 下的所有 records
-            let records: Vec<Dynv6Record> = self
-                .request(Method::GET, &format!("/zones/{}/records", zone.id), None)
-                .await?;
-
-            let record_type_str = record_type.to_string();
-            let matched_record = records.into_iter().find(|r| {
-                r.name.as_deref() == Some(sub_name)
-                    && r.record_type.as_deref() == Some(&record_type_str)
+            let post_body = json!({
+                "name": sub_name,
+                "type": record_type.to_string(),
+                "data": target_ip_str
             });
-
-            if let Some(record) = matched_record {
-                if record
-                    .data
-                    .as_deref()
-                    .is_some_and(|c| crate::dns::trait_def::ip_value_matches(c, ip))
-                {
-                    return Ok(SyncRecordResult::unchanged_log(
-                        self.provider_name(),
-                        full_domain,
-                        record_type,
-                        target_ip_str,
-                    ));
-                }
-
-                // 更新记录
-                let patch_body = json!({
-                    "type": record_type.to_string(),
-                    "data": target_ip_str
-                });
-                let _: serde_json::Value = self
-                    .request(
-                        Method::PATCH,
-                        &format!("/zones/{}/records/{}", zone.id, record.id),
-                        Some(patch_body),
-                    )
-                    .await?;
-
-                Ok(SyncRecordResult::updated_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            } else {
-                // 创建记录
-                let post_body = json!({
-                    "name": sub_name,
-                    "type": record_type.to_string(),
-                    "data": target_ip_str
-                });
-                let _: serde_json::Value = self
-                    .request(
-                        Method::POST,
-                        &format!("/zones/{}/records", zone.id),
-                        Some(post_body),
-                    )
-                    .await?;
-
-                Ok(SyncRecordResult::created_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ))
-            }
+            let _: serde_json::Value = self
+                .request(
+                    Method::POST,
+                    &format!("/zones/{}/records", zone_id),
+                    Some(post_body),
+                )
+                .await?;
         }
+
+        Ok(())
+    }
+
+    async fn update_record(
+        &self,
+        zone: &str,
+        record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        if record_id == "zone" {
+            self.create_record(zone, domain, record_type, ip, ttl).await
+        } else {
+            let zone_id: u64 = zone
+                .parse()
+                .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
+            let target_ip_str = ip.to_string();
+            let patch_body = json!({
+                "type": record_type.to_string(),
+                "data": target_ip_str
+            });
+            let _: serde_json::Value = self
+                .request(
+                    Method::PATCH,
+                    &format!("/zones/{}/records/{}", zone_id, record_id),
+                    Some(patch_body),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        if record_id != "zone" {
+            let zone_id: u64 = zone
+                .parse()
+                .map_err(|e| DnsProviderError::Other(format!("无效的 zone_id: {}", e)))?;
+            let _: serde_json::Value = self
+                .request(
+                    Method::DELETE,
+                    &format!("/zones/{}/records/{}", zone_id, record_id),
+                    None,
+                )
+                .await?;
+        }
+        Ok(())
     }
 }

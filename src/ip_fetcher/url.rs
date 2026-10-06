@@ -71,7 +71,7 @@ impl UrlIpFetcher {
         let mut buffer = Vec::new();
 
         // 流式读取分块并在达到上限时立即中断，防止恶意大文件耗尽系统内存
-        while let Some(chunk) = resp.chunk().await.map_err(FetchError::Http)? {
+        while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
             if buffer.len() + chunk.len() > MAX_RESPONSE_BYTES {
                 return Err(FetchError::Other(format!(
                     "响应体体积超过安全限制 (已接收 > {} 字节)",
@@ -117,7 +117,7 @@ impl UrlIpFetcher {
                 },
                 Err(e) => {
                     debug!("请求接口 {} 失败: {}", endpoint, e);
-                    last_err = Some(FetchError::Http(e));
+                    last_err = Some(FetchError::from(e));
                 }
             }
         }

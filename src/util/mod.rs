@@ -1,12 +1,15 @@
+pub mod command;
 pub mod crypto;
 pub mod daemon;
 pub mod dns_packet;
 pub mod dns_resolver;
+pub mod domain;
 pub mod http;
 pub mod interface;
 pub mod logging;
 pub mod net;
 pub mod service;
+pub mod text;
 pub mod update;
 pub mod wait_internet;
 pub mod windows_service;

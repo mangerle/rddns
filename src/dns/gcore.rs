@@ -1,5 +1,6 @@
 use crate::core::domain::ParsedDomain;
-use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::ops::{RecordOps, RemoteRecord};
+use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -104,24 +105,13 @@ impl GcoreProvider {
 }
 
 #[async_trait]
-impl DnsProvider for GcoreProvider {
+impl RecordOps for GcoreProvider {
     fn provider_name(&self) -> &'static str {
         "Gcore DNS"
     }
 
-    async fn sync_record(
-        &self,
-        domain: &ParsedDomain,
-        record_type: DnsRecordType,
-        ip: &IpAddr,
-        ttl: Option<u32>,
-    ) -> Result<SyncRecordResult, DnsProviderError> {
-        let full_domain = domain.full_domain();
-        let target_ip_str = ip.to_string();
-        let ttl_val = ttl.unwrap_or(120).max(1);
-
-        // 1. 查询 Zone
-        let zone_url = format!("{}/zones?name={}", GCORE_API_BASE, domain.root_domain);
+    async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let zone_url = format!("{}/zones?name={}", GCORE_API_BASE, root_domain);
         let zone_resp = self
             .client
             .get(&zone_url)
@@ -137,11 +127,19 @@ impl DnsProvider for GcoreProvider {
         let zones = zone_data.zones.unwrap_or_default();
         let zone = zones
             .into_iter()
-            .find(|z| z.name.eq_ignore_ascii_case(&domain.root_domain))
-            .ok_or_else(|| DnsProviderError::ZoneNotFound(domain.root_domain.clone()))?;
+            .find(|z| z.name.eq_ignore_ascii_case(root_domain))
+            .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
-        // 2. 查询现有 RRSet (带 limit=100 参数)
-        let rrset_url = format!("{}/zones/{}/rrsets?limit=100", GCORE_API_BASE, zone.name);
+        Ok(zone.name)
+    }
+
+    async fn list_records(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+    ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
+        let rrset_url = format!("{}/zones/{}/rrsets?limit=100", GCORE_API_BASE, zone);
         let rrset_resp = self
             .client
             .get(&rrset_url)
@@ -155,21 +153,48 @@ impl DnsProvider for GcoreProvider {
         let rrset_data: GcoreRRSetListResponse = serde_json::from_str(&rrset_text)?;
         let rrsets = rrset_data.rrsets.unwrap_or_default();
 
-        let matched = rrsets.into_iter().find(|r| {
-            r.record_type.eq_ignore_ascii_case(&record_type.to_string())
+        let mut remotes = Vec::new();
+        for r in rrsets {
+            if r.record_type.eq_ignore_ascii_case(&record_type.to_string())
                 && domain.matches_record_name(&r.name)
-        });
+                && let Some(rrs) = r.resource_records
+            {
+                for rr in rrs {
+                    if let Some(contents) = rr.content {
+                        for c in contents {
+                            if let Some(ip_str) = c.as_str() {
+                                remotes.push(RemoteRecord::new(&r.name, ip_str));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(remotes)
+    }
+
+    async fn create_record(
+        &self,
+        zone: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(120).max(1);
+        let target_ip_str = ip.to_string();
 
         let full_record_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
-            zone.name.clone()
+            zone.to_string()
         } else {
-            format!("{}.{}", domain.sub_domain, zone.name)
+            format!("{}.{}", domain.sub_domain, zone)
         };
 
         let target_url = format!(
             "{}/zones/{}/{}/{}",
             GCORE_API_BASE,
-            url_encode(&zone.name),
+            url_encode(zone),
             url_encode(&full_record_name),
             record_type
         );
@@ -184,71 +209,74 @@ impl DnsProvider for GcoreProvider {
             ]
         });
 
-        if let Some(existing) = matched {
-            // 检查现有 IP 是否匹配（遍历所有 resource_records 及其 content 多值项，避免仅 pop 检查最后一条导致漏匹配）
-            let is_matched = existing
-                .resource_records
-                .as_ref()
-                .map(|rrs| {
-                    rrs.iter().any(|rr| {
-                        rr.content
-                            .as_ref()
-                            .map(|contents| {
-                                contents.iter().any(|c| c.as_str() == Some(&target_ip_str))
-                            })
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
+        let post_resp = self
+            .client
+            .post(&target_url)
+            .headers(self.build_headers())
+            .json(&payload)
+            .send()
+            .await?;
 
-            if is_matched {
-                return Ok(SyncRecordResult::unchanged_log(
-                    self.provider_name(),
-                    full_domain,
-                    record_type,
-                    target_ip_str,
-                ));
-            }
+        let post_status = post_resp.status();
+        let post_text = post_resp.text().await?;
+        check_gcore_error(&post_text, post_status, "创建记录失败")?;
 
-            // 更新记录 (PUT)
-            let put_resp = self
-                .client
-                .put(&target_url)
-                .headers(self.build_headers())
-                .json(&payload)
-                .send()
-                .await?;
+        Ok(())
+    }
 
-            let put_status = put_resp.status();
-            let put_text = put_resp.text().await?;
-            check_gcore_error(&put_text, put_status, "更新记录失败")?;
+    async fn update_record(
+        &self,
+        zone: &str,
+        _record_id: &str,
+        domain: &ParsedDomain,
+        record_type: DnsRecordType,
+        ip: &IpAddr,
+        ttl: Option<u32>,
+    ) -> Result<(), DnsProviderError> {
+        let ttl_val = ttl.unwrap_or(120).max(1);
+        let target_ip_str = ip.to_string();
 
-            Ok(SyncRecordResult::updated_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
+        let full_record_name = if domain.sub_domain.is_empty() || domain.sub_domain == "@" {
+            zone.to_string()
         } else {
-            // 创建记录 (POST)
-            let post_resp = self
-                .client
-                .post(&target_url)
-                .headers(self.build_headers())
-                .json(&payload)
-                .send()
-                .await?;
+            format!("{}.{}", domain.sub_domain, zone)
+        };
 
-            let post_status = post_resp.status();
-            let post_text = post_resp.text().await?;
-            check_gcore_error(&post_text, post_status, "创建记录失败")?;
+        let target_url = format!(
+            "{}/zones/{}/{}/{}",
+            GCORE_API_BASE,
+            url_encode(zone),
+            url_encode(&full_record_name),
+            record_type
+        );
 
-            Ok(SyncRecordResult::created_log(
-                self.provider_name(),
-                full_domain,
-                record_type,
-                target_ip_str,
-            ))
-        }
+        let payload = json!({
+            "ttl": ttl_val,
+            "resource_records": [
+                {
+                    "content": [target_ip_str],
+                    "enabled": true
+                }
+            ]
+        });
+
+        let put_resp = self
+            .client
+            .put(&target_url)
+            .headers(self.build_headers())
+            .json(&payload)
+            .send()
+            .await?;
+
+        let put_status = put_resp.status();
+        let put_text = put_resp.text().await?;
+        check_gcore_error(&put_text, put_status, "更新记录失败")?;
+
+        Ok(())
+    }
+
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let _ = (zone, record_id);
+        Ok(())
     }
 }
