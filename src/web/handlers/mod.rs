@@ -36,6 +36,10 @@ pub struct AppState {
     pub state_manager: StateManager,
     /// 全局退出取消令牌（用于通知在途长连接与 SSE 优雅退出）
     pub cancel_token: CancellationToken,
+    /// 活跃的 Web 服务监听端口（服务启动时实际绑定的端口）
+    pub active_listen_port: u16,
+    /// 活跃的外网访问策略（是否仅绑定本地回环 127.0.0.1）
+    pub active_not_allow_wan_access: bool,
 }
 
 /// 统一 API 响应包装模型

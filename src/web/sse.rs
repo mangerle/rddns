@@ -185,6 +185,8 @@ mod tests {
             log_buffer: log_buffer.clone(),
             state_manager: crate::core::state::StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         let resp = sse_log_handler(axum::extract::State(state))

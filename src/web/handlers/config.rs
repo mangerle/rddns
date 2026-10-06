@@ -9,14 +9,42 @@ use crate::util::http::clear_http_client_cache;
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// 获取当前配置 (将用户密码哈希置空，并将敏感 API 密钥与凭据全量掩码化，彻底杜绝敏感凭据明文过网泄露)
+/// 获取配置响应数据包装模型（平铺配置字段，附带待重启生效提示）
+///
+/// # 设计原理
+/// - **实现初衷**：在下发当前全量脱敏配置的同时，计算并告知前端当前是否有已保存但因属于启动级参数而需重启服务才生效的字段项。
+/// - **核心优势**：通过 `#[serde(flatten)]` 实现与原有 `AppConfig` 契约完全向后兼容，前端既可直接消费顶层配置，又能解构获取 `restart_required`。
+/// - **代价与局限**：仅比对运行时绑定的网络端口与地址族状态，不跟踪外部文本编辑器的热写入。
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigResponse {
+    #[serde(flatten)]
+    pub config: AppConfig,
+    /// 需要重启服务才能生效的配置字段名列表（如 "listen_port", "not_allow_wan_access"）
+    pub restart_required: Vec<String>,
+}
+
+/// 获取当前配置 (将用户密码哈希置空，并将敏感 API 密钥与凭据全量掩码化，附带待重启生效提示)
 pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoResponse {
     let conf = state.config_manager.get_config();
     let mut clean_conf = (*conf).clone();
     clean_conf.mask_credentials();
+
+    let mut restart_required = Vec::new();
+    if clean_conf.listen_port != state.active_listen_port {
+        restart_required.push("listen_port".to_string());
+    }
+    if clean_conf.not_allow_wan_access != state.active_not_allow_wan_access {
+        restart_required.push("not_allow_wan_access".to_string());
+    }
+
+    let resp = ConfigResponse {
+        config: clean_conf,
+        restart_required,
+    };
+
     (
         [
             (
@@ -25,14 +53,88 @@ pub async fn get_config_handler(State(state): State<AppState>) -> impl IntoRespo
             ),
             (axum::http::header::PRAGMA, "no-cache"),
         ],
-        Json(ApiResponse::ok(clean_conf)),
+        Json(ApiResponse::ok(resp)),
     )
+}
+
+/// 保存配置时的应用配置入参 DTO
+///
+/// # 设计原理
+/// - **实现初衷**：将 Web 动态保存契约与底层静态持久化结构解耦。Web 控制台不允许热修改服务监听端口与外网隔离策略，此两项属于启动级网络参数。
+/// - **核心优势**：显式声明可选字段，既防止默认值填充覆盖，又能在用户试图通过 Web 篡改安全边界时明确拒绝，消除“静默丢弃”的虚假安全感。
+/// - **代价与局限**：客户端如需变更监听端口与外网访问，必须编辑配置文件或通过命令行启动参数指定，无法纯 Web 免重启变更。
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveAppConfigPayload {
+    /// Web 服务监听端口（若提供则必须与原有配置保持一致，禁止通过 Web API 篡改）
+    #[serde(default)]
+    pub listen_port: Option<u16>,
+
+    /// 全局同步检查间隔时间（秒）
+    pub interval_secs: u64,
+
+    /// 强制校对云端记录间隔次数
+    pub cache_times: u32,
+
+    /// 是否禁止公网访问 Web UI（若提供则必须与原有配置保持一致，禁止通过 Web API 篡改）
+    #[serde(default)]
+    pub not_allow_wan_access: Option<bool>,
+
+    /// 自定义公共 DNS 递归解析服务器
+    #[serde(default)]
+    pub dns_server: Option<String>,
+
+    /// Web 管理员登录凭证
+    #[serde(default)]
+    pub auth: Option<UserAuthConfig>,
+
+    /// 通知渠道配置
+    #[serde(default)]
+    pub notifications: NotificationConfig,
+
+    /// DNS 解析任务列表
+    #[serde(default)]
+    pub dns_tasks: Vec<DnsTaskConfig>,
+}
+
+impl SaveAppConfigPayload {
+    /// 转换为系统核心 AppConfig，严格锁定并继承原有网络监听配置
+    pub fn into_app_config(
+        self,
+        old_listen_port: u16,
+        old_not_allow_wan_access: bool,
+    ) -> AppConfig {
+        AppConfig {
+            listen_port: old_listen_port,
+            interval_secs: self.interval_secs,
+            cache_times: self.cache_times,
+            not_allow_wan_access: old_not_allow_wan_access,
+            dns_server: self.dns_server,
+            auth: self.auth,
+            notifications: self.notifications,
+            dns_tasks: self.dns_tasks,
+        }
+    }
+}
+
+impl From<AppConfig> for SaveAppConfigPayload {
+    fn from(c: AppConfig) -> Self {
+        Self {
+            listen_port: Some(c.listen_port),
+            interval_secs: c.interval_secs,
+            cache_times: c.cache_times,
+            not_allow_wan_access: Some(c.not_allow_wan_access),
+            dns_server: c.dns_server,
+            auth: c.auth,
+            notifications: c.notifications,
+            dns_tasks: c.dns_tasks,
+        }
+    }
 }
 
 /// 保存更新配置的请求入参
 #[derive(Debug, Deserialize)]
 pub struct SaveConfigRequest {
-    pub config: AppConfig,
+    pub config: SaveAppConfigPayload,
     pub new_password: Option<String>,
 }
 
@@ -197,7 +299,27 @@ pub async fn save_config_handler(
     State(state): State<AppState>,
     Json(payload): Json<SaveConfigRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    let new_config = payload.config;
+    let payload_cfg = payload.config;
+    let old_config = state.config_manager.get_config();
+
+    // 严禁通过 Web API 篡改 Web 监听端口与外网访问策略，若提交了与原配置不同的值则直接拒绝
+    if let Some(port) = payload_cfg.listen_port
+        && port != old_config.listen_port
+    {
+        return Err(AppError::bad_request(
+            "Web 服务监听端口仅可通过编辑配置文件或命令行 --listen 变更，不可通过 Web 界面修改",
+        ));
+    }
+    if let Some(not_wan) = payload_cfg.not_allow_wan_access
+        && not_wan != old_config.not_allow_wan_access
+    {
+        return Err(AppError::bad_request(
+            "外网访问策略 (not_allow_wan_access) 仅可通过编辑配置文件变更，不可通过 Web 界面修改",
+        ));
+    }
+
+    let new_config =
+        payload_cfg.into_app_config(old_config.listen_port, old_config.not_allow_wan_access);
 
     validate_basic_limits(&new_config)?;
     validate_task_configs(&new_config.dns_tasks)?;
@@ -415,18 +537,21 @@ type = "cloudflare"
             log_buffer: crate::util::logging::LogBuffer::new(10),
             state_manager: crate::core::state::StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         // 模拟前端保存配置请求（未附带 auth 字段）
+        let app_cfg = AppConfig {
+            interval_secs: 10,
+            cache_times: 5,
+            listen_port: 9876,
+            auth: None, // 前端未提交 auth 字段
+            dns_tasks: vec![],
+            ..Default::default()
+        };
         let payload = SaveConfigRequest {
-            config: AppConfig {
-                interval_secs: 10,
-                cache_times: 5,
-                listen_port: 9876,
-                auth: None, // 前端未提交 auth 字段
-                dns_tasks: vec![],
-                ..Default::default()
-            },
+            config: app_cfg.into(),
             new_password: None,
         };
 
@@ -439,6 +564,116 @@ type = "cloudflare"
         let auth = current.auth.as_ref().unwrap();
         assert_eq!(auth.username, "admin");
         assert_eq!(auth.password_hash, "$2b$12$test_existing_hash");
+    }
+
+    #[tokio::test]
+    async fn test_save_config_rejects_modifying_listen_port() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_file = dir.path().join("config_reject_port_test.toml");
+        let manager =
+            Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
+
+        let state = AppState {
+            config_manager: manager.clone(),
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: crate::core::state::StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
+        };
+
+        let app_cfg = AppConfig {
+            listen_port: 8888, // 试图篡改监听端口
+            ..Default::default()
+        };
+        let payload = SaveConfigRequest {
+            config: app_cfg.into(),
+            new_password: None,
+        };
+
+        let res = save_config_handler(axum::extract::State(state), axum::Json(payload)).await;
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("Web 服务监听端口"));
+    }
+
+    #[tokio::test]
+    async fn test_save_config_rejects_modifying_not_allow_wan_access() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_file = dir.path().join("config_reject_wan_test.toml");
+        let manager =
+            Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
+
+        let state = AppState {
+            config_manager: manager.clone(),
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: crate::core::state::StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
+        };
+
+        // 原默认 not_allow_wan_access 为 true，尝试篡改为 false
+        let app_cfg = AppConfig {
+            not_allow_wan_access: false,
+            ..Default::default()
+        };
+        let payload = SaveConfigRequest {
+            config: app_cfg.into(),
+            new_password: None,
+        };
+
+        let res = save_config_handler(axum::extract::State(state), axum::Json(payload)).await;
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("not_allow_wan_access"));
+    }
+
+    #[tokio::test]
+    async fn test_get_config_handler_restart_required_detection() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let dir = tempfile::tempdir().unwrap();
+        let config_file = dir.path().join("config_restart_test.toml");
+        let manager =
+            Arc::new(crate::config::storage::ConfigManager::load_or_create(config_file).unwrap());
+
+        // 模拟运行时活跃状态与当前文件配置不一致（例如通过命令行临时覆盖启动）
+        let state = AppState {
+            config_manager: manager.clone(),
+            trigger_sender: tx,
+            log_buffer: crate::util::logging::LogBuffer::new(10),
+            state_manager: crate::core::state::StateManager::new(),
+            cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 7777, // 运行时与配置文件 9876 不一致
+            active_not_allow_wan_access: false, // 运行时与配置文件 true 不一致
+        };
+
+        let response = get_config_handler(axum::extract::State(state))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        // 读取响应 Body
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(json["success"].as_bool().unwrap());
+
+        let restart_req = json["data"]["restart_required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert!(restart_req.contains(&"listen_port".to_string()));
+        assert!(restart_req.contains(&"not_allow_wan_access".to_string()));
     }
 
     #[test]

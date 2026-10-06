@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock, Lock } from 'lucide-vue-next'
+import { AlertTriangle, Clock, Lock } from 'lucide-vue-next'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PasswordInput from '@/components/common/PasswordInput.vue'
@@ -10,6 +10,21 @@ const { t } = useI18n()
 
 const newPassword = ref('')
 
+// 格式化待重启生效的配置项名称
+function formatRestartFields(fields: string[]): string {
+  return fields
+    .map((field) => {
+      if (field === 'listen_port') {
+        return t('system.fieldListenPort')
+      }
+      if (field === 'not_allow_wan_access') {
+        return t('system.fieldNotAllowWan')
+      }
+      return field
+    })
+    .join('、')
+}
+
 // 确保 auth 对象存在
 if (!configStore.config.auth) {
   configStore.config.auth = { username: 'admin' }
@@ -18,6 +33,22 @@ if (!configStore.config.auth) {
 
 <template>
   <div class="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
+    <!-- 重启服务生效提示条 (Banner) -->
+    <div
+      v-if="configStore.restartRequired && configStore.restartRequired.length > 0"
+      class="flex items-start gap-3 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/80 text-amber-800 dark:text-amber-200 text-xs shadow-xs"
+    >
+      <AlertTriangle class="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+      <div class="flex flex-col gap-0.5">
+        <span class="font-bold text-amber-900 dark:text-amber-100">
+          {{ t('system.restartRequiredTitle') }}
+        </span>
+        <span class="text-[11px] text-amber-700 dark:text-amber-300">
+          {{ t('system.restartRequiredTip', { fields: formatRestartFields(configStore.restartRequired) }) }}
+        </span>
+      </div>
+    </div>
+
     <!-- 运行与同步参数 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center gap-2.5 pb-4 border-b border-slate-100 dark:border-slate-800/80">
@@ -58,18 +89,27 @@ if (!configStore.config.auth) {
         </div>
       </div>
 
-      <!-- 禁止 WAN 访问 -->
-      <label class="flex items-center gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800/80 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 transition">
+      <!-- 禁止 WAN 访问 (系统级只读) -->
+      <div class="flex items-start gap-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800/80 opacity-90">
         <input
-          v-model="configStore.config.not_allow_wan_access"
+          :checked="configStore.config.not_allow_wan_access"
           type="checkbox"
-          class="rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-white dark:bg-slate-900"
+          disabled
+          class="rounded border-slate-300 dark:border-slate-700 text-indigo-600 bg-slate-200 dark:bg-slate-800 cursor-not-allowed mt-0.5"
         >
-        <div class="flex flex-col">
-          <span class="text-xs font-semibold text-slate-800 dark:text-slate-200">{{ t('system.notAllowWan') }}</span>
+        <div class="flex flex-col gap-1">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-slate-800 dark:text-slate-200">{{ t('system.notAllowWan') }}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium">
+              {{ t('system.notAllowWanReadOnlyBadge') }}
+            </span>
+          </div>
           <span class="text-[11px] text-slate-500 dark:text-slate-400">仅允许局域网私有网段 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) 访问控制台</span>
+          <span class="text-[11px] text-amber-600 dark:text-amber-400/90 font-medium leading-relaxed">
+            {{ t('system.notAllowWanReadOnlyTip') }}
+          </span>
         </div>
-      </label>
+      </div>
 
       <!-- 自定义公共 DNS 服务器 -->
       <div class="flex flex-col gap-1.5">

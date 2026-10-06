@@ -53,6 +53,8 @@ mod tests {
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         }
     }
 

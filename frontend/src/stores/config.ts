@@ -18,6 +18,7 @@ export const useConfigStore = defineStore('config', () => {
   const isLoading = ref<boolean>(false)
   const isSaving = ref<boolean>(false)
   const isSyncing = ref<boolean>(false)
+  const restartRequired = ref<string[]>([])
 
   // 创建默认通知配置结构，杜绝 null 导致的运行时访问异常
   function createDefaultNotifications(): AppConfig['notifications'] {
@@ -303,6 +304,7 @@ export const useConfigStore = defineStore('config', () => {
       const res = await configApi.getConfig()
       if (res.success && res.data) {
         config.value = normalizeConfig(res.data)
+        restartRequired.value = res.data.restart_required || []
         if (currentTaskIndex.value >= config.value.dns_tasks.length) {
           currentTaskIndex.value = 0
         }
@@ -420,6 +422,7 @@ export const useConfigStore = defineStore('config', () => {
     isLoading,
     isSaving,
     isSyncing,
+    restartRequired,
     config,
     notifications,
     currentTaskIndex,

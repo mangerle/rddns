@@ -274,6 +274,12 @@ export default {
     authPasswordLabel: '管理员密码',
     authPasswordPlaceholder: '留空表示不修改密码',
     authTip: '提示：配置用户名与密码后，访问控制台需输入账号密码验证。密码使用工业级 bcrypt 单向加盐哈希保护。',
+    notAllowWanReadOnlyBadge: '系统级只读',
+    notAllowWanReadOnlyTip: '网络监听策略属于服务启动级配置，不可通过 Web 界面修改。如需变更，请编辑配置文件（config.toml）或命令行参数（--listen），修改后需重启服务生效。',
+    restartRequiredTitle: '网络配置待重启生效',
+    restartRequiredTip: '检测到以下系统监听设置与当前运行实例不一致，将在服务重启后生效：{fields}',
+    fieldListenPort: 'Web 监听端口 (listen_port)',
+    fieldNotAllowWan: '外网访问策略 (not_allow_wan_access)',
   },
   modal: {
     logTitle: '系统实时运行日志',

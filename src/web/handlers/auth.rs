@@ -351,6 +351,8 @@ mod tests {
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         // 模拟来自公网 IP (8.8.8.8) 的初始化请求
@@ -379,6 +381,8 @@ mod tests {
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
@@ -426,6 +430,8 @@ mod tests {
             log_buffer: LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: tokio_util::sync::CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));

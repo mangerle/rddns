@@ -18,6 +18,7 @@ export interface AppConfig {
   auth?: UserAuthConfig | null
   notifications: NotificationConfig
   dns_tasks: DnsTaskConfig[]
+  restart_required?: string[]
 }
 
 export interface SaveConfigPayload {

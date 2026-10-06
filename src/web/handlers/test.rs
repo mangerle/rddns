@@ -370,6 +370,8 @@ mod tests {
             log_buffer: crate::util::logging::LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         let empty_config = NotificationConfig::default();
@@ -391,6 +393,8 @@ mod tests {
             log_buffer: crate::util::logging::LogBuffer::new(10),
             state_manager: StateManager::new(),
             cancel_token: CancellationToken::new(),
+            active_listen_port: 9876,
+            active_not_allow_wan_access: true,
         };
 
         let mut config = NotificationConfig::default();

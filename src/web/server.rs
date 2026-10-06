@@ -98,6 +98,8 @@ impl WebServer {
             log_buffer: self.log_buffer.clone(),
             state_manager: self.state_manager,
             cancel_token: cancel_token.clone(),
+            active_listen_port: addr.port(),
+            active_not_allow_wan_access: addr.ip().is_loopback(),
         };
 
         // 需受保护的 API 路由 (附带 Basic Auth 校验中间件)

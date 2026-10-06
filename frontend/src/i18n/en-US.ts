@@ -274,6 +274,12 @@ export default {
     authPasswordLabel: 'Admin Password',
     authPasswordPlaceholder: 'Leave empty to keep existing password',
     authTip: 'Tip: After setting username and password, visiting console requires credentials. Password is protected with bcrypt hash.',
+    notAllowWanReadOnlyBadge: 'System Read-Only',
+    notAllowWanReadOnlyTip: 'Network listen policy is a startup-level configuration and cannot be modified via Web UI. To change it, please edit config.toml or use the --listen CLI parameter, which takes effect upon restarting the service.',
+    restartRequiredTitle: 'Restart Required for Network Config',
+    restartRequiredTip: 'The following network settings differ from the running instance and will take effect after restarting the service: {fields}',
+    fieldListenPort: 'Web Listen Port (listen_port)',
+    fieldNotAllowWan: 'WAN Access Policy (not_allow_wan_access)',
   },
   modal: {
     logTitle: 'Live System Logs',
