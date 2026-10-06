@@ -317,9 +317,17 @@ impl NotificationDispatcher {
         let statuses = self.delivery_statuses.clone();
         // 监管任务：收割各渠道句柄与投递结果，确保 panic 可被识别并聚合投递状态 (P2-7, P3-15)
         //
-        // 句柄纳管方式：直接并入全局 `HARVESTER_TRACKER`，而非派生新的
-        // 监管任务去持有它——后者只会把孤儿任务问题向下复制一层。
-        HARVESTER_TRACKER.lock().spawn(async move {
+        let mut tracker = HARVESTER_TRACKER.lock();
+        // 惰性收割已完成的历史监管任务，防止追踪表无界膨胀并感知 panic (P1-13)
+        while let Some(res) = tracker.try_join_next() {
+            if let Err(join_err) = res
+                && join_err.is_panic()
+            {
+                error!("通知监管任务发生 panic: {}", join_err);
+            }
+        }
+
+        tracker.spawn(async move {
             // 许可令牌随本任务存活，任务结束时自动释放闸门配额
             let _permits = permits;
             while let Some(res) = join_set.join_next().await {
