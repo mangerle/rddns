@@ -9,9 +9,9 @@ import type {
   SaveConfigPayload,
   VersionInfo,
 } from '@/types/config'
-import type { NotificationConfig } from '@/types/notify'
 import type { LogEntry } from '@/types/log'
-import type { IpFetchConfig } from '@/types/task'
+import type { ChannelDeliveryStatus, NotificationConfig } from '@/types/notify'
+import type { IpFetchConfig, TaskRuntimeState } from '@/types/task'
 import { api } from './client'
 
 export const authApi = {
@@ -36,12 +36,18 @@ export const configApi = {
 }
 
 export const taskApi = {
+  // 获取全部任务运行时状态快照 (P2-7)
+  getStatus: () =>
+    api.get<Record<string, TaskRuntimeState>>('/api/v1/tasks/status'),
   // 测试探测 IP
   testIp: (payload: { ip_type: 'ipv4' | 'ipv6' } & IpFetchConfig) =>
     api.post<{ ipv4?: string, ipv6?: string }>('/api/v1/test/ip', payload),
 }
 
 export const notifyApi = {
+  // 获取各通知渠道投递状态快照 (P2-7)
+  getStatus: () =>
+    api.get<Record<string, ChannelDeliveryStatus>>('/api/v1/notifications/status'),
   // 单渠道或全量发送测试通知
   testNotify: (payload: { channel?: string, config: NotificationConfig }) =>
     api.post<null>('/api/v1/test/notify', payload),

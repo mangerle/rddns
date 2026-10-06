@@ -81,3 +81,12 @@ export interface NotificationConfig {
   email?: EmailConfig | null
   webhook?: WebhookConfig | null
 }
+
+export interface ChannelDeliveryStatus {
+  channel_name: string
+  last_success_time?: string | null
+  last_failure_time?: string | null
+  last_error?: string | null
+  success_count: number
+  failure_count: number
+}

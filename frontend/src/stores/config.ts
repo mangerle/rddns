@@ -3,10 +3,11 @@
 // ==========================================
 
 import type { AppConfig, NetworkInterface } from '@/types/config'
-import type { DnsTaskConfig } from '@/types/task'
+import type { ChannelDeliveryStatus } from '@/types/notify'
+import type { DnsTaskConfig, TaskRuntimeState } from '@/types/task'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { configApi, systemApi } from '@/api'
+import { configApi, notifyApi, systemApi, taskApi } from '@/api'
 import { i18n } from '@/i18n'
 import { useToastStore } from './toast'
 
@@ -19,6 +20,8 @@ export const useConfigStore = defineStore('config', () => {
   const isSaving = ref<boolean>(false)
   const isSyncing = ref<boolean>(false)
   const restartRequired = ref<string[]>([])
+  const taskStates = ref<Record<string, TaskRuntimeState>>({})
+  const notificationStates = ref<Record<string, ChannelDeliveryStatus>>({})
 
   // 创建默认通知配置结构，杜绝 null 导致的运行时访问异常
   function createDefaultNotifications(): AppConfig['notifications'] {
@@ -308,6 +311,8 @@ export const useConfigStore = defineStore('config', () => {
         if (currentTaskIndex.value >= config.value.dns_tasks.length) {
           currentTaskIndex.value = 0
         }
+        // 配置加载就绪后同步拉取最新的任务与通知运行时状态快照 (P2-7 / L-9)
+        loadRuntimeStatuses()
       }
     }
     catch (e: unknown) {
@@ -315,6 +320,25 @@ export const useConfigStore = defineStore('config', () => {
     }
     finally {
       isLoading.value = false
+    }
+  }
+
+  // 拉取各任务与通知渠道结构化运行时状态快照 (P2-7 / L-9)
+  async function loadRuntimeStatuses() {
+    try {
+      const [tasksRes, notifRes] = await Promise.all([
+        taskApi.getStatus(),
+        notifyApi.getStatus(),
+      ])
+      if (tasksRes.success && tasksRes.data) {
+        taskStates.value = tasksRes.data
+      }
+      if (notifRes.success && notifRes.data) {
+        notificationStates.value = notifRes.data
+      }
+    }
+    catch (e: unknown) {
+      console.warn('获取运行时状态失败:', e)
     }
   }
 
@@ -369,6 +393,8 @@ export const useConfigStore = defineStore('config', () => {
       const res = await systemApi.syncAll()
       if (res.success) {
         toast.success(res.message)
+        // 触发同步后刷新最新运行时状态快照 (P2-7 / L-9)
+        loadRuntimeStatuses()
       }
       else {
         toast.error(res.message)
@@ -425,11 +451,14 @@ export const useConfigStore = defineStore('config', () => {
     restartRequired,
     config,
     notifications,
+    taskStates,
+    notificationStates,
     currentTaskIndex,
     currentTask,
     networkInterfaces,
     loadConfig,
     loadNetworkInterfaces,
+    loadRuntimeStatuses,
     saveConfig,
     triggerSync,
     addTask,

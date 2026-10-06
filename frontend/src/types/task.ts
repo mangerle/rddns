@@ -26,3 +26,15 @@ export interface DnsTaskConfig {
   ipv4: IpFetchConfig
   ipv6: IpFetchConfig
 }
+
+export interface TaskRuntimeState {
+  last_ipv4?: string | null
+  last_ipv6?: string | null
+  ipv4_fail_count: number
+  ipv6_fail_count: number
+  consecutive_failures: number
+  check_counter: number
+  last_sync_time?: string | null
+  last_error?: string | null
+  synced_domains?: Record<string, string>
+}
