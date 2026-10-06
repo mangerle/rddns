@@ -112,11 +112,34 @@ pub async fn hash_password_async(password: String) -> Result<String, String> {
 /// 校验密码强度与合法长度 (S-7)
 ///
 /// # 设计原理
-/// - **实现初衷**: 统一密码长度下限（>= 8 位）与上限（<= 72 字节），杜绝 bcrypt 截断风险与弱密码爆破。
-/// - **核心优势**: 严格比对字符与字节长度，不执行 `.trim()` 以确保与各端传输的真实凭据完全一致。
+/// 常见极高频弱口令黑名单字典 (不区分大小写匹配)
+const COMMON_WEAK_PASSWORDS: &[&str] = &[
+    "12345678",
+    "123456789",
+    "1234567890",
+    "password",
+    "password123",
+    "admin123",
+    "admin888",
+    "root1234",
+    "qwertyui",
+    "qwertyuiop",
+    "11111111",
+    "00000000",
+    "88888888",
+    "iloveyou",
+    "welcome1",
+    "rddns123",
+];
+
+/// 校验密码复杂度与安全性 (L-6)
+///
+/// # 设计原理
+/// - **实现初衷**: 统一密码长度下限（>= 8 位）与上限（<= 72 字节），拦截高频弱口令与纯单字符重复，杜绝 bcrypt 截断风险与弱密码爆破。
+/// - **核心优势**: 严格比对字符与字节长度，不执行 `.trim()` 以确保与各端传输的真实凭据完全一致；内置常见弱密码字典进行安全兜底。
 ///
 /// # Errors
-/// 当密码为空、长度小于 8 或大于 72 字节时返回错误提示。
+/// 当密码为空、长度不符合规范、命中弱口令字典或全部由单一字符重复构成时返回错误提示。
 pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
     if password.is_empty() {
         return Err("密码不能为空");
@@ -126,6 +149,16 @@ pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
     }
     if password.len() > 72 {
         return Err("密码长度不能超过 72 字节（受 bcrypt 算法上限限制）");
+    }
+    let lower = password.to_ascii_lowercase();
+    for weak in COMMON_WEAK_PASSWORDS {
+        if lower == *weak {
+            return Err("所选密码属于极高频常见弱口令，请设置更复杂的安全密码");
+        }
+    }
+    let first = password.as_bytes()[0];
+    if password.as_bytes().iter().all(|&b| b == first) {
+        return Err("密码不能由单一重复字符组成");
     }
     Ok(())
 }
@@ -308,9 +341,19 @@ mod tests {
     fn test_validate_password_strength() {
         assert!(validate_password_strength("").is_err());
         assert!(validate_password_strength("1234567").is_err());
-        assert!(validate_password_strength("12345678").is_ok());
-        assert!(validate_password_strength("a".repeat(72).as_str()).is_ok());
-        assert!(validate_password_strength("a".repeat(73).as_str()).is_err());
+        // 弱口令黑名单拦截
+        assert!(validate_password_strength("12345678").is_err());
+        assert!(validate_password_strength("password").is_err());
+        assert!(validate_password_strength("Admin123").is_err());
+        // 单一字符重复拦截
+        assert!(validate_password_strength("aaaaaaaa").is_err());
+        assert!(validate_password_strength("a".repeat(72).as_str()).is_err());
+
+        // 合法复杂度口令允许通过
+        assert!(validate_password_strength("SecureP@ssw0rd2026").is_ok());
+        assert!(validate_password_strength(&format!("aB3!{}", "x".repeat(68))).is_ok());
+        // 超过 72 字节上限拦截
+        assert!(validate_password_strength(&format!("aB3!{}", "x".repeat(69))).is_err());
     }
 
     #[tokio::test]
