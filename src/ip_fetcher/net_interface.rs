@@ -132,6 +132,15 @@ impl NetInterfaceIpFetcher {
 
 #[async_trait]
 impl IpFetcher for NetInterfaceIpFetcher {
+    /// 探测指定网卡的公网 IPv4 地址
+    ///
+    /// # 公网地址校验契约 (P1-5)
+    /// 无论走自定义正则还是默认筛选分支，返回值**必然**满足
+    /// [`is_public_ipv4`]。本项目其余三个探测器（`url.rs` / `command.rs` /
+    /// `stun.rs`）均强制执行该校验；原实现却在无公网地址时回退返回首个
+    /// 私网地址，会把 RFC1918 地址提交到公网 DNS，导致域名对外完全不可达。
+    /// 此处必须与三者保持一致：无公网地址时返回 `Ok(None)`，交由上层按
+    /// 探测失败处理（累加失败计数、退避、告警），而非静默写入无效记录。
     async fn fetch_ipv4(&self) -> Result<Option<Ipv4Addr>, FetchError> {
         let target_if = self.get_target_interface().await?;
 
@@ -145,21 +154,16 @@ impl IpFetcher for NetInterfaceIpFetcher {
             }
         }
 
-        if let Some(ref r) = self.regex {
-            if let Some(ip) = select_ip_by_ordinal_or_regex(&candidates, Some(r), |t, re| {
-                extract_ipv4(t, Some(re))
-            }) {
-                return Ok(Some(ip));
-            }
-        } else if let Some(&pub_ip) = candidates.iter().find(|ip| is_public_ipv4(ip)) {
-            return Ok(Some(pub_ip));
-        } else if let Some(&first) = candidates.first() {
-            return Ok(Some(first));
-        }
-
-        Ok(None)
+        // 正则分支同样必须受公网校验约束：正则仅用于从候选集中挑选，
+        // 不得成为绕过公网地址限制的旁路 (P1-5)
+        Ok(select_public_ipv4(&candidates, self.regex.as_deref()))
     }
 
+    /// 探测指定网卡的公网 IPv6 地址
+    ///
+    /// # 公网地址校验契约 (P1-5)
+    /// 与 IPv4 分支保持一致，仅返回全球单播地址（[`is_global_unicast_ipv6`]），
+    /// 拒绝 ULA(fc00::/7)、链路本地(fe80::/10) 等内网地址。
     async fn fetch_ipv6(&self) -> Result<Option<Ipv6Addr>, FetchError> {
         let target_if = self.get_target_interface().await?;
 
@@ -173,15 +177,41 @@ impl IpFetcher for NetInterfaceIpFetcher {
             candidates = Self::collect_fallback_ipv6_candidates(&target_if);
         }
 
+        // 候选集已由 select_best_ipv6 完成优选，此处仅需做公网性兜底校验 (P1-5)
         if let Some(ref r) = self.regex {
-            Ok(select_ip_by_ordinal_or_regex(
-                &candidates,
-                Some(r),
-                |t, re| extract_ipv6(t, Some(re)),
-            ))
+            Ok(
+                select_ip_by_ordinal_or_regex(&candidates, Some(r), |t, re| {
+                    extract_ipv6(t, Some(re))
+                })
+                .filter(is_global_unicast_ipv6),
+            )
         } else {
-            Ok(candidates.first().copied())
+            Ok(candidates.first().copied().filter(is_global_unicast_ipv6))
         }
+    }
+}
+
+/// 从候选集中挑选出公网可达的 IPv4 地址 (P1-5)
+///
+/// # 设计原理
+/// 抽为独立纯函数以便可脱离真实网卡环境直接单元测试。
+///
+/// # 不变式保证
+/// 返回值**必然**满足 [`is_public_ipv4`]，无公网地址时返回 `None`。
+/// 严禁在此处回退返回首个私网地址——那会把 RFC1918 地址提交到公网 DNS，
+/// 使域名对外完全不可达。无公网地址时交由上层按探测失败处理（累加失败
+/// 计数、指数退避、告警），而非静默写入无效记录。
+pub fn select_public_ipv4(candidates: &[Ipv4Addr], regex: Option<&str>) -> Option<Ipv4Addr> {
+    match regex {
+        // 正则分支：先按用户规则从候选集中挑选，再对挑选结果做公网校验。
+        // 正则仅决定「挑哪个」，绝不可决定「是否受公网约束」。
+        Some(r) => {
+            select_ip_by_ordinal_or_regex(candidates, Some(r), |t, re| extract_ipv4(t, Some(re)))
+                .filter(is_public_ipv4)
+        }
+        // 无正则分支：取首个公网地址。不可直接取 candidates.first()，
+        // 否则私网地址排在首位时会被误选并提交到公网 DNS。
+        None => candidates.iter().copied().find(is_public_ipv4),
     }
 }
 
@@ -351,5 +381,77 @@ mod tests {
             extract_ipv6(t, Some(re))
         });
         assert_eq!(sel_regex, Some(ip2));
+    }
+
+    #[test]
+    fn test_select_public_ipv4_never_returns_private_address() {
+        // 回归用例 (P1-5)：原实现在无公网地址时回退返回 `candidates.first()`，
+        // 会把 RFC1918 私网地址提交到公网 DNS，使域名对外完全不可达。
+        // 本用例锁死契约：无公网地址时必须返回 None。
+        use std::net::Ipv4Addr;
+
+        // 典型家庭/内网网段
+        let private_only = vec![
+            Ipv4Addr::new(192, 168, 1, 100),
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(172, 16, 3, 4),
+        ];
+        assert_eq!(
+            select_public_ipv4(&private_only, None),
+            None,
+            "纯私网候选集绝不可返回任何地址"
+        );
+
+        // CGNAT 段（100.64.0.0/10）同样不属于公网可解析地址
+        let cgnat = vec![Ipv4Addr::new(100, 64, 1, 1)];
+        assert_eq!(
+            select_public_ipv4(&cgnat, None),
+            None,
+            "CGNAT 地址不得作为公网 IPv4 返回"
+        );
+
+        // 空候选集
+        assert_eq!(select_public_ipv4(&[], None), None);
+    }
+
+    #[test]
+    fn test_select_public_ipv4_returns_public_address() {
+        use std::net::Ipv4Addr;
+
+        // 混合候选集：文档保留段在前、真实公网段在后
+        let mixed = vec![
+            Ipv4Addr::new(192, 168, 1, 100),
+            Ipv4Addr::new(203, 0, 113, 9),
+        ];
+        // 203.0.113.0/24 属 RFC 6890 文档保留段，不可路由，应被拒绝
+        assert_eq!(select_public_ipv4(&mixed, None), None);
+
+        // 混入可路由公网段后应正确选出
+        let with_public = vec![Ipv4Addr::new(192, 168, 1, 100), Ipv4Addr::new(8, 8, 8, 8)];
+        assert_eq!(
+            select_public_ipv4(&with_public, None),
+            Some(Ipv4Addr::new(8, 8, 8, 8))
+        );
+    }
+
+    #[test]
+    fn test_select_public_ipv4_regex_cannot_bypass_validation() {
+        // 回归用例 (P1-5)：正则仅用于从候选集中挑选，
+        // 绝不可成为绕过公网地址限制的旁路
+        use std::net::Ipv4Addr;
+
+        let private_only = vec![Ipv4Addr::new(192, 168, 1, 100), Ipv4Addr::new(10, 0, 0, 5)];
+
+        // 正则命中私网地址时必须被公网校验拦截
+        assert_eq!(
+            select_public_ipv4(&private_only, Some(r"192\.168\..*")),
+            None,
+            "正则命中私网地址时不得绕过公网校验"
+        );
+        assert_eq!(
+            select_public_ipv4(&private_only, Some(r"10\..*")),
+            None,
+            "正则命中私网地址时不得绕过公网校验"
+        );
     }
 }

@@ -63,9 +63,12 @@ impl Notifier for CustomWebhookNotifier {
                         header_map.insert(hk, hv);
                     }
                     _ => {
+                        // 仅回显 Header 名称，绝不回显值 (P1-3)：值通常承载
+                        // `Authorization: Bearer <token>` 等凭据，模板替换后若
+                        // 产生非法字符会被跳过，此时若打印值即等于明文落盘
                         warn!(
-                            "Webhook 自定义 Header [{}: {}] 格式不合法，已跳过",
-                            k, rendered_v
+                            "Webhook 自定义 Header [{}] 格式不合法（值含非法字符或名称非法），已跳过",
+                            k
                         );
                     }
                 }

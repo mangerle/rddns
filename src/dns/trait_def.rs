@@ -230,8 +230,13 @@ pub fn sanitize_sensitive_url_params(input: &str) -> String {
 /// 刻意**不使用** `thiserror` 派生，而是手写 [`fmt::Display`]：
 /// 目的是把敏感信息脱敏收敛到错误文本的唯一出口（详见该实现注释），
 /// 使 27 个 provider 无需逐个改造调用点即自动受保护。
-///代价是需手工维护 `From` 转换，已在下方显式列出。
-#[derive(Debug)]
+/// 代价是需手工维护 `From` 转换，已在下方显式列出。
+///
+/// # Debug 出口同样受脱敏保护 (P1-3)
+/// 刻意**不**使用 `#[derive(Debug)]`：`derive` 会直接输出变体内部持有的
+/// 未脱敏原始 `String`（如 `ApiError { message: "access_token=明文" }`），
+/// 绕过 `Display` 的脱敏逻辑。手写 [`fmt::Debug`] 复用 `Display` 实现，
+/// 使「任何格式化路径均已脱敏」成为由类型系统保证的约束。
 pub enum DnsProviderError {
     /// HTTP 通信层错误，文本可能包含带凭据的请求 URL
     Http(String),
@@ -255,12 +260,17 @@ impl fmt::Display for DnsProviderError {
     /// 本实现将脱敏与最大 1024 字符的截断同时收敛到 `Display` 唯一出口：
     /// 无论错误由 40 多个构造点的何处产生，呈现给外部、日志与通知的文本
     /// 都必然经过脱敏并受到长度上限保护，彻底消除长报文引起的内存放大与正则回溯失控。
+    ///
+    /// # 截断与脱敏的先后顺序 (P1-3)
+    /// 必须**先截断、后脱敏**。若顺序颠倒，脱敏正则需扫描完整响应体方可
+    /// 定位敏感字段，而截断本应发挥的「限制正则回溯输入规模」作用失效，
+    /// 与本函数原注释中「防止正则回溯失控」的设计意图完全相反。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Http(msg) => write!(
                 f,
                 "HTTP 通信错误: {}",
-                truncate_body(&sanitize_sensitive_url_params(msg))
+                sanitize_sensitive_url_params(truncate_body(msg))
             ),
             Self::Json(err) => write!(
                 f,
@@ -277,22 +287,31 @@ impl fmt::Display for DnsProviderError {
             Self::ApiError { code, message } => write!(
                 f,
                 "服务商 API 错误 [{}]: {}",
-                code,
-                truncate_body(&sanitize_sensitive_url_params(message))
+                truncate_body(code),
+                sanitize_sensitive_url_params(truncate_body(message))
             ),
             Self::MissingCredentials(msg) => {
                 write!(
                     f,
                     "缺少认证凭据: {}",
-                    truncate_body(&sanitize_sensitive_url_params(msg))
+                    sanitize_sensitive_url_params(truncate_body(msg))
                 )
             }
             Self::Other(msg) => write!(
                 f,
                 "其他服务商错误: {}",
-                truncate_body(&sanitize_sensitive_url_params(msg))
+                sanitize_sensitive_url_params(truncate_body(msg))
             ),
         }
+    }
+}
+
+impl fmt::Debug for DnsProviderError {
+    /// # 设计原理
+    /// 复用 [`fmt::Display`] 的脱敏实现：任何 `{:?}` 格式化路径都经由同一
+    /// 脱敏出口，杜绝 `derive(Debug)` 绕过脱敏导致凭据泄漏 (P1-3)。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 

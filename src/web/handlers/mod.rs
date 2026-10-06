@@ -108,19 +108,41 @@ impl std::fmt::Display for AppError {
 
 impl std::error::Error for AppError {}
 
+/// 写入日志的 Web API 错误消息最大字符数
+///
+/// # 设计原理
+/// - **实现初衷**: 限制单条错误日志的体积，避免服务商原始报文撑爆磁盘 I/O。
+/// - **不变式保证**: 本常量以**字符**而非字节为单位计量。错误消息大量包含中文
+///   （3 字节/字），若以字节切片截断，索引极易落在多字节字符中间并触发
+///   `byte index is not a char boundary` panic。中文消息下按字节索引 256 截断
+///   的 panic 命中率极高，且消息内容包含用户可控的任务名与 URL，
+///   攻击者无需构造畸形编码即可稳定触发请求级拒绝服务。
+const MAX_LOGGED_MESSAGE_CHARS: usize = 256;
+
+/// 将错误消息收敛为可安全写入日志的单行文本
+///
+/// # 设计原理
+/// - 换行与回车一律转义，杜绝日志注入伪造日志行 (P-7)。
+/// - 长度裁剪使用 `chars().take()` 做字符安全截断，杜绝多字节字符被腰斩。
+fn sanitize_log_message(message: &str) -> String {
+    let escaped = if message.contains('\n') || message.contains('\r') {
+        message.replace('\r', "\\r").replace('\n', "\\n")
+    } else {
+        message.to_string()
+    };
+
+    let char_count = escaped.chars().count();
+    if char_count > MAX_LOGGED_MESSAGE_CHARS {
+        let truncated: String = escaped.chars().take(MAX_LOGGED_MESSAGE_CHARS).collect();
+        format!("{}...(截断)", truncated)
+    } else {
+        escaped
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        // 对消息换行进行转义并限制日志输出最大长度，杜绝换行日志注入伪造日志行 (P-7)
-        let safe_msg = if self.message.contains('\n') || self.message.contains('\r') {
-            self.message.replace('\r', "\\r").replace('\n', "\\n")
-        } else {
-            self.message.clone()
-        };
-        let truncated_msg = if safe_msg.len() > 256 {
-            format!("{}...(截断)", &safe_msg[..256])
-        } else {
-            safe_msg
-        };
+        let truncated_msg = sanitize_log_message(&self.message);
 
         // 遵循 AGENTS.md 日志分级契约：仅 5xx 服务端故障记录 error!，4xx 客户端输入错误记录 debug! (P-7)
         if self.status.is_server_error() {
@@ -163,5 +185,49 @@ mod tests {
         let err_500 = AppError::internal("系统内部异常");
         let resp_500 = err_500.into_response();
         assert_eq!(resp_500.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_sanitize_log_message_truncates_by_char_not_byte() {
+        // 回归用例 (P0-1)：中文为 3 字节/字，按字节索引 256 截断会落在字符中间
+        // 触发 `byte index 256 is not a char boundary` panic。此处必须按字符安全截断。
+        let chinese = "任务名称错误详情".repeat(40);
+        assert!(
+            chinese.len() > MAX_LOGGED_MESSAGE_CHARS,
+            "用例前提：消息字节数必须超过字符上限，否则无法覆盖该缺陷"
+        );
+
+        // 不 panic 即为通过；并校验截断后长度与标记
+        let result = sanitize_log_message(&chinese);
+        assert!(result.ends_with("...(截断)"));
+        assert_eq!(
+            result.chars().count(),
+            MAX_LOGGED_MESSAGE_CHARS + "...(截断)".chars().count()
+        );
+        // 截断结果必须是合法 UTF-8 且无半个字符
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_log_message_escapes_newline_injection() {
+        // 换行注入防护不可因截断改造而回退 (P-7)
+        let result = sanitize_log_message("第一行\n第二行\r第三行");
+        assert!(!result.contains('\n'));
+        assert!(!result.contains('\r'));
+        assert!(result.contains("\\n"));
+        assert!(result.contains("\\r"));
+    }
+
+    #[test]
+    fn test_sanitize_log_message_boundary_exact_length_untouched() {
+        // 恰好等于上限的消息不应被误截断
+        let exact: String = "a".repeat(MAX_LOGGED_MESSAGE_CHARS);
+        let result = sanitize_log_message(&exact);
+        assert_eq!(result, exact);
+        assert!(!result.contains("截断"));
+
+        // 超出一个字符即应截断
+        let over: String = "a".repeat(MAX_LOGGED_MESSAGE_CHARS + 1);
+        assert!(sanitize_log_message(&over).ends_with("...(截断)"));
     }
 }

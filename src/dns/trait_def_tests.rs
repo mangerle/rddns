@@ -167,3 +167,80 @@ fn test_error_is_retryable() {
     assert!(!DnsProviderError::ZoneNotFound("example.com".to_string()).is_retryable());
     assert!(!DnsProviderError::api("InvalidDomain", "Domain does not exist").is_retryable());
 }
+
+#[test]
+fn test_dns_provider_error_debug_output_is_sanitized() {
+    // 回归用例 (P1-3)：derive(Debug) 会直接输出变体内部的未脱敏原文，
+    // 使任何 `{:?}` 格式化路径绕过 Display 的脱敏逻辑。修复后 Debug 复用
+    // Display 实现，必须保证明文凭据绝不出现在 Debug 输出中。
+    let secret = "SUPER_SECRET_TOKEN_VALUE";
+    let errors = vec![
+        DnsProviderError::Http(format!("GET /api?access_token={}", secret)),
+        DnsProviderError::ApiError {
+            code: "401".to_string(),
+            message: format!("{{\"token\":\"{}\"}}", secret),
+        },
+        DnsProviderError::Other(format!("password={} rejected", secret)),
+        DnsProviderError::MissingCredentials(format!("secret={} absent", secret)),
+    ];
+
+    for err in errors {
+        let debug_text = format!("{:?}", err);
+        let display_text = err.to_string();
+        assert!(
+            !debug_text.contains(secret),
+            "Debug 输出绝不可包含明文凭据，实际输出: {}",
+            debug_text
+        );
+        assert!(
+            !display_text.contains(secret),
+            "Display 输出绝不可包含明文凭据，实际输出: {}",
+            display_text
+        );
+        // Debug 与 Display 行为必须一致，杜绝某一出口漏脱敏
+        assert_eq!(
+            debug_text, display_text,
+            "Debug 应复用 Display 的脱敏实现，两者输出应完全一致"
+        );
+    }
+}
+
+#[test]
+fn test_dns_provider_error_truncation_precedes_sanitization() {
+    // 回归用例 (P1-3)：脱敏必须在截断之后执行。
+    //
+    // 若顺序颠倒（先脱敏后截断），脱敏正则需扫描完整报文方可定位敏感字段，
+    // 截断本应发挥的「限制正则回溯输入规模」作用失效，与 Display 原注释中
+    // 「防止正则回溯失控」的设计意图完全相反。
+    //
+    // 本用例以真实凭据形态（key=value）验证：位于截断范围内的凭据必须被
+    // 脱敏为占位符，且最终输出长度受控。
+    let secret = "LEAK_ME_TOKEN_VALUE";
+    // 构造一个远超长度上限的报文，敏感字段置于截断范围之内
+    let credential = format!("token={}", secret);
+    let padded = format!(
+        "{}{}{}",
+        "A".repeat(50),
+        credential,
+        "B".repeat(MAX_ERR_BODY_CHARS * 3)
+    );
+    let err = DnsProviderError::Other(padded);
+    let text = err.to_string();
+
+    assert!(
+        !text.contains(secret),
+        "截断范围内的凭据必须被脱敏，实际输出: {}",
+        text
+    );
+    assert!(
+        text.contains(MASK_PLACEHOLDER),
+        "应输出脱敏占位符，实际输出: {}",
+        text
+    );
+    // 截断生效：超长报文不得原样输出
+    assert!(
+        text.len() <= MAX_ERR_BODY_CHARS + 60,
+        "超长报文必须被截断，实际长度 {}",
+        text.len()
+    );
+}

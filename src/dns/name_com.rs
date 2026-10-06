@@ -171,7 +171,7 @@ impl DnsProvider for NameComProvider {
                 .await?;
 
             let put_status = put_resp.status();
-            let put_text = put_resp.text().await.unwrap_or_default();
+            let put_text = put_resp.text().await?;
             check_namecom_error(&put_text, put_status, "更新记录失败")?;
 
             Ok(SyncRecordResult::updated_log(
@@ -200,7 +200,7 @@ impl DnsProvider for NameComProvider {
                 .await?;
 
             let post_status = post_resp.status();
-            let post_text = post_resp.text().await.unwrap_or_default();
+            let post_text = post_resp.text().await?;
             check_namecom_error(&post_text, post_status, "创建记录失败")?;
 
             Ok(SyncRecordResult::created_log(

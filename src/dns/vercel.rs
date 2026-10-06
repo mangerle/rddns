@@ -124,13 +124,16 @@ impl RecordOps for VercelProvider {
     ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
         let mut all_records = Vec::new();
         let mut next_cursor: Option<u64> = None;
+        // 单页条数与最大翻页数：Vercel records API 的 limit 上限为 100
+        const PAGE_SIZE: usize = 100;
         const MAX_PAGES: usize = 10;
 
         for _ in 0..MAX_PAGES {
             let base_url = format!(
-                "{}/v4/domains/{}/records?limit=100{}",
+                "{}/v4/domains/{}/records?limit={}{}",
                 VERCEL_API_BASE,
                 url_encode(&domain.root_domain),
+                PAGE_SIZE,
                 next_cursor
                     .map(|c| format!("&until={}", c))
                     .unwrap_or_default()
@@ -155,12 +158,23 @@ impl RecordOps for VercelProvider {
 
             if let Some(pagination) = parsed.pagination
                 && let Some(next) = pagination.next
-                && page_len >= 100
+                && page_len >= PAGE_SIZE
             {
                 next_cursor = Some(next);
             } else {
+                // 已拉取到最后一页，正常结束
                 break;
             }
+        }
+
+        // 达到翻页上限仍有后续数据时必须显式报错 (P1-6)：
+        // 静默返回不完整列表会使目标域名记录「查不到」，进而被模板
+        // 误判为记录不存在并创建重复记录，破坏 DNS 解析。
+        if next_cursor.is_some() {
+            return Err(DnsProviderError::Other(format!(
+                "Vercel 记录查询翻页达到 {} 页上限后仍有剩余数据，为避免误创建重复记录已中止本次同步，请减少单域名记录数或改用支持名称过滤的服务商接口",
+                MAX_PAGES
+            )));
         }
 
         let matched = all_records
@@ -213,7 +227,7 @@ impl RecordOps for VercelProvider {
             .await?;
 
         let post_status = post_resp.status();
-        let body_text = post_resp.text().await.unwrap_or_default();
+        let body_text = post_resp.text().await?;
         check_vercel_error(&body_text, post_status)?;
         Ok(())
     }
@@ -249,7 +263,7 @@ impl RecordOps for VercelProvider {
             .await?;
 
         let patch_status = patch_resp.status();
-        let body_text = patch_resp.text().await.unwrap_or_default();
+        let body_text = patch_resp.text().await?;
         check_vercel_error(&body_text, patch_status)?;
         Ok(())
     }

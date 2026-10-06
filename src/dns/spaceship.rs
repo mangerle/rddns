@@ -160,7 +160,7 @@ impl RecordOps for SpaceshipProvider {
             .await?;
 
         let put_status = put_resp.status();
-        let put_body = put_resp.text().await.unwrap_or_default();
+        let put_body = put_resp.text().await?;
         if let Ok(err_resp) = serde_json::from_str::<SpaceshipErrorResponse>(&put_body)
             && err_resp.detail.is_some()
         {
@@ -218,6 +218,7 @@ impl RecordOps for SpaceshipProvider {
                 Ok(resp) => {
                     if !resp.status().is_success() {
                         let status = resp.status();
+                        // 同 cloudflare：清理失败仅告警不冒泡，吞掉读取错误是有意为之
                         let text = resp.text().await.unwrap_or_default();
                         warn!(
                             "Spaceship 删除旧解析记录响应非成功状态，HTTP 状态码: {}，详情: {}",

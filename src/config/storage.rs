@@ -1,6 +1,6 @@
 use crate::config::model::AppConfig;
 use anyhow::Result;
-use log::info;
+use log::{info, warn};
 use parking_lot::RwLock;
 use std::fs;
 use std::io::{Error as IoError, Write};
@@ -57,19 +57,56 @@ impl ConfigManager {
     /// 初始化配置管理器（从指定路径加载，若不存在则创建默认配置）
     ///
     /// # 设计原理
-    /// - **实现初衷**：在程序冷启动时提供安全自愈能力，首次运行时自动生成完整的样例配置文件。
+    /// - **实现初衷**: 在程序冷启动时提供安全自愈能力，首次运行时自动生成完整的样例配置文件。
+    /// - **容错自愈 (P1-4)**: 自托管场景（本项目常部署于路由器、NAS 等无人值守设备）
+    ///   下，配置若因断电、手工编辑或磁盘故障而损坏，原实现会直接返回错误使程序退出。
+    ///   由于服务通常已注册为系统自启，该失败将形成「开机自启失败循环」，用户既拿不到
+    ///   默认配置、也看不到任何恢复指引，等同设备变砖。现改为：**文件损坏**时备份
+    ///   损坏文件并回退默认配置，使服务至少能够启动并通过 Web 界面重新配置。
+    ///
+    /// # 错误分类处置原则 (P1-4)
+    /// 加载失败被严格区分为两类，二者处置策略截然不同：
+    ///
+    /// | 失败类型 | 根因 | 处置策略 |
+    /// |---------|------|---------|
+    /// | **文件损坏** | 断电、手工编辑失误、磁盘故障导致内容截断或语法非法 | 自动备份并回退默认配置，保证可启动 |
+    /// | **配置内容非法** | 语法正确但违反业务规则（如端口为 0） | **显式报错并退出**，绝不自动重置 |
+    ///
+    /// 第二类必须显式报错的原因：配置语法正确说明用户是刻意如此设置，
+    /// 自动重置为默认值会**静默丢弃用户的本意**（例如刻意设置的 0 端口可能
+    /// 是为了配合其他服务做端口探测），而用户对配置被改写毫不知情。
+    /// 此类失败通常源于程序版本升级引入的新校验规则，用户有能力自行修复。
     ///
     /// # Errors
-    /// 当配置文件存在但格式非法，或磁盘无写入权限导致无法创建默认配置时返回错误。
+    /// 当配置**内容非法**（返回 [`ConfigError::Validation`]）或磁盘无写入
+    /// 权限导致无法创建默认配置时返回错误。
     pub fn load_or_create(path: PathBuf) -> Result<Self, ConfigError> {
         let config = if path.exists() {
             info!("正在加载配置文件: {}", path.display());
-            let content = fs::read_to_string(&path)?;
-            let conf: AppConfig = toml::from_str(&content)?;
-            if let Err(errs) = conf.validate() {
-                return Err(ConfigError::Validation(errs.join("; ")));
+            match Self::load_existing(&path) {
+                Ok(conf) => conf,
+                // 内容非法：显式报错，绝不自动重置用户配置
+                Err(ConfigError::Validation(msg)) => {
+                    return Err(ConfigError::Validation(msg));
+                }
+                // 文件损坏：备份后回退默认配置，避免无人值守设备陷入自启失败循环
+                Err(err) => {
+                    warn!(
+                        "配置文件已损坏（{}），已备份损坏文件并回退至默认配置，请通过 Web 界面或编辑备份文件恢复正确配置",
+                        err
+                    );
+                    Self::backup_corrupted_file(&path);
+                    let default_conf = AppConfig::default();
+                    // 回退配置同样落盘，保证下次启动读取到的是合法配置
+                    Self::atomic_save_to_path(&path, &default_conf).inspect_err(|e| {
+                        warn!(
+                            "回退默认配置写入磁盘失败（服务仍将以内存默认配置启动）: {}",
+                            e
+                        );
+                    })?;
+                    default_conf
+                }
             }
-            conf
         } else {
             info!("配置文件不存在，创建默认配置: {}", path.display());
             let default_conf = AppConfig::default();
@@ -86,6 +123,59 @@ impl ConfigManager {
             sender,
             async_write_lock: TokioMutex::new(()),
         })
+    }
+
+    /// 加载并校验既有配置文件，执行版本迁移
+    ///
+    /// # Errors
+    /// 文件读取失败、语法解析失败或业务校验失败时返回错误。
+    fn load_existing(path: &Path) -> Result<AppConfig, ConfigError> {
+        let content = fs::read_to_string(path)?;
+        let mut conf: AppConfig = toml::from_str(&content)?;
+
+        // 显式版本迁移：字段级 default 只能兜住「新增字段」，
+        // 字段语义变更必须经由此处升级到当前版本 (P1-4)
+        for note in conf.migrate() {
+            warn!("[配置迁移] {}", note);
+        }
+
+        if let Err(errs) = conf.validate() {
+            return Err(ConfigError::Validation(errs.join("; ")));
+        }
+        Ok(conf)
+    }
+
+    /// 将损坏的配置文件备份为带时间戳的副本 (P1-4)
+    ///
+    /// # 设计原理
+    /// 绝不删除或覆盖损坏文件——它是用户手工编辑失败后的唯一现场，
+    /// 保留副本可让用户在修复配置时查阅原有内容。
+    /// 备份失败仅记录告警，不阻断启动流程（用户仍可手工找回配置）。
+    fn backup_corrupted_file(path: &Path) {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "config".to_string());
+        let backup_name = format!("{}.corrupt-{}", file_name, stamp);
+
+        let target = match path.parent() {
+            Some(dir) => dir.join(&backup_name),
+            None => PathBuf::from(&backup_name),
+        };
+
+        match fs::copy(path, &target) {
+            Ok(_) => warn!(
+                "损坏的配置文件已备份至: {}，请检查该文件后手工恢复正确配置",
+                target.display()
+            ),
+            Err(e) => warn!(
+                "备份损坏配置文件失败（{} -> {}）: {}；原文件未被修改，可手工找回",
+                path.display(),
+                target.display(),
+                e
+            ),
+        }
     }
 
     /// 获取当前最新配置快照 (零阻塞克隆内部 Arc 引用)
@@ -372,6 +462,129 @@ mod tests {
             mode & 0o777,
             0o600,
             "Unix 环境下配置文件应具备 0600 (仅所有者可读写) 访问权限"
+        );
+    }
+
+    #[test]
+    fn test_corrupted_config_falls_back_to_default_with_backup() {
+        // 回归用例 (P1-4)：配置损坏不得导致程序退出。
+        // 无人值守设备（路由器/NAS）上服务通常已注册系统自启，
+        // 一次配置损坏即形成「开机自启失败循环」，等同设备变砖。
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("corrupt.toml");
+
+        // 写入语法完全非法的 TOML
+        fs::write(&config_file, "这不是合法的 TOML 内容 ][{{").unwrap();
+
+        // 必须成功启动而非报错退出
+        let manager = ConfigManager::load_or_create(config_file.clone())
+            .expect("配置损坏时应回退默认配置而非启动失败");
+
+        // 应回退为默认配置
+        let conf = manager.get_config();
+        assert_eq!(conf.listen_port, 9876);
+        assert_eq!(conf.interval_secs, 300);
+        assert_eq!(conf.cache_times, 10);
+
+        // 损坏文件必须被备份保留（用户唯一的恢复现场）
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "损坏的配置���件必须被备份为带时间戳的副本"
+        );
+
+        // 下次启动必须能正常读取（磁盘上已是合法配置），不得重复进入兜底分支
+        let reloaded =
+            ConfigManager::load_or_create(config_file).expect("回退后的配置必须可被正常加载");
+        assert_eq!(reloaded.get_config().listen_port, 9876);
+    }
+
+    #[test]
+    fn test_config_business_validation_failure_still_reports_error() {
+        // 语法正确但业务校验失败（端口为 0）时必须显式报错，
+        // 不得被「自动修复兜底」掩盖——自动重置会悄悄丢弃用户的本意
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("invalid_business.toml");
+
+        fs::write(&config_file, "listen_port = 0").unwrap();
+
+        let result = ConfigManager::load_or_create(config_file);
+        assert!(
+            result.is_err(),
+            "业务校验失败必须显式报错，不得静默重置为默认配置"
+        );
+        match result.err() {
+            Some(ConfigError::Validation(msg)) => {
+                assert!(msg.contains("监听端口"), "错误信息应指明端口问题: {}", msg)
+            }
+            other => panic!("应返回 Validation 变体，实际得到: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_migrate_normalizes_version_to_current() {
+        use crate::config::model::CURRENT_CONFIG_VERSION;
+
+        // 老版本配置（无 version 字段，serde 默认为 0）应被归一化到当前版本
+        let mut conf = AppConfig {
+            config_version: 0,
+            ..Default::default()
+        };
+        let notes = conf.migrate();
+        assert_eq!(conf.config_version, CURRENT_CONFIG_VERSION);
+        assert!(
+            notes.iter().any(|n| n.contains("迁移")),
+            "应产生迁移提示，实际: {:?}",
+            notes
+        );
+
+        // 已是当前版本则无迁移提示
+        let mut current = AppConfig::default();
+        assert!(current.migrate().is_empty());
+
+        // 高于当前版本：给出显式告警而非静默接受，防止配置项被无声丢弃
+        let mut future = AppConfig {
+            config_version: CURRENT_CONFIG_VERSION + 5,
+            ..Default::default()
+        };
+        let notes = future.migrate();
+        assert!(
+            notes.iter().any(|n| n.contains("高于当前程序支持的版本")),
+            "高版本配置必须显式告警，实际: {:?}",
+            notes
+        );
+    }
+
+    #[test]
+    fn test_legacy_config_without_version_field_loads() {
+        // 兼容性：既有用户配置文件不含 config_version 字段，
+        // 必须能正常加载并被自动补齐版本号，不得报错
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("legacy.toml");
+
+        // 模拟 v0.12.0 之前生成的无版本字段配置
+        fs::write(
+            &config_file,
+            "listen_port = 8888\ninterval_secs = 600\ncache_times = 20\n",
+        )
+        .unwrap();
+
+        let manager =
+            ConfigManager::load_or_create(config_file).expect("老版本无版本字段配置必须可加载");
+        let conf = manager.get_config();
+
+        assert_eq!(conf.listen_port, 8888, "既有配置值必须被完整保留");
+        assert_eq!(conf.interval_secs, 600);
+        assert_eq!(conf.cache_times, 20);
+        assert_eq!(
+            conf.config_version,
+            crate::config::model::CURRENT_CONFIG_VERSION,
+            "版本号应被自动补齐为当前版本"
         );
     }
 }

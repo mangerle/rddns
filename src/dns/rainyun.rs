@@ -1,6 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -10,21 +11,28 @@ use std::net::IpAddr;
 
 const RAINYUN_ENDPOINT: &str = "https://api.v2.rainyun.com";
 
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// 雨云 Domain ID 缓存生存期（2 小时）
 const RAINYUN_DOMAIN_CACHE_TTL: Duration = Duration::from_secs(7200);
 
-type RainyunDomainKey = (String, String);
-type RainyunCachedDomain = (Instant, String);
+/// 雨云 Domain ID 缓存容量硬上限
+const RAINYUN_DOMAIN_CACHE_CAPACITY: usize = 128;
 
-/// 全局雨云 Domain ID 缓存池 ((api_key_hash, root_domain) -> (created_at, domain_id))
-static GLOBAL_RAINYUN_DOMAIN_CACHE: LazyLock<
-    RwLock<HashMap<RainyunDomainKey, RainyunCachedDomain>>,
-> = LazyLock::new(|| RwLock::new(HashMap::new()));
+/// 雨云 Domain ID 缓存键（API Key 摘要 + 根域名）
+///
+/// # 安全设计
+/// 使用 API Key 的 SHA-256 摘要而非原文作为缓存键，避免凭据以明文形式
+/// 常驻内存并出现在内存转储中。
+type RainyunDomainKey = (String, String);
+
+/// 全局雨云 Domain ID 缓存池
+///
+/// # 重构说明 (P1-9)
+/// 与 Cloudflare 的 Zone 缓存实现逐行同构，现统一复用 [`TtlCache`]。
+static GLOBAL_RAINYUN_DOMAIN_CACHE: LazyLock<TtlCache<RainyunDomainKey, String>> =
+    LazyLock::new(|| TtlCache::new(RAINYUN_DOMAIN_CACHE_TTL, RAINYUN_DOMAIN_CACHE_CAPACITY));
 
 /// 雨云 (RainYun) DNS 提供商
 pub struct RainYunProvider {
@@ -96,10 +104,7 @@ impl RainYunProvider {
             crate::util::crypto::sha256_hex(self.api_key.as_bytes()),
             root_domain.to_string(),
         );
-        if let Some((created_at, cached_id)) =
-            GLOBAL_RAINYUN_DOMAIN_CACHE.read().get(&cache_key).cloned()
-            && created_at.elapsed() < RAINYUN_DOMAIN_CACHE_TTL
-        {
+        if let Some(cached_id) = GLOBAL_RAINYUN_DOMAIN_CACHE.get(&cache_key) {
             return Ok(cached_id);
         }
 
@@ -118,7 +123,16 @@ impl RainYunProvider {
                 .send()
                 .await?;
 
+            let status = resp.status();
             let body_text = resp.text().await?;
+
+            // 必须先判 HTTP 状态码：网关 502/503 返回的是 HTML 错误页，
+            // 直接反序列化会变成 Json 错误，而 Json 在 is_retryable() 中
+            // 恒为 false，导致瞬时故障永久失去重试机会 (P1-8)
+            if !status.is_success() {
+                return Err(DnsProviderError::http_status(status, &body_text));
+            }
+
             let res: RainyunResp = serde_json::from_str(&body_text)?;
 
             if res.code != 200 {
@@ -140,11 +154,7 @@ impl RainYunProvider {
 
                 if let Some(m) = matched {
                     let did_str = m.id.to_string();
-                    let mut guard = GLOBAL_RAINYUN_DOMAIN_CACHE.write();
-                    if guard.len() >= 128 {
-                        guard.clear();
-                    }
-                    guard.insert(cache_key, (Instant::now(), did_str.clone()));
+                    GLOBAL_RAINYUN_DOMAIN_CACHE.insert(cache_key, did_str.clone());
                     return Ok(did_str);
                 }
 
@@ -260,7 +270,14 @@ impl RecordOps for RainYunProvider {
             .send()
             .await?;
 
+        let post_status = post_resp.status();
         let post_text = post_resp.text().await?;
+
+        // 同上：先判状态码，避免 HTML 错误页被误判为不可重试的 Json 错误 (P1-8)
+        if !post_status.is_success() {
+            return Err(DnsProviderError::http_status(post_status, &post_text));
+        }
+
         let post_res: RainyunResp = serde_json::from_str(&post_text)?;
 
         if post_res.code == 200 {
@@ -311,7 +328,14 @@ impl RecordOps for RainYunProvider {
             .send()
             .await?;
 
+        let patch_status = patch_resp.status();
         let patch_text = patch_resp.text().await?;
+
+        // 同上：先判状态码，避免 HTML 错误页被误判为不可重试的 Json 错误 (P1-8)
+        if !patch_status.is_success() {
+            return Err(DnsProviderError::http_status(patch_status, &patch_text));
+        }
+
         let patch_res: RainyunResp = serde_json::from_str(&patch_text)?;
 
         if patch_res.code == 200 {

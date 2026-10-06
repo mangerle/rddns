@@ -233,23 +233,34 @@ impl Notifier for WechatOfficialNotifier {
                         }
                     }
                     Err(e) => {
+                        // 脱敏后再入库 (P1-3)：Decode 错误文本通常不含凭据，
+                        // 但统一走脱敏出口可避免未来错误类型变更导致泄漏回归
+                        let safe_text =
+                            crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string());
                         warn!(
                             "[{}] 解析向用户 {} 推送响应失败: {}",
                             self.channel_name(),
                             user_openid,
-                            e
+                            safe_text
                         );
-                        last_error = Some(e.to_string());
+                        last_error = Some(safe_text);
                     }
                 },
                 Err(e) => {
+                    // reqwest::Error 的 Display 会输出完整请求 URL，其中含
+                    // `access_token=<明文>` 查询参数。直接格式化将导致微信
+                    // access_token 每次网络失败都明文写入日志文件，而日志文件
+                    // 权限为 0644（见 util/logging/file.rs），本地任意用户可读。
+                    // 此处必须经脱敏出口 (P1-3)。
+                    let safe_text =
+                        crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string());
                     warn!(
                         "[{}] 向用户 {} 发送网络请求失败: {}",
                         self.channel_name(),
                         user_openid,
-                        e
+                        safe_text
                     );
-                    last_error = Some(e.to_string());
+                    last_error = Some(safe_text);
                 }
             }
         }

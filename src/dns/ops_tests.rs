@@ -28,10 +28,11 @@ struct CallLog {
     resolved_zone: bool,
     last_zone: Option<String>,
     listed: bool,
-    before_sync: usize,
     created: usize,
     updated: usize,
     deleted: usize,
+    /// 被删除的记录 id 顺序，用于断言清理对象正确性 (P0-2)
+    deleted_ids: Vec<String>,
 }
 
 /// 可配置的测试用 RecordOps 实现
@@ -107,15 +108,12 @@ impl RecordOps for MockOps {
         Ok(())
     }
 
-    async fn delete_record(&self, zone: &str, _record_id: &str) -> Result<(), DnsProviderError> {
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
         let mut log = self.log.lock();
         log.deleted += 1;
+        log.deleted_ids.push(record_id.to_string());
         log.last_zone = Some(zone.to_string());
         Ok(())
-    }
-
-    async fn before_sync(&self, _zone: &str, _records: &[RemoteRecord]) {
-        self.log.lock().before_sync += 1;
     }
 }
 
@@ -231,7 +229,15 @@ async fn test_template_creates_when_no_record_exists() {
 }
 
 #[tokio::test]
-async fn test_template_invokes_before_sync_hook() {
+async fn test_template_never_writes_before_comparison() {
+    // 回归用例 (P0-2)：模板在比对前绝不可对远端执行任何写操作。
+    //
+    // 缺陷场景：Cloudflare 曾以 before_sync 钩子在比对前无条件删除
+    // records[1..]。当 records = [旧值, 正确值] 时，正确的第 2 条先被
+    // 删除，随后模板仍在已失效的内存快照中命中并返回 Unchanged，
+    // 造成「界面显示未变动、云端记录实际已消失」的静默失效。
+    //
+    // 本用例以最严格的断言锁死契约：单条记录场景下不得发生任何删除。
     let ops = MockOps::with_records(vec![RemoteRecord::new("rec-1", "1.2.3.4")]);
     sync_record_via(
         &ops,
@@ -243,7 +249,42 @@ async fn test_template_invokes_before_sync_hook() {
     .await
     .expect("应成功返回");
 
-    assert_eq!(ops.log().before_sync, 1, "清理钩子应在比对前被调用一次");
+    let log = ops.log();
+    assert_eq!(log.deleted, 0, "单条记录场景绝不应触发任何删除");
+    assert_eq!(log.updated, 0);
+    assert_eq!(log.created, 0);
+}
+
+#[tokio::test]
+async fn test_template_never_deletes_matched_record() {
+    // 回归用例 (P0-2)：冗余清理必须只删除「未被选为权威记录」的条目。
+    // 构造 [旧值, 正确值] 场景，正确记录被选为权威，删除操作只能落在旧值上。
+    let ops = MockOps::with_records(vec![
+        RemoteRecord::new("stale-rec", "9.9.9.9"),
+        RemoteRecord::new("authoritative-rec", "1.2.3.4"),
+    ]);
+    let result = sync_record_via(
+        &ops,
+        &test_domain(),
+        DnsRecordType::A,
+        &IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+        None,
+    )
+    .await
+    .expect("应成功返回");
+
+    assert_eq!(result.status, crate::dns::trait_def::SyncStatus::Unchanged);
+    let log = ops.log();
+    assert_eq!(
+        log.deleted, 1,
+        "仅应清理未被选中的旧值记录，正确记录必须保留"
+    );
+    assert_eq!(
+        log.deleted_ids.first().map(String::as_str),
+        Some("stale-rec"),
+        "被删除的必须是旧值记录，被选为权威的正确记录绝不可被删除"
+    );
+    assert_eq!(log.updated, 0, "权威记录已匹配目标值，不应触发更新");
 }
 
 #[tokio::test]

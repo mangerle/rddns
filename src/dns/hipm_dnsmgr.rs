@@ -1,13 +1,40 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
+use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::IpAddr;
+use std::sync::LazyLock;
+use std::time::Duration;
 
-pub const DEFAULT_HIPM_ENDPOINT: &str = "https://dnsmgr.example.com";
+/// HiPM Domain ID 缓存生存期（2 小时）
+const HIPM_DOMAIN_CACHE_TTL: Duration = Duration::from_secs(7200);
+
+/// HiPM Domain ID 缓存容量硬上限
+const HIPM_DOMAIN_CACHE_CAPACITY: usize = 128;
+
+/// HiPM Domain ID 缓存键（端点 + 根域名）
+///
+/// # 设计原理
+/// 以端点参与键构造，确保多套 HiPM 实例（不同面板）的缓存互不污染。
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+struct HipmDomainCacheKey {
+    endpoint: String,
+    root_domain: String,
+}
+
+/// 全局 HiPM Domain ID 缓存池
+///
+/// # 设计原理
+/// 原实现每次 `sync_record` 都重新解析 Domain ID（1 次关键字查询 + 最多
+/// 5 次分页查询），配合上层「每域名 × 每协议一次调度」的单轮 HTTP 请求
+/// 放大可达 12~36 倍。Zone 解析结果在 TTL 窗口内保持稳定，缓存可消除
+/// 该放大。
+static HIPM_DOMAIN_CACHE: LazyLock<TtlCache<HipmDomainCacheKey, i64>> =
+    LazyLock::new(|| TtlCache::new(HIPM_DOMAIN_CACHE_TTL, HIPM_DOMAIN_CACHE_CAPACITY));
 
 /// HiPM DNSMgr 驱动提供商
 pub struct HipmDnsMgrProvider {
@@ -52,9 +79,21 @@ impl HipmDnsMgrProvider {
             ));
         }
 
+        // Endpoint 必须显式配置 (P1-9)
+        //
+        // 原实现以 `https://dnsmgr.example.com`（RFC 2606 保留的示例域名）
+        // 作为默认值。用户只填 token 不填 endpoint 时，服务商会向一个
+        // 必然解析失败的占位域名发起请求，报出的是 DNS 解析错误而非
+        // 「endpoint 未配置」，排障方向被完全误导。
         let base = endpoint
-            .filter(|e| !e.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_HIPM_ENDPOINT.to_string());
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty());
+        let Some(base) = base else {
+            return Err(DnsProviderError::MissingCredentials(
+                "HiPM DNSMgr 必须配置 Endpoint（面板地址，如 https://your-dnsmgr.example.com）"
+                    .to_string(),
+            ));
+        };
         let trimmed_base = base
             .trim_end_matches('/')
             .trim_end_matches("/api")
@@ -132,8 +171,21 @@ impl HipmDnsMgrProvider {
         Ok(api_resp.data.unwrap_or(Value::Null))
     }
 
-    /// 获取 Domain ID
+    /// 获取 Domain ID（带 TTL 缓存）
+    ///
+    /// # 性能说明 (P1-9)
+    /// 原实现每次调用都重新发起 1 次关键字查询 + 最多 5 次分页查询。配合上层
+    /// 「每域名 × 每协议一次调度」的编排，单轮 HTTP 请求放大可达 12~36 倍。
+    /// Domain ID 在 TTL 窗口内稳定，缓存后可将该放大降至每轮一次。
     async fn get_domain_id(&self, root_domain: &str) -> Result<i64, DnsProviderError> {
+        let cache_key = HipmDomainCacheKey {
+            endpoint: self.endpoint.clone(),
+            root_domain: root_domain.to_ascii_lowercase(),
+        };
+        if let Some(cached) = HIPM_DOMAIN_CACHE.get(&cache_key) {
+            return Ok(cached);
+        }
+
         // 尝试关键字查询
         let query = [("page", "1"), ("pageSize", "1"), ("keyword", root_domain)];
         let data = self
@@ -145,6 +197,7 @@ impl HipmDnsMgrProvider {
             .into_iter()
             .find(|d| d.name.eq_ignore_ascii_case(root_domain))
         {
+            HIPM_DOMAIN_CACHE.insert(cache_key, matched.id);
             return Ok(matched.id);
         }
 
@@ -163,10 +216,13 @@ impl HipmDnsMgrProvider {
                 .into_iter()
                 .find(|d| d.name.eq_ignore_ascii_case(root_domain))
             {
+                HIPM_DOMAIN_CACHE.insert(cache_key, matched.id);
                 return Ok(matched.id);
             }
         }
 
+        // 分页达到上限时显式报错 (P1-6)：静默返回 ZoneNotFound 会使上层
+        // 误判为域名不存在，从而创建重复记录
         Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
     }
 

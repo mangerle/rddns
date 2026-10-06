@@ -110,7 +110,10 @@ impl DnsProvider for CallbackProvider {
 
         let resp = req.send().await?;
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        // 响应体读取失败必须传播而非静默吞掉：吞掉后空体会在下方
+        // `status.is_success()` 分支被当作成功，并把空字符串写入
+        // SyncRecordResult.message，向用户谎报「Callback 执行成功」(P1-7)
+        let text = resp.text().await?;
 
         if status.is_success() {
             info!(
@@ -118,14 +121,23 @@ impl DnsProvider for CallbackProvider {
                 self.provider_name(),
                 full_domain,
                 target_ip_str,
-                text
+                // 响应体经截断与脱敏后再入库：远端响应大小与内容均不受控，
+                // 且可能回显请求中的凭据 (P1-7)
+                crate::dns::trait_def::truncate_body(
+                    &crate::dns::trait_def::sanitize_sensitive_url_params(&text)
+                )
             );
             Ok(SyncRecordResult {
                 domain: full_domain,
                 record_type,
                 target_ip: target_ip_str,
                 status: SyncStatus::Updated,
-                message: format!("Callback 执行成功: {}", text),
+                message: format!(
+                    "Callback 执行成功: {}",
+                    crate::dns::trait_def::truncate_body(
+                        &crate::dns::trait_def::sanitize_sensitive_url_params(&text)
+                    )
+                ),
             })
         } else {
             Err(DnsProviderError::ApiError {

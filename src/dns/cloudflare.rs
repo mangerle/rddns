@@ -1,17 +1,16 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::zone_cache::TtlCache;
 use async_trait::async_trait;
 use log::warn;
-use parking_lot::RwLock;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const CF_API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
@@ -21,15 +20,24 @@ const CF_AUTO_TTL: u32 = 1;
 /// Cloudflare Zone ID 缓存生存期（2 小时）
 const CF_ZONE_CACHE_TTL: Duration = Duration::from_secs(7200);
 
+/// Cloudflare Zone ID 缓存容量硬上限
+const CF_ZONE_CACHE_CAPACITY: usize = 128;
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 struct ZoneCacheKey {
     auth_identity: String,
     root_domain: String,
 }
 
-/// 全局 Cloudflare Zone ID 缓存池 ((auth_identity, root_domain) -> (created_at, zone_id))
-static GLOBAL_CF_ZONE_CACHE: LazyLock<RwLock<HashMap<ZoneCacheKey, (Instant, String)>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+/// 全局 Cloudflare Zone ID 缓存池
+///
+/// # 重构说明 (P1-9)
+/// 原为手写 `RwLock<HashMap<_, (Instant, String)>>`，与雨云的实现逐行同构。
+/// 现统一复用 [`TtlCache`]，消除重复实现并使容量淘汰策略全局一致
+/// （原实现在容量满时直接 `clear()` 清空全部条目，会导致缓存整体失效并
+/// 触发所有账号同时回源，瞬时放大远端请求）。
+static GLOBAL_CF_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(CF_ZONE_CACHE_TTL, CF_ZONE_CACHE_CAPACITY));
 
 pub struct CloudflareProvider {
     client: Client,
@@ -141,9 +149,7 @@ impl CloudflareProvider {
             root_domain: root_domain.to_string(),
         };
 
-        if let Some((created_at, cached_id)) = GLOBAL_CF_ZONE_CACHE.read().get(&cache_key).cloned()
-            && created_at.elapsed() < CF_ZONE_CACHE_TTL
-        {
+        if let Some(cached_id) = GLOBAL_CF_ZONE_CACHE.get(&cache_key) {
             return Ok(cached_id);
         }
 
@@ -161,11 +167,7 @@ impl CloudflareProvider {
             .next()
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
-        let mut guard = GLOBAL_CF_ZONE_CACHE.write();
-        if guard.len() >= 128 {
-            guard.clear();
-        }
-        guard.insert(cache_key, (Instant::now(), zone.id.clone()));
+        GLOBAL_CF_ZONE_CACHE.insert(cache_key, zone.id.clone());
 
         Ok(zone.id)
     }
@@ -263,39 +265,39 @@ impl RecordOps for CloudflareProvider {
             .collect())
     }
 
-    /// 清理同名同类型的历史冗余记录
+    /// 删除单条指定的 DNS 记录
     ///
     /// # 设计原理
     /// Cloudflare 允许存在多条同名同类型记录，若只更新首条会遗留冲突项，
     /// 导致 DNS 轮询返回非预期结果。
-    async fn before_sync(&self, zone: &str, records: &[RemoteRecord]) {
-        for redundant in records.iter().skip(1) {
-            let del_url = format!(
-                "{}/zones/{}/dns_records/{}",
-                CF_API_BASE, zone, redundant.id
+    ///
+    /// # 修复说明 (P0-2)
+    /// 本方法此前以 `before_sync` 钩子的形式在模板比对**之前**无条件删除
+    /// `records[1..]`，导致当 `records = [旧值, 正确值]` 时，正确的第 2 条
+    /// 记录先被删除，随后模板仍在已失效的内存快照中命中该条并返回
+    /// `Unchanged` —— 用户界面显示"未变动"，而云端记录实际已消失，
+    /// DDNS 静默失效。现改为由模板在比对完成后，对未被选中的冗余条目
+    /// 逐条调用本方法执行清理。
+    async fn delete_record(&self, zone: &str, record_id: &str) -> Result<(), DnsProviderError> {
+        let del_url = format!("{}/zones/{}/dns_records/{}", CF_API_BASE, zone, record_id);
+        let resp = self
+            .client
+            .delete(&del_url)
+            .headers(self.build_headers())
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            // 清理失败仅记录告警不向上冒泡：冗余清理属尽力而为的附加动作，
+            // 失败不应把整轮同步降级为失败。此处吞掉响应体读取错误是有意为之
+            let text = resp.text().await.unwrap_or_default();
+            warn!(
+                "清理 Cloudflare 冗余记录 {} 失败，HTTP 状态码: {}，详情: {}",
+                record_id, status, text
             );
-            match self
-                .client
-                .delete(&del_url)
-                .headers(self.build_headers())
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    if !resp.status().is_success() {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        warn!(
-                            "清理 Cloudflare 冗余记录 {} 失败，HTTP 状态码: {}，详情: {}",
-                            redundant.id, status, text
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!("清理 Cloudflare 冗余记录 {} 失败: {}", redundant.id, e);
-                }
-            }
         }
+        Ok(())
     }
 
     async fn create_record(

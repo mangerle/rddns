@@ -24,7 +24,15 @@
 //! # 不变式保证
 //! - 模板假定「同一名称 + 同一类型」最多对应一条有效记录；若服务商可能
 //!   返回多条同名记录，实现方应在 [`RecordOps::list_records`] 中自行
-//!   归并或标注，交由 [`RecordOps::before_sync`] 钩子做额外清理。
+//!   归并或排序，交由 [`RecordOps::delete_record`] 在比对之后做额外清理。
+//!
+//! # 清理时机契约（P0-2）
+//! 多条同名同类型记录的清理**必须**发生在模板完成比对之后，
+//! 且只能删除「未被选为权威记录」的那些条目的记录 id。模板严禁在比对前
+//! 对远端记录执行任何写操作：`list_records` 返回的是内存快照，若在比对前
+//! 删除了快照中的某些条目，模板仍会基于已失效的快照继续判定，可能出现
+//! 「返回 `Unchanged` 但正确记录已被删除」的场景，使用户界面显示一切正常
+//! 而云端解析实际已失效。
 
 use crate::core::domain::ParsedDomain;
 use crate::dns::trait_def::{DnsProvider, DnsProviderError, DnsRecordType, SyncRecordResult};
@@ -141,17 +149,17 @@ pub trait RecordOps: Send + Sync {
 
     /// 删除一条解析记录（可选，用于在多条同名同类型冲突记录时清理冗余项）
     ///
-    /// 默认实现为空操作 (Ok)，支持记录删除的服务商可覆写此方法以自动清理历史冲突记录。
+    /// # 默认实现
+    /// 空操作 (Ok)。支持记录删除的服务商应覆写此方法，使模板能在比对
+    /// **之后**清理未被选中的冗余记录。
+    ///
+    /// # 不变式要求
+    /// 清理动作必须发生在模板完成「比对」之后，且绝不可在比对前删除
+    /// 任何尚未参与判定的记录——否则内存中的记录快照将与远端真实状态
+    /// 脱节，模板可能基于已失效的快照做出错误判定。
     async fn delete_record(&self, _zone: &str, _record_id: &str) -> Result<(), DnsProviderError> {
         Ok(())
     }
-
-    /// 同步前的可选清理钩子
-    ///
-    /// # 设计原理
-    /// 部分服务商允许同名同类型的多条记录共存（如 Cloudflare），需在
-    /// 同步前清理冗余项。默认无需处理。
-    async fn before_sync(&self, _zone: &str, _records: &[RemoteRecord]) {}
 }
 
 /// 按「查 → 比 → 改/建」编排完成单条记录同步
@@ -180,7 +188,6 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
     let zone = ops.resolve_zone(&domain.root_domain).await?;
 
     let records = ops.list_records(&zone, domain, record_type).await?;
-    ops.before_sync(&zone, &records).await;
 
     if records.is_empty() {
         ops.create_record(&zone, domain, record_type, ip, ttl)

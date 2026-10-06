@@ -351,11 +351,14 @@ impl StunIpFetcher {
                     return Ok(ip);
                 }
                 Err(e) => {
+                    // 节点地址来自用户配置，理论上可内嵌凭据，统一经脱敏出口 (P1-3)
+                    let safe_msg =
+                        crate::dns::trait_def::sanitize_sensitive_url_params(&e.to_string());
                     warn!(
                         "通过 STUN 服务器 [{}] 探测 {} 失败: {}",
                         server,
                         if is_ipv6 { "IPv6" } else { "IPv4" },
-                        e
+                        safe_msg
                     );
                     last_err = Some(e);
                 }

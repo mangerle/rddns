@@ -136,13 +136,16 @@ impl CommandIpFetcher {
         match timeout(self.timeout, read_fut).await {
             Ok(Ok((status, bytes))) => {
                 if !status.success() {
-                    warn!("执行命令 '{}' 退出码异常: {:?}", self.cmd, status.code());
+                    // 命令串由用户配置，可能内嵌凭据（如 curl -H 'Authorization: Bearer xxx'），
+                    // 打印前统一经脱敏出口 (P1-3)
+                    let safe_cmd = crate::dns::trait_def::sanitize_sensitive_url_params(&self.cmd);
+                    warn!("执行命令 '{}' 退出码异常: {:?}", safe_cmd, status.code());
                     return Err(FetchError::Other(format!(
                         "命令执行退出码异常 ({:?})",
                         status.code()
                     )));
                 }
-                Ok(String::from_utf8_lossy(&bytes).to_string())
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
             }
             Ok(Err(io_err)) => {
                 let _ = child.kill().await;

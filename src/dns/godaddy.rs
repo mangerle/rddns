@@ -80,7 +80,7 @@ impl GoDaddyProvider {
             .await?;
 
         let status = put_resp.status();
-        let body_text = put_resp.text().await.unwrap_or_default();
+        let body_text = put_resp.text().await?;
         if let Ok(err) = serde_json::from_str::<GoDaddyErrorResp>(&body_text)
             && (err.code.is_some() || err.message.is_some())
         {
@@ -132,7 +132,7 @@ impl RecordOps for GoDaddyProvider {
         }
 
         let status = query_resp.status();
-        let body = query_resp.text().await.unwrap_or_default();
+        let body = query_resp.text().await?;
 
         if let Ok(err) = serde_json::from_str::<GoDaddyErrorResp>(&body)
             && (err.code.is_some() || err.message.is_some())

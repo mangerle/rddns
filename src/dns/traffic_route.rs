@@ -132,6 +132,14 @@ impl TrafficRouteProvider {
         let status = resp.status();
         let body_text = resp.text().await?;
 
+        // 必须先判 HTTP 状态码再反序列化 (P1-8)：
+        // 网关 502/503 返回 HTML 错误页，若先反序列化会落入
+        // DnsProviderError::Other，而 Other 在 is_retryable() 中恒为
+        // false，导致瞬时故障永久失去重试机会。
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &body_text));
+        }
+
         let parsed: VolcResponse = serde_json::from_str(&body_text).map_err(|e| {
             DnsProviderError::Other(format!("解析火山引擎响应失败 [{}]: {}", status, e))
         })?;

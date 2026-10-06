@@ -27,6 +27,7 @@ pub mod tencentcloud;
 mod traffic_route;
 pub mod trait_def;
 mod vercel;
+pub(crate) mod zone_cache;
 
 use self::alidns::AliDnsProvider;
 use self::aliesa::AliEsaProvider;

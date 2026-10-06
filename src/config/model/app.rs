@@ -9,6 +9,16 @@ use url::Url;
 /// 应用全局配置结构
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
+    /// 配置文件格式版本号，用于显式的跨版本迁移 (P1-4)
+    ///
+    /// # 设计原理
+    /// 缺失时按 0 视为最老版本。字段级 `#[serde(default = ...)]` 只能解决
+    /// 「新增字段」的向前兼容，无法处理字段语义变更或类型调整——后者会导致
+    /// 旧配置直接反序列化失败，甚至更危险地被静默按默认值处理（用户配置
+    /// 无声丢失）。引入显式版本号后，可在加载时按版本执行迁移链。
+    #[serde(default)]
+    pub config_version: u32,
+
     /// Web 服务监听端口，默认 9876
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
@@ -51,6 +61,14 @@ pub const DEFAULT_INTERVAL_SECS: u64 = 300;
 /// 强制校对云端记录默认周期轮数
 pub const DEFAULT_CACHE_TIMES: u32 = 10;
 
+/// 当前配置文件格式版本号 (P1-4)
+///
+/// # 版本演进约定
+/// - 新增可选字段：直接以 `#[serde(default = ...)]` 兜底，无需提升版本
+/// - 字段语义变更、类型调整、结构拆分：必须提升本常量并在
+///   [`AppConfig::migrate`] 中追加对应的迁移步骤
+pub const CURRENT_CONFIG_VERSION: u32 = 1;
+
 /// 同步检查间隔最小允许值（秒）
 pub const MIN_INTERVAL_SECS: u64 = 5;
 
@@ -76,6 +94,7 @@ fn default_not_allow_wan_access() -> bool {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            config_version: CURRENT_CONFIG_VERSION,
             listen_port: default_listen_port(),
             interval_secs: default_interval_secs(),
             cache_times: default_cache_times(),
@@ -89,6 +108,44 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// 按版本号执行配置迁移链 (P1-4)
+    ///
+    /// # 设计原理
+    /// - **实现初衷**：字段级 `#[serde(default)]` 只能兜住「新增字段」，无法
+    ///   表达字段语义变更。旧版本配置在缺少显式版本标记时会被当作 version=0
+    ///   处理，从而为迁移链留出唯一入口。
+    /// - **核心优势**：迁移逻辑集中于此，新增版本时只需追加一个match 分支，
+    ///   无需改动加载流程。
+    /// - **代价与局限**：当前尚无字段需要语义迁移（v0 本身即为基线），
+    ///   故本函数目前仅负责版本号归一化。迁移步骤应以
+    ///   `if conf.config_version < N { ... }` 的形式追加。
+    ///
+    /// # 返回值
+    /// 返回迁移过程中的中文提示信息（为空表示无需迁移），供调用方记录日志。
+    pub fn migrate(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+
+        if self.config_version > CURRENT_CONFIG_VERSION {
+            // 高版本配置降级读取：字段级 default 兜底，但显式告警以免静默丢配置
+            notes.push(format!(
+                "配置文件版本号 {} 高于当前程序支持的版本 {}，可能有部分配置项未被识别而回退为默认值",
+                self.config_version, CURRENT_CONFIG_VERSION
+            ));
+        }
+
+        if self.config_version < CURRENT_CONFIG_VERSION {
+            // 迁移步骤追加位置：按版本号升序追加
+            // if self.config_version < 1 { ... }
+            notes.push(format!(
+                "配置已从版本 {} 迁移至版本 {}",
+                self.config_version, CURRENT_CONFIG_VERSION
+            ));
+        }
+
+        self.config_version = CURRENT_CONFIG_VERSION;
+        notes
+    }
+
     /// 对全量配置中的敏感凭据执行掩码化 (P1-5)
     pub fn mask_credentials(&mut self) {
         if let Some(ref mut auth) = self.auth {

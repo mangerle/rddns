@@ -6,7 +6,16 @@ use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
-#[derive(Debug)]
+/// 通知投递错误类型
+///
+/// # 设计原理
+/// - **脱敏出口唯一化 (P1-3)**: 手写 [`fmt::Display`] 与 [`fmt::Debug`] 两者，
+///   而非使用 `#[derive(Debug)]`。`derive` 生成的 `Debug` 会直接输出变体内部
+///   持有的原始 `String`（如 `Http("...access_token=明文")`），完全绕过
+///   `Display` 中的脱敏逻辑。经审计，全项目存在多处 `warn!("{}", e)` 形式的
+///   裸错误打印，一旦这些 `e` 被以 `{:?}` 格式化，凭据即刻明文落盘。
+///   手写 `Debug` 复用同一脱敏函数，使「所有格式化路径均已脱敏」成为
+///   由类型系统保证的架构级约束，而非依赖开发者自觉的约定。
 pub enum NotifyError {
     /// 网络请求错误，文本可能包含敏感 URL
     Http(String),
@@ -18,25 +27,31 @@ pub enum NotifyError {
     Provider(String),
 }
 
+/// 对错误变体中的原始文本执行脱敏
+///
+/// # 设计原理
+/// `Display` 与 `Debug` 两个格式化出口共用本函数，确保二者行为一致，
+/// 杜绝因实现分叉导致某一出口漏脱敏。
+fn sanitized_text(msg: &str) -> String {
+    crate::dns::trait_def::sanitize_sensitive_url_params(msg)
+}
+
+impl fmt::Debug for NotifyError {
+    /// # 设计原理
+    /// 复用 [`fmt::Display`] 的脱敏实现：任何 `{:?}` 格式化路径都经由同一
+    /// 脱敏出口，杜绝 `derive(Debug)` 绕过脱敏导致凭据泄漏。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl fmt::Display for NotifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Http(msg) => write!(
-                f,
-                "HTTP 请求失败: {}",
-                crate::dns::trait_def::sanitize_sensitive_url_params(msg)
-            ),
-            Self::Email(m) => write!(
-                f,
-                "邮件发送错误: {}",
-                crate::dns::trait_def::sanitize_sensitive_url_params(m)
-            ),
-            Self::Json(msg) => write!(f, "数据序列化错误: {}", msg),
-            Self::Provider(m) => write!(
-                f,
-                "通知服务商返回错误: {}",
-                crate::dns::trait_def::sanitize_sensitive_url_params(m)
-            ),
+            Self::Http(msg) => write!(f, "HTTP 请求失败: {}", sanitized_text(msg)),
+            Self::Email(m) => write!(f, "邮件发送错误: {}", sanitized_text(m)),
+            Self::Json(msg) => write!(f, "数据序列化错误: {}", sanitized_text(msg)),
+            Self::Provider(m) => write!(f, "通知服务商返回错误: {}", sanitized_text(m)),
         }
     }
 }

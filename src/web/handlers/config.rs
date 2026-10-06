@@ -103,6 +103,8 @@ impl SaveAppConfigPayload {
         old_not_allow_wan_access: bool,
     ) -> AppConfig {
         AppConfig {
+            // 配置版本号由加载期的迁移链统一管理，Web 保存不参与版本变更 (P1-4)
+            config_version: crate::config::model::CURRENT_CONFIG_VERSION,
             listen_port: old_listen_port,
             interval_secs: self.interval_secs,
             cache_times: self.cache_times,
