@@ -461,19 +461,41 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// 清理全局频控表，避免用例间相互干扰
+    /// 登录频控键测试隔离守卫 (RAII 夹具)
     ///
-    /// # 并发说明
-    /// Rust 测试默认多线程并行执行，而 `LOGIN_FAIL_LIMITER` 是进程级全局状态，
-    /// 因此各用例必须使用**互不相同的账号名**，且仅清理自己写入的条目，
-    /// 不可调用 `clear()` 清空整表（否则会相互抹除数据）。
+    /// # 设计原理
+    /// - **实现初衷**: Rust 单元测试多线程并发执行，`LOGIN_FAIL_LIMITER` 为进程级 static，若调用 `clear()` 清空整表会导致其他并发用例被干扰。
+    /// - **核心优势**: 通过 RAII 守卫在构造时清理历史残留、在析构 (Drop) 时精准删除本用例条目；即使用例在断言处 panic，也能确保条目被确定性释放，避免测试间状态泄漏。
+    struct ScopedLimiterKey {
+        key: String,
+    }
+
+    impl ScopedLimiterKey {
+        fn new(key: impl Into<String>) -> Self {
+            let key = key.into();
+            cleanup_record(&key);
+            Self { key }
+        }
+
+        fn key(&self) -> &str {
+            &self.key
+        }
+    }
+
+    impl Drop for ScopedLimiterKey {
+        fn drop(&mut self) {
+            cleanup_record(&self.key);
+        }
+    }
+
     fn cleanup_record(key: &str) {
         LOGIN_FAIL_LIMITER.lock().remove(key);
     }
 
     #[test]
     fn test_lock_triggers_at_threshold_and_blocks_correct_password() {
-        let key = "lock_threshold_user";
+        let fixture = ScopedLimiterKey::new("lock_threshold_user");
+        let key = fixture.key();
 
         // 未达阈值时不应锁定
         for _ in 0..LOGIN_FAIL_THRESHOLD - 1 {
@@ -487,12 +509,12 @@ mod tests {
             check_login_locked(key).is_err(),
             "达到阈值后必须锁定，否则正确密码也将被拒绝"
         );
-        cleanup_record(key);
     }
 
     #[test]
     fn test_lock_not_extended_by_subsequent_failures() {
-        let key = "lock_no_extend_user";
+        let fixture = ScopedLimiterKey::new("lock_no_extend_user");
+        let key = fixture.key();
 
         // 触发锁定
         for _ in 0..LOGIN_FAIL_THRESHOLD {
@@ -518,12 +540,12 @@ mod tests {
             first_locked_until, after_locked_until,
             "后续失败不得延长锁定时长，否则账号将被无限期锁死"
         );
-        cleanup_record(key);
     }
 
     #[test]
     fn test_success_login_clears_fail_record() {
-        let key = "recover_user";
+        let fixture = ScopedLimiterKey::new("recover_user");
+        let key = fixture.key();
 
         // 失败 4 次后成功登录，记录应被清空
         for _ in 0..LOGIN_FAIL_THRESHOLD - 1 {
@@ -540,31 +562,29 @@ mod tests {
         // 计数重置后再次失败不应立即触发锁定
         record_login_failure(key, false);
         assert!(check_login_locked(key).is_ok());
-        cleanup_record(key);
     }
 
     #[test]
     fn test_locked_account_rejected_before_password_verify() {
-        let key = "verify_order_user";
+        let fixture = ScopedLimiterKey::new("verify_order_user");
+        let key = fixture.key();
         for _ in 0..LOGIN_FAIL_THRESHOLD {
             record_login_failure(key, false);
         }
         // check_login_locked 必须在密码校验之前生效
         assert!(check_login_locked(key).is_err());
-        cleanup_record(key);
     }
 
     #[test]
     fn test_limiter_key_truncation_prevents_memory_explosion() {
-        let oversized_key = "a".repeat(1024);
-        record_login_failure(&oversized_key, false);
+        let fixture = ScopedLimiterKey::new("a".repeat(1024));
+        let oversized_key = fixture.key();
+        record_login_failure(oversized_key, false);
 
         let map = LOGIN_FAIL_LIMITER.lock();
         // 验证键被安全截断至 MAX_LIMITER_KEY_LEN 范围之内
         assert!(map.contains_key(&"a".repeat(MAX_LIMITER_KEY_LEN)));
         drop(map);
-
-        cleanup_record(&oversized_key);
     }
 
     #[test]

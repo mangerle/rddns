@@ -26,6 +26,13 @@ const TEST_IP_MIN_INTERVAL: Duration = Duration::from_millis(1000);
 /// 上一次触发测试 IP 获取的单调时钟时刻
 static LAST_IP_TEST_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// 重置在线测试接口的全局频控状态（仅供测试套件保证用例间隔离）
+#[cfg(test)]
+pub(crate) fn reset_test_rate_limiters() {
+    *LAST_NOTIFY_TEST_TIME.lock() = None;
+    *LAST_IP_TEST_TIME.lock() = None;
+}
+
 /// 测试 IP 提取器配置请求体
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestIpRequest {
@@ -303,9 +310,13 @@ mod tests {
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
+    /// 跨用例异步互斥锁，确保并发测试执行时进程级限流时间戳互不干扰 (L-13)
+    static TEST_RATE_LIMIT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn test_test_ip_rate_limit() {
-        *LAST_IP_TEST_TIME.lock() = None;
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
+        reset_test_rate_limiters();
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -327,7 +338,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_rejects_command() {
-        *LAST_IP_TEST_TIME.lock() = None;
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
+        reset_test_rate_limiters();
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -344,7 +356,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_rejects_invalid_scheme() {
-        *LAST_IP_TEST_TIME.lock() = None;
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
+        reset_test_rate_limiters();
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -361,7 +374,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_supports_stun() {
-        *LAST_IP_TEST_TIME.lock() = None;
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
+        reset_test_rate_limiters();
         let req = TestIpRequest {
             ip_type: Some("ipv4".to_string()),
             http_interface: None,
@@ -379,6 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_ip_rejects_ssrf_private_and_loopback_addresses() {
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
         let ssrf_targets = vec![
             "http://127.0.0.1:8080/admin",
             "http://localhost:3000/",
@@ -390,7 +405,7 @@ mod tests {
         ];
 
         for target in ssrf_targets {
-            *LAST_IP_TEST_TIME.lock() = None;
+            reset_test_rate_limiters();
             let req = TestIpRequest {
                 ip_type: Some("ipv4".to_string()),
                 http_interface: None,
@@ -436,6 +451,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_test_notify_rate_limit() {
+        let _lock = TEST_RATE_LIMIT_MUTEX.lock().await;
+        reset_test_rate_limiters();
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let config_manager = Arc::new(ConfigManager::load_or_create(config_path).unwrap());

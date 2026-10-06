@@ -121,6 +121,12 @@ pub fn consume_sse_ticket(ticket: &str) -> bool {
     }
 }
 
+/// 清空 SSE 一次性 Ticket 存储池（仅供测试套件保证用例间隔离）
+#[cfg(test)]
+pub(crate) fn clear_sse_tickets_for_test() {
+    SSE_TICKETS.write().tickets.clear();
+}
+
 /// Basic Auth 鉴权中间件
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = state.config_manager.get_config();
@@ -332,6 +338,7 @@ mod tests {
 
     #[test]
     fn test_sse_ticket_consume_and_cleanup_behavior() {
+        clear_sse_tickets_for_test();
         // 1. 正常生成与消费
         let ticket = issue_sse_ticket();
         assert!(consume_sse_ticket(&ticket));
