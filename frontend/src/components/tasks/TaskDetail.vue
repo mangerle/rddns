@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { DnsTaskConfig } from '@/types/task'
-import { Copy, Sliders, Trash2 } from 'lucide-vue-next'
+import type { DnsTaskConfig, TaskRuntimeState } from '@/types/task'
+import { Copy, RefreshCw, Sliders, Trash2 } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useConfigStore } from '@/stores/config'
@@ -13,6 +13,12 @@ const props = defineProps<{
 
 const configStore = useConfigStore()
 const { t } = useI18n()
+
+const currentRuntimeState = computed<TaskRuntimeState | undefined>(() => {
+  if (!props.task.name)
+    return undefined
+  return configStore.taskStates[props.task.name]
+})
 
 // TTL 联动选择
 const ttlOptions = [
@@ -48,47 +54,109 @@ const selectedTtl = computed({
 <template>
   <div class="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
     <!-- 任务操作顶栏 -->
-    <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4 shadow-xs transition-colors">
-      <div class="flex items-center gap-4 flex-1 min-w-[280px]">
-        <label class="relative inline-flex items-center cursor-pointer">
-          <input
-            v-model="task.enabled"
-            type="checkbox"
-            class="sr-only peer"
-          >
-          <div class="w-9 h-5 bg-slate-300 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600" />
-        </label>
+    <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-xs transition-colors">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-4 flex-1 min-w-[280px]">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input
+              v-model="task.enabled"
+              type="checkbox"
+              class="sr-only peer"
+            >
+            <div class="w-9 h-5 bg-slate-300 dark:bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600" />
+          </label>
 
-        <div class="flex flex-col gap-1 flex-1">
-          <input
-            v-model="task.name"
-            type="text"
-            :placeholder="t('task.namePlaceholder')"
-            class="bg-transparent border-b border-transparent hover:border-slate-300 dark:hover:border-slate-700 focus:border-indigo-500 font-bold text-base text-slate-900 dark:text-slate-100 px-1 py-0.5 transition-all outline-none"
+          <div class="flex flex-col gap-1 flex-1">
+            <input
+              v-model="task.name"
+              type="text"
+              :placeholder="t('task.namePlaceholder')"
+              class="bg-transparent border-b border-transparent hover:border-slate-300 dark:hover:border-slate-700 focus:border-indigo-500 font-bold text-base text-slate-900 dark:text-slate-100 px-1 py-0.5 transition-all outline-none"
+            >
+            <span class="text-[11px] text-slate-500 dark:text-slate-400 pl-1">
+              {{ task.enabled ? t('task.enableTask') : t('common.disable') }}
+            </span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs text-slate-700 dark:text-slate-300 transition cursor-pointer"
+            @click="configStore.loadRuntimeStatuses"
           >
-          <span class="text-[11px] text-slate-500 dark:text-slate-400 pl-1">
-            {{ task.enabled ? t('task.enableTask') : t('common.disable') }}
-          </span>
+            <RefreshCw class="w-3.5 h-3.5" />
+            <span>{{ t('task.refreshStatus') }}</span>
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs text-slate-700 dark:text-slate-300 transition cursor-pointer"
+            @click="configStore.cloneTask"
+          >
+            <Copy class="w-3.5 h-3.5" />
+            <span>{{ t('common.copy') }}</span>
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:border-rose-300 dark:hover:border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 transition cursor-pointer"
+            @click="configStore.deleteTask"
+          >
+            <Trash2 class="w-3.5 h-3.5" />
+            <span>{{ t('common.delete') }}</span>
+          </button>
         </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs text-slate-700 dark:text-slate-300 transition cursor-pointer"
-          @click="configStore.cloneTask"
+      <!-- 实时运行状态摘要面板 -->
+      <div
+        v-if="currentRuntimeState"
+        class="pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-col gap-2 text-xs"
+      >
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-slate-500 dark:text-slate-400">{{ t('common.status') }}:</span>
+            <span
+              v-if="currentRuntimeState.consecutive_failures > 0"
+              class="px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 font-medium"
+            >
+              {{ t('task.statusFailed', { count: currentRuntimeState.consecutive_failures }) }}
+            </span>
+            <span
+              v-else-if="currentRuntimeState.last_sync_time"
+              class="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-medium"
+            >
+              {{ t('task.statusNormal') }}
+            </span>
+            <span
+              v-else
+              class="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
+            >
+              {{ t('task.statusPending') }}
+            </span>
+          </div>
+
+          <div v-if="currentRuntimeState.last_ipv4" class="flex items-center gap-1.5">
+            <span class="text-slate-500 dark:text-slate-400">{{ t('task.lastIpv4') }}:</span>
+            <span class="font-mono font-semibold text-slate-800 dark:text-slate-200">{{ currentRuntimeState.last_ipv4 }}</span>
+          </div>
+
+          <div v-if="currentRuntimeState.last_ipv6" class="flex items-center gap-1.5">
+            <span class="text-slate-500 dark:text-slate-400">{{ t('task.lastIpv6') }}:</span>
+            <span class="font-mono font-semibold text-slate-800 dark:text-slate-200">{{ currentRuntimeState.last_ipv6 }}</span>
+          </div>
+
+          <div v-if="currentRuntimeState.last_sync_time" class="flex items-center gap-1.5">
+            <span class="text-slate-500 dark:text-slate-400">{{ t('task.lastSyncTime') }}:</span>
+            <span class="font-mono text-slate-700 dark:text-slate-300">{{ currentRuntimeState.last_sync_time }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="currentRuntimeState.last_error"
+          class="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/50 text-rose-700 dark:text-rose-300 font-mono text-[11px] break-all"
         >
-          <Copy class="w-3.5 h-3.5" />
-          <span>{{ t('common.copy') }}</span>
-        </button>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:border-rose-300 dark:hover:border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 transition cursor-pointer"
-          @click="configStore.deleteTask"
-        >
-          <Trash2 class="w-3.5 h-3.5" />
-          <span>{{ t('common.delete') }}</span>
-        </button>
+          {{ t('task.lastError') }}: {{ currentRuntimeState.last_error }}
+        </div>
       </div>
     </div>
 

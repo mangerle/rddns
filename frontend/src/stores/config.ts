@@ -216,6 +216,7 @@ export const useConfigStore = defineStore('config', () => {
       cfg.notifications = createDefaultNotifications()
     }
     const notif = cfg.notifications
+    notif.on_ip_change_only = notif.on_ip_change_only !== false
     notif.on_success = notif.on_success !== false
     notif.on_failure = notif.on_failure !== false
 

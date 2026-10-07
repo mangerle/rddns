@@ -29,6 +29,25 @@ const isTestingAll = ref(false)
 // 保持深度响应式的 notifications 计算属性
 const notifications = computed(() => configStore.notifications)
 
+// 渠道前端标识与后端 Notifier::channel_name 映射表
+const CHANNEL_STATE_KEYS: Record<string, string> = {
+  wechat_official: '微信公众号原生模板消息',
+  wecom: '企业微信 (WeCom)',
+  email: 'SMTP 邮件',
+  dingtalk: '钉钉机器人',
+  feishu: '飞书机器人',
+  telegram: 'Telegram Bot',
+  bark: 'Bark (iOS)',
+  webhook: '通用 Webhook',
+}
+
+function getChannelStatus(channelKey: string) {
+  const backendName = CHANNEL_STATE_KEYS[channelKey]
+  if (!backendName)
+    return undefined
+  return configStore.notificationStates[backendName]
+}
+
 function applyEmailPreset(e: Event) {
   const val = (e.target as HTMLSelectElement).value
   if (val && EMAIL_PRESETS[val] && notifications.value.email) {
@@ -63,6 +82,7 @@ async function runSingleTest(channel: string) {
     })
     if (res.success) {
       toast.success(t('notify.testSent'))
+      setTimeout(() => configStore.loadRuntimeStatuses(), 1500)
     }
     else {
       toast.error(t('notify.testFailed', { message: res.message }))
@@ -87,6 +107,7 @@ async function runTestAll() {
     })
     if (res.success) {
       toast.success(t('notify.testAllSent'))
+      setTimeout(() => configStore.loadRuntimeStatuses(), 1500)
     }
     else {
       toast.error(t('notify.testFailed', { message: res.message }))
@@ -146,7 +167,16 @@ function onWebhookHeadersInput(e: Event) {
         </button>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <label class="flex items-center gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800/80 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 transition">
+          <input
+            v-model="notifications.on_ip_change_only"
+            type="checkbox"
+            class="rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 bg-white dark:bg-slate-900"
+          >
+          <span class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ t('notify.onIpChangeOnly') }}</span>
+        </label>
+
         <label class="flex items-center gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800/80 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700 transition">
           <input
             v-model="notifications.on_success"
@@ -165,12 +195,38 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ t('notify.onFailure') }}</span>
         </label>
       </div>
+
+      <!-- 已发生投递的通知渠道运行统计概览 -->
+      <div
+        v-if="Object.keys(configStore.notificationStates).length > 0"
+        class="pt-3 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap gap-2"
+      >
+        <div
+          v-for="(st, chName) in configStore.notificationStates"
+          :key="chName"
+          class="px-3 py-1.5 rounded-lg border text-[11px] flex items-center gap-2"
+          :class="
+            st.last_error
+              ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800/50 text-rose-700 dark:text-rose-300'
+              : 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-300'
+          "
+        >
+          <span class="font-semibold">{{ chName }}:</span>
+          <span class="font-mono">{{ t('notify.deliveryStats', { ok: st.success_count, fail: st.failure_count }) }}</span>
+          <span v-if="st.last_error" class="font-mono truncate max-w-xs" :title="st.last_error">
+            ({{ t('notify.lastDeliveryErr', { error: st.last_error }) }})
+          </span>
+          <span v-else-if="st.last_success_time" class="font-mono text-slate-500 dark:text-slate-400">
+            ({{ t('notify.lastDeliveryOk', { time: st.last_success_time }) }})
+          </span>
+        </div>
+      </div>
     </div>
 
     <!-- 1. 微信公众号 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.wechat_official.enabled"
@@ -182,6 +238,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Radio class="w-4 h-4 text-emerald-500" />
             {{ t('notify.wechatOfficialTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('wechat_official')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('wechat_official')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('wechat_official')?.success_count || 0, fail: getChannelStatus('wechat_official')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -219,7 +282,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 2. 企业微信 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.wecom.enabled"
@@ -231,6 +294,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <MessageSquare class="w-4 h-4 text-blue-500" />
             {{ t('notify.wecomTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('wecom')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('wecom')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('wecom')?.success_count || 0, fail: getChannelStatus('wecom')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -295,7 +365,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 3. SMTP 邮件通知 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.email.enabled"
@@ -307,6 +377,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Mail class="w-4 h-4 text-purple-500" />
             {{ t('notify.emailTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('email')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('email')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('email')?.success_count || 0, fail: getChannelStatus('email')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -395,7 +472,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 4. 钉钉机器人 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.dingtalk.enabled"
@@ -407,6 +484,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Bot class="w-4 h-4 text-cyan-500" />
             {{ t('notify.dingtalkTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('dingtalk')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('dingtalk')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('dingtalk')?.success_count || 0, fail: getChannelStatus('dingtalk')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -436,7 +520,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 5. 飞书机器人 -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.feishu.enabled"
@@ -448,6 +532,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Send class="w-4 h-4 text-emerald-500" />
             {{ t('notify.feishuTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('feishu')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('feishu')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('feishu')?.success_count || 0, fail: getChannelStatus('feishu')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -477,7 +568,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 6. Telegram -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.telegram.enabled"
@@ -489,6 +580,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Bot class="w-4 h-4 text-sky-500" />
             {{ t('notify.telegramTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('telegram')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('telegram')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('telegram')?.success_count || 0, fail: getChannelStatus('telegram')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -522,7 +620,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 7. Bark -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.bark.enabled"
@@ -534,6 +632,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Smartphone class="w-4 h-4 text-orange-500" />
             {{ t('notify.barkTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('bark')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('bark')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('bark')?.success_count || 0, fail: getChannelStatus('bark')?.failure_count || 0 }) }}
           </span>
         </div>
 
@@ -563,7 +668,7 @@ function onWebhookHeadersInput(e: Event) {
     <!-- 8. 通用 Webhook -->
     <div class="bg-white dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col gap-5 shadow-xs transition-colors">
       <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <label class="relative inline-flex items-center cursor-pointer">
             <input
               v-model="notifications.webhook.enabled"
@@ -575,6 +680,13 @@ function onWebhookHeadersInput(e: Event) {
           <span class="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
             <Globe class="w-4 h-4 text-emerald-500" />
             {{ t('notify.webhookTitle') }}
+          </span>
+          <span
+            v-if="getChannelStatus('webhook')"
+            class="text-[11px] font-mono px-2 py-0.5 rounded-md border"
+            :class="getChannelStatus('webhook')?.last_error ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'"
+          >
+            {{ t('notify.deliveryStats', { ok: getChannelStatus('webhook')?.success_count || 0, fail: getChannelStatus('webhook')?.failure_count || 0 }) }}
           </span>
         </div>
 

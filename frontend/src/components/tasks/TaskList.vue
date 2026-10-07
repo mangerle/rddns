@@ -29,6 +29,21 @@ function getProviderName(task: DnsTaskConfig): string {
   const pType = task.provider?.type
   return PROVIDER_DISPLAY_NAMES[pType] || pType || t('task.noProviderConfigured')
 }
+
+function getTaskState(task: DnsTaskConfig) {
+  return task.name ? configStore.taskStates[task.name] : undefined
+}
+
+function getTaskDotClass(task: DnsTaskConfig): string {
+  if (task.enabled === false) {
+    return 'bg-slate-400 dark:bg-slate-600'
+  }
+  const st = getTaskState(task)
+  if (st && st.consecutive_failures > 0) {
+    return 'bg-rose-500 shadow-xs shadow-rose-500/50'
+  }
+  return 'bg-emerald-500 shadow-xs shadow-emerald-500/50'
+}
 </script>
 
 <template>
@@ -75,7 +90,7 @@ function getProviderName(task: DnsTaskConfig): string {
           <div class="flex items-center gap-2 min-w-0">
             <span
               class="w-2 h-2 rounded-full shrink-0 transition"
-              :class="task.enabled !== false ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50' : 'bg-slate-400 dark:bg-slate-600'"
+              :class="getTaskDotClass(task)"
             />
             <span class="text-xs font-semibold truncate text-slate-900 dark:text-slate-100">
               {{ task.name || t('task.unnamedTask') }}
@@ -88,6 +103,30 @@ function getProviderName(task: DnsTaskConfig): string {
 
         <div class="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate pl-4">
           {{ getDomainSummary(task) }}
+        </div>
+
+        <div
+          v-if="getTaskState(task) && (getTaskState(task)?.last_ipv4 || getTaskState(task)?.last_ipv6 || getTaskState(task)?.last_error)"
+          class="pl-4 flex items-center justify-between gap-2 text-[10px] font-mono"
+        >
+          <span
+            v-if="getTaskState(task)?.consecutive_failures"
+            class="text-rose-600 dark:text-rose-400 truncate"
+          >
+            {{ getTaskState(task)?.last_error || t('task.statusFailed', { count: getTaskState(task)?.consecutive_failures }) }}
+          </span>
+          <span
+            v-else
+            class="text-emerald-600 dark:text-emerald-400 truncate"
+          >
+            {{ getTaskState(task)?.last_ipv4 || getTaskState(task)?.last_ipv6 }}
+          </span>
+          <span
+            v-if="getTaskState(task)?.last_sync_time"
+            class="text-slate-400 dark:text-slate-500 shrink-0"
+          >
+            {{ getTaskState(task)?.last_sync_time?.slice(11, 19) }}
+          </span>
         </div>
       </div>
     </div>

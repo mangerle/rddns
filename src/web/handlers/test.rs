@@ -357,8 +357,7 @@ mod tests {
             http_interface: None,
             config: IpFetchConfig {
                 enabled: true,
-                source_type: IpSourceType::Url,
-                url_endpoints: vec!["https://api.ipify.org".to_string()],
+                source_type: IpSourceType::NetInterface,
                 ..Default::default()
             },
         };
