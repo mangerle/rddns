@@ -126,7 +126,7 @@ fn test_startup_grace_suppresses_only_total_failure() {
 
     // 宽限期内全失败：静默抑制
     assert!(
-        should_suppress_failure_in_grace(true, &[failed.clone()]),
+        should_suppress_failure_in_grace(true, std::slice::from_ref(&failed)),
         "启动宽限期内全失败轮次必须被抑制"
     );
 

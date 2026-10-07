@@ -339,6 +339,7 @@ mod tests {
     /// # 设计原理
     /// - `current_version` 是编译期 SemVer，必须与 `CARGO_PKG_VERSION` 字面值逐字相同；
     /// - `latest_version` 是 GitHub tag 形态，额外带 `v` 前缀以对齐 tag 命名。
+    ///
     /// 两者语义不同故形态不同，API 契约必须自洽，不能出现同字段多格式。
     #[test]
     fn test_version_fields_v_prefix_contract() {
