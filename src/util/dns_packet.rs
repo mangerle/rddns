@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow, bail};
-use log::warn;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::from_utf8;
 
@@ -13,6 +12,23 @@ use std::str::from_utf8;
 pub enum QueryRecordType {
     A = 1,
     AAAA = 28,
+}
+
+/// DNS Answer 区段解析累加器
+struct AnswerAccumulator {
+    ips: Vec<IpAddr>,
+    min_ttl: u32,
+    cname_target: Option<String>,
+}
+
+impl AnswerAccumulator {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            ips: Vec::with_capacity(capacity),
+            min_ttl: 300,
+            cname_target: None,
+        }
+    }
 }
 
 /// 构造标准 DNS 查询请求数据包 (UDP/TCP 通用载荷)
@@ -98,7 +114,7 @@ fn skip_dns_name(buf: &[u8], offset: &mut usize) -> Result<()> {
 
 /// 安全读取 DNS 域名字符串（支持 RFC 1035 压缩指针与防死循环保护）
 pub fn read_dns_name_at(buf: &[u8], mut offset: usize) -> Result<String> {
-    let mut labels = Vec::new();
+    let mut labels = Vec::with_capacity(4);
     let mut steps = 0;
 
     while offset < buf.len() {
@@ -148,9 +164,6 @@ fn validate_dns_header(buf: &[u8], query_id: u16) -> Result<(usize, usize, bool)
 
     let flags = u16::from_be_bytes([buf[2], buf[3]]);
     let tc = (flags & 0x0200) != 0;
-    if tc {
-        warn!("DNS 响应报文被服务器截断 (TC=1)，将尝试回退至 TCP 查询完整记录");
-    }
     let rcode = flags & 0x000F;
     if rcode != 0 {
         bail!("DNS 解析服务器返回错误码 (RCODE={})", rcode);
@@ -166,9 +179,7 @@ fn parse_single_answer(
     buf: &[u8],
     offset: &mut usize,
     qtype: QueryRecordType,
-    ips: &mut Vec<IpAddr>,
-    min_ttl: &mut u32,
-    cname_target: &mut Option<String>,
+    acc: &mut AnswerAccumulator,
 ) -> Result<()> {
     skip_dns_name(buf, offset)?;
     if *offset + 10 > buf.len() {
@@ -191,8 +202,8 @@ fn parse_single_answer(
 
     if atype == (qtype as u16) {
         let valid_ttl = if ttl <= 0x7FFFFFFF { ttl } else { 0 };
-        if valid_ttl < *min_ttl {
-            *min_ttl = valid_ttl;
+        if valid_ttl < acc.min_ttl {
+            acc.min_ttl = valid_ttl;
         }
         if qtype == QueryRecordType::A && rdlength == 4 {
             let ipv4 = Ipv4Addr::new(
@@ -201,17 +212,17 @@ fn parse_single_answer(
                 buf[*offset + 2],
                 buf[*offset + 3],
             );
-            ips.push(IpAddr::V4(ipv4));
+            acc.ips.push(IpAddr::V4(ipv4));
         } else if qtype == QueryRecordType::AAAA && rdlength == 16 {
             let mut octets = [0u8; 16];
             octets.copy_from_slice(&buf[*offset..*offset + 16]);
-            ips.push(IpAddr::V6(Ipv6Addr::from(octets)));
+            acc.ips.push(IpAddr::V6(Ipv6Addr::from(octets)));
         }
     } else if atype == 5
         && let Ok(cname) = read_dns_name_at(buf, *offset)
         && !cname.trim().is_empty()
     {
-        *cname_target = Some(cname);
+        acc.cname_target = Some(cname);
     }
 
     *offset += rdlength;
@@ -221,13 +232,17 @@ fn parse_single_answer(
 /// 解析 DNS 响应数据包提取 IP 列表、最小 TTL (秒)、可能存在的 CNAME 别名目标以及是否被截断 (TC 标志)
 ///
 /// # Errors
-/// 当响应包被截断、ID 不匹配或返回非零 RCODE 错误码时返回错误。
+/// 当响应包被意外截断、ID 不匹配或返回非零 RCODE 错误码时返回错误。
 pub fn parse_dns_response_packet(
     buf: &[u8],
     query_id: u16,
     qtype: QueryRecordType,
 ) -> Result<(Vec<IpAddr>, u32, Option<String>, bool)> {
     let (qdcount, ancount, tc) = validate_dns_header(buf, query_id)?;
+    if tc {
+        return Ok((Vec::new(), 300, None, true));
+    }
+
     let mut offset = 12;
 
     // 跳过 Question 部分
@@ -239,23 +254,14 @@ pub fn parse_dns_response_packet(
         offset += 4;
     }
 
-    let mut ips = Vec::new();
-    let mut min_ttl = 300u32;
-    let mut cname_target = None;
+    let mut acc = AnswerAccumulator::with_capacity(ancount.min(16));
 
     // 解析 Answer 部分
     for _ in 0..ancount {
-        parse_single_answer(
-            buf,
-            &mut offset,
-            qtype,
-            &mut ips,
-            &mut min_ttl,
-            &mut cname_target,
-        )?;
+        parse_single_answer(buf, &mut offset, qtype, &mut acc)?;
     }
 
-    Ok((ips, min_ttl.clamp(5, 3600), cname_target, tc))
+    Ok((acc.ips, acc.min_ttl.clamp(5, 3600), acc.cname_target, false))
 }
 
 #[cfg(test)]
@@ -286,6 +292,25 @@ mod tests {
         malformed_packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x3F, 0x61, 0x62]); // label 声明 63 字节但后续只有 2 字节
         let res2 = parse_dns_response_packet(&malformed_packet, 0x1234, QueryRecordType::A);
         assert!(res2.is_err());
+    }
+
+    #[test]
+    fn test_tc_flag_returns_truncated_without_failing_on_partial_answer() {
+        // 头部声明 TC=1 (0x8380) 且 ANCOUNT=5，但后续载荷被 UDP 截断不完整
+        let tc_packet = vec![
+            0x12, 0x34, // ID
+            0x83, 0x80, // Flags: QR=1, RD=1, RA=1, TC=1, RCODE=0
+            0x00, 0x01, // QDCOUNT=1
+            0x00, 0x05, // ANCOUNT=5 (实际未包含完整 Answer)
+            0x00, 0x00, // NSCOUNT=0
+            0x00, 0x00, // ARCOUNT=0
+        ];
+        let (ips, ttl, cname, is_truncated) =
+            parse_dns_response_packet(&tc_packet, 0x1234, QueryRecordType::A).unwrap();
+        assert!(is_truncated);
+        assert!(ips.is_empty());
+        assert_eq!(ttl, 300);
+        assert!(cname.is_none());
     }
 
     #[test]

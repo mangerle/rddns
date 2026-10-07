@@ -27,7 +27,17 @@ type DnsCacheKey = (String, String, u8);
 type DnsCacheMap = RwLock<HashMap<DnsCacheKey, DnsCacheEntry>>;
 
 /// 全局 DNS 解析内存缓存池 (Key: (dns_server, domain, qtype))
-static GLOBAL_DNS_CACHE: LazyLock<DnsCacheMap> = LazyLock::new(|| RwLock::new(HashMap::new()));
+static GLOBAL_DNS_CACHE: LazyLock<DnsCacheMap> =
+    LazyLock::new(|| RwLock::new(HashMap::with_capacity(64)));
+
+/// DNS 递归查询上下文参数
+#[derive(Debug, Clone, Copy)]
+struct DnsQueryParams<'a> {
+    server_addr: &'a str,
+    domain: &'a str,
+    qtype: QueryRecordType,
+    timeout_duration: Duration,
+}
 
 /// 设置全局自定义 DNS 解析服务器
 ///
@@ -94,9 +104,9 @@ pub async fn query_dns_server_tcp(
     target_server: SocketAddr,
     clean_domain: &str,
     qtype: QueryRecordType,
-    query_id: u16,
     timeout_duration: Duration,
 ) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
+    let query_id = random_u16();
     let packet = build_dns_query_packet(clean_domain, qtype, query_id)?;
     let mut tcp_stream = match timeout(timeout_duration, TcpStream::connect(target_server)).await {
         Ok(Ok(s)) => s,
@@ -177,6 +187,39 @@ async fn perform_udp_attempt(
     Ok((buf[..len].to_vec(), src_addr))
 }
 
+/// 执行单次 DNS 查询尝试（含 UDP 查询及 TC=1 时的 TCP 回退）
+async fn execute_single_dns_attempt(
+    target_server: SocketAddr,
+    clean_domain: &str,
+    qtype: QueryRecordType,
+    timeout_duration: Duration,
+) -> Result<(Vec<IpAddr>, u32, Option<String>)> {
+    let query_id = random_u16();
+    let packet = build_dns_query_packet(clean_domain, qtype, query_id)?;
+    let (resp_bytes, src_addr) =
+        perform_udp_attempt(target_server, &packet, timeout_duration).await?;
+
+    if src_addr != target_server {
+        bail!(
+            "DNS 响应来源不匹配: 期望 {}, 实际 {}",
+            target_server,
+            src_addr
+        );
+    }
+
+    let (ips, ttl_secs, cname_target, is_truncated) =
+        parse_dns_response_packet(&resp_bytes, query_id, qtype)?;
+    if is_truncated {
+        debug!(
+            "DNS 查询 [{}] 响应被截断 (TC=1)，正在回退至 TCP 获取完整数据...",
+            clean_domain
+        );
+        return query_dns_server_tcp(target_server, clean_domain, qtype, timeout_duration).await;
+    }
+
+    Ok((ips, ttl_secs, cname_target))
+}
+
 /// 执行自定义 DNS 递归查询 (防本地运营商 DNS 污染，带并发内存缓存、CNAME 追溯与 TCP 截断兜底)
 ///
 /// # 设计原理
@@ -191,106 +234,71 @@ pub async fn query_dns_server(
     qtype: QueryRecordType,
     timeout_duration: Duration,
 ) -> Result<Vec<IpAddr>> {
-    query_dns_server_recursive(server_addr, domain, qtype, timeout_duration, 0).await
+    let params = DnsQueryParams {
+        server_addr,
+        domain,
+        qtype,
+        timeout_duration,
+    };
+    query_dns_server_recursive(params, 0).await
 }
 
 /// 内部带深度限制的 DNS 递归查询实现 (最大递归 3 层以防别名死循环)
-async fn query_dns_server_recursive(
-    server_addr: &str,
-    domain: &str,
-    qtype: QueryRecordType,
-    timeout_duration: Duration,
-    depth: u8,
-) -> Result<Vec<IpAddr>> {
+async fn query_dns_server_recursive(params: DnsQueryParams<'_>, depth: u8) -> Result<Vec<IpAddr>> {
     if depth > 3 {
         bail!("DNS CNAME 别名递归追溯层级超过限制 (最大 3 层)");
     }
 
-    let clean_domain = domain.trim_end_matches('.').to_lowercase();
-    let cache_key = (server_addr.to_string(), clean_domain.clone(), qtype as u8);
+    let clean_domain = params.domain.trim_end_matches('.').to_lowercase();
+    let cache_key = (
+        params.server_addr.to_string(),
+        clean_domain.clone(),
+        params.qtype as u8,
+    );
 
-    // 1. 优先命中内存缓存
     if let Some(entry) = GLOBAL_DNS_CACHE.read().get(&cache_key)
         && entry.expires_at > Instant::now()
     {
         return Ok(entry.ips.clone());
     }
 
-    let target_server = resolve_dns_server_addr(server_addr)?;
+    let target_server = resolve_dns_server_addr(params.server_addr)?;
     let mut last_err = None;
 
     for attempt in 1..=2 {
-        let query_id = random_u16();
-        let packet = build_dns_query_packet(&clean_domain, qtype, query_id)?;
-
-        let (resp_bytes, src_addr) =
-            match perform_udp_attempt(target_server, &packet, timeout_duration).await {
-                Ok(res) => res,
-                Err(e) => {
-                    last_err = Some(anyhow!("第 {} 次查询失败: {}", attempt, e));
-                    continue;
-                }
-            };
-
-        if src_addr != target_server {
-            last_err = Some(anyhow!(
-                "DNS 响应来源不匹配: 期望 {}, 实际 {}",
-                target_server,
-                src_addr
-            ));
-            continue;
-        }
-
-        match parse_dns_response_packet(&resp_bytes, query_id, qtype) {
-            Ok((mut ips, mut ttl_secs, mut cname_target, is_truncated)) => {
-                if is_truncated {
-                    info!(
-                        "DNS 查询 [{}] 响应被截断 (TC=1)，正在回退至 TCP 53 获取完整数据...",
-                        clean_domain
-                    );
-                    if let Ok((tcp_ips, tcp_ttl, tcp_cname)) = query_dns_server_tcp(
-                        target_server,
-                        &clean_domain,
-                        qtype,
-                        query_id,
-                        timeout_duration,
-                    )
-                    .await
-                    {
-                        ips = tcp_ips;
-                        ttl_secs = tcp_ttl;
-                        cname_target = tcp_cname;
-                    }
-                }
-
+        match execute_single_dns_attempt(
+            target_server,
+            &clean_domain,
+            params.qtype,
+            params.timeout_duration,
+        )
+        .await
+        {
+            Ok((ips, ttl_secs, cname_target)) => {
                 if !ips.is_empty() {
                     cache_dns_result(cache_key, &ips, ttl_secs);
                     return Ok(ips);
                 }
-
                 if let Some(cname) = cname_target {
                     debug!(
                         "DNS 查询 [{}] 收到 CNAME 别名 [{}]，追溯查询中...",
                         clean_domain, cname
                     );
-                    let resolved = Box::pin(query_dns_server_recursive(
-                        server_addr,
-                        &cname,
-                        qtype,
-                        timeout_duration,
-                        depth + 1,
-                    ))
-                    .await?;
+                    let next_params = DnsQueryParams {
+                        domain: &cname,
+                        ..params
+                    };
+                    let resolved =
+                        Box::pin(query_dns_server_recursive(next_params, depth + 1)).await?;
                     if !resolved.is_empty() {
                         cache_dns_result(cache_key, &resolved, ttl_secs);
                     }
                     return Ok(resolved);
                 }
-
                 return Ok(Vec::new());
             }
             Err(e) => {
-                last_err = Some(e);
+                last_err = Some(anyhow!("第 {} 次查询失败: {}", attempt, e));
             }
         }
     }
@@ -301,6 +309,8 @@ async fn query_dns_server_recursive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
+    use tokio::net::TcpListener;
 
     #[test]
     fn test_custom_dns_server_setter_getter() {
@@ -312,5 +322,66 @@ mod tests {
         if let Some(prev) = old {
             set_custom_dns_server(prev);
         }
+    }
+
+    #[tokio::test]
+    async fn test_udp_truncation_falls_back_to_tcp() {
+        // 绑定同一端口的 UDP 与 TCP 模拟 DNS 服务器
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = tcp_listener.local_addr().unwrap();
+        let udp_socket = UdpSocket::bind(addr).await.unwrap();
+
+        let udp_handle = tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            let (_, peer) = udp_socket.recv_from(&mut buf).await.unwrap();
+            // 返回带有 TC=1 截断标志且 Answer 不完整的响应包
+            let resp = [
+                buf[0], buf[1], // 匹配查询 ID
+                0x83, 0x80, // QR=1, TC=1, RCODE=0
+                0x00, 0x01, // QDCOUNT=1
+                0x00, 0x03, // 声明 3 条记录但载荷截断
+                0x00, 0x00, 0x00, 0x00,
+            ];
+            udp_socket.send_to(&resp, peer).await.unwrap();
+        });
+
+        let tcp_handle = tokio::spawn(async move {
+            let (mut stream, _) = tcp_listener.accept().await.unwrap();
+            let mut len_buf = [0u8; 2];
+            stream.read_exact(&mut len_buf).await.unwrap();
+            let qlen = u16::from_be_bytes(len_buf) as usize;
+            let mut qbuf = vec![0u8; qlen];
+            stream.read_exact(&mut qbuf).await.unwrap();
+
+            // 构造包含 1 条 A 记录 (93.184.216.34) 的完整 DNS 响应
+            let mut resp = Vec::with_capacity(64);
+            resp.extend_from_slice(&[qbuf[0], qbuf[1]]); // ID
+            resp.extend_from_slice(&[0x81, 0x80]); // 标准成功响应 TC=0
+            resp.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+            resp.extend_from_slice(&qbuf[12..]); // 复制 Question 区段
+            resp.extend_from_slice(&[0xC0, 0x0C]); // Name 压缩指针指向 Question
+            resp.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // TYPE=A, CLASS=IN
+            resp.extend_from_slice(&60u32.to_be_bytes()); // TTL=60
+            resp.extend_from_slice(&4u16.to_be_bytes()); // RDLENGTH=4
+            resp.extend_from_slice(&[93, 184, 216, 34]); // RDATA
+
+            let mut frame = Vec::with_capacity(2 + resp.len());
+            frame.extend_from_slice(&(resp.len() as u16).to_be_bytes());
+            frame.extend_from_slice(&resp);
+            stream.write_all(&frame).await.unwrap();
+        });
+
+        let ips = query_dns_server(
+            &addr.to_string(),
+            "tc-fallback.example.com",
+            QueryRecordType::A,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        udp_handle.await.unwrap();
+        tcp_handle.await.unwrap();
+        assert_eq!(ips, vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]);
     }
 }
