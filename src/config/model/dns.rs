@@ -34,10 +34,9 @@ pub struct DnsTaskConfig {
 }
 
 impl DnsTaskConfig {
-    /// 检查任务是否配置了待解析的域名
+    /// 检查任务是否配置了待解析的有效域名（忽略空白行与 `#` / `//` 注释行）
     pub fn has_domains(&self) -> bool {
-        (self.ipv4.enabled && !self.ipv4.domains.is_empty())
-            || (self.ipv6.enabled && !self.ipv6.domains.is_empty())
+        self.ipv4.has_configured_domains() || self.ipv6.has_configured_domains()
     }
 }
 
@@ -146,6 +145,17 @@ fn default_source_type() -> IpSourceType {
     IpSourceType::Url
 }
 
+impl IpFetchConfig {
+    /// 判断当前协议是否已启用且包含至少一条非空、非注释的域名配置
+    pub fn has_configured_domains(&self) -> bool {
+        self.enabled
+            && self.domains.iter().any(|d| {
+                let trimmed = d.trim();
+                !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//")
+            })
+    }
+}
+
 impl Default for IpFetchConfig {
     fn default() -> Self {
         Self {
@@ -158,5 +168,25 @@ impl Default for IpFetchConfig {
             regex: None,
             domains: vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_domains_ignores_empty_and_comment_lines() {
+        let mut task = DnsTaskConfig::default();
+        task.ipv4.enabled = true;
+        task.ipv4.domains = vec![
+            "   ".to_string(),
+            "# comment".to_string(),
+            "// another comment".to_string(),
+        ];
+        assert!(!task.has_domains());
+
+        task.ipv4.domains.push("example.com".to_string());
+        assert!(task.has_domains());
     }
 }

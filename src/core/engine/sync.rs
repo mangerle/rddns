@@ -37,8 +37,16 @@ const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(10), Duration::from_m
 /// - **实现初衷**: 利用 Tokio 异步并发能力（`tokio::join!`），双栈同时发包探测出站 IP，将网络延迟降低至最慢单协议耗时。
 /// - **核心优势**: 容错隔离，单一协议提取失败不影响另一协议的正常解析与后续同步。
 pub(crate) async fn probe_task_ips(task: &DnsTaskConfig) -> (Option<Ipv4Addr>, Option<Ipv6Addr>) {
-    let v4_fetcher = create_ip_fetcher(&task.ipv4, task.http_interface.as_deref());
-    let v6_fetcher = create_ip_fetcher(&task.ipv6, task.http_interface.as_deref());
+    let v4_fetcher = if task.ipv4.has_configured_domains() {
+        create_ip_fetcher(&task.ipv4, task.http_interface.as_deref())
+    } else {
+        None
+    };
+    let v6_fetcher = if task.ipv6.has_configured_domains() {
+        create_ip_fetcher(&task.ipv6, task.http_interface.as_deref())
+    } else {
+        None
+    };
 
     tokio::join!(
         async {
@@ -216,7 +224,8 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
     }
 
     // 裁剪已从当前任务配置中移除的废弃域名记录，防止内存持续膨胀 (F-6)
-    let mut valid_keys = std::collections::HashSet::new();
+    let mut valid_keys =
+        std::collections::HashSet::with_capacity(params.v4_count + params.v6_count);
     if params.task.ipv4.enabled {
         for d in &params.task.ipv4.domains {
             if let Some(parsed) = crate::core::domain::parse_domain(d) {
@@ -237,14 +246,14 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
         .retain(|k, _| valid_keys.contains(k));
 
     let ipv4_all_ok = is_protocol_all_ok(
-        params.task.ipv4.enabled,
+        params.task.ipv4.enabled && params.v4_count > 0,
         params.ipv4_opt.is_some(),
         params.v4_count,
         DnsRecordType::A,
         params.sync_results,
     );
     let ipv6_all_ok = is_protocol_all_ok(
-        params.task.ipv6.enabled,
+        params.task.ipv6.enabled && params.v6_count > 0,
         params.ipv6_opt.is_some(),
         params.v6_count,
         DnsRecordType::AAAA,

@@ -210,36 +210,42 @@ impl DdnsEngine {
                     (None, None)
                 }
             };
+        let v4_active = task.ipv4.has_configured_domains();
+        let v6_active = task.ipv6.has_configured_domains();
         let mut ip_fetch_failed = false;
-        if task.ipv4.enabled {
+        let mut fetch_errors = Vec::with_capacity(2);
+        if v4_active {
             if ipv4_opt.is_some() {
                 current_state.ipv4_fail_count = 0;
             } else {
                 current_state.ipv4_fail_count = current_state.ipv4_fail_count.saturating_add(1);
                 ip_fetch_failed = true;
-                current_state.last_error = Some(format!(
+                fetch_errors.push(format!(
                     "[{}] 公网 IPv4 获取失败（连续 {} 次），本轮跳过云端同步",
                     task.name, current_state.ipv4_fail_count
                 ));
             }
         }
-        if task.ipv6.enabled {
+        if v6_active {
             if ipv6_opt.is_some() {
                 current_state.ipv6_fail_count = 0;
             } else {
                 current_state.ipv6_fail_count = current_state.ipv6_fail_count.saturating_add(1);
                 ip_fetch_failed = true;
-                current_state.last_error = Some(format!(
+                fetch_errors.push(format!(
                     "[{}] 公网 IPv6 获取失败（连续 {} 次），本轮跳过云端同步",
                     task.name, current_state.ipv6_fail_count
                 ));
             }
         }
+        if !fetch_errors.is_empty() {
+            current_state.last_error = Some(fetch_errors.join("；"));
+        }
 
         // 域名解析与失败记录构造在此处编排（P1-17）：
         // `core::domain` 已回归纯基础设施（不再构造 DNS 同步结果），
         // 同步失败记录的生成上移至引擎层，保持 `domain` 不依赖 `dns`。
-        let (parsed_v4, invalid_v4) = if task.ipv4.enabled {
+        let (parsed_v4, invalid_v4) = if v4_active {
             let (ok, bad) = parse_domain_list_split_invalid(&task.ipv4.domains);
             (
                 ok,
@@ -248,7 +254,7 @@ impl DdnsEngine {
         } else {
             (Vec::new(), Vec::new())
         };
-        let (parsed_v6, invalid_v6) = if task.ipv6.enabled {
+        let (parsed_v6, invalid_v6) = if v6_active {
             let (ok, bad) = parse_domain_list_split_invalid(&task.ipv6.domains);
             (
                 ok,
@@ -290,14 +296,15 @@ impl DdnsEngine {
                     "[{}] 公网 IP 获取失败，跳过云端同步并派发告警通知",
                     task.name
                 );
+                current_state.check_counter = 0;
                 current_state.consecutive_failures =
                     current_state.consecutive_failures.saturating_add(1);
                 current_state.last_sync_time =
                     Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
                 state_manager.update_task_state(&task.name, |s| *s = current_state.clone());
 
-                let mut fail_results = Vec::new();
-                if task.ipv4.enabled && ipv4_opt.is_none() {
+                let mut fail_results = Vec::with_capacity(parsed_v4.len() + parsed_v6.len());
+                if v4_active && ipv4_opt.is_none() {
                     for d in &parsed_v4 {
                         fail_results.push(SyncRecordResult::failed(
                             d.full_domain(),
@@ -307,7 +314,7 @@ impl DdnsEngine {
                         ));
                     }
                 }
-                if task.ipv6.enabled && ipv6_opt.is_none() {
+                if v6_active && ipv6_opt.is_none() {
                     for d in &parsed_v6 {
                         fail_results.push(SyncRecordResult::failed(
                             d.full_domain(),
@@ -362,13 +369,15 @@ impl DdnsEngine {
             }
         };
 
+        let supports_v4 = dns_provider.supports_record_type(DnsRecordType::A);
+        let supports_v6 = dns_provider.supports_record_type(DnsRecordType::AAAA);
         let mut sync_join_set = JoinSet::new();
         let force_sync_all = force_sync || reach_cache_limit;
 
         sync::spawn_protocol_sync_tasks(
             &mut sync_join_set,
             ProtocolSyncParams {
-                enabled: task.ipv4.enabled,
+                enabled: v4_active,
                 domains: &parsed_v4,
                 ip_opt: ipv4_opt.map(IpAddr::V4),
                 record_type: DnsRecordType::A,
@@ -384,7 +393,7 @@ impl DdnsEngine {
         sync::spawn_protocol_sync_tasks(
             &mut sync_join_set,
             ProtocolSyncParams {
-                enabled: task.ipv6.enabled,
+                enabled: v6_active,
                 domains: &parsed_v6,
                 ip_opt: ipv6_opt.map(IpAddr::V6),
                 record_type: DnsRecordType::AAAA,
@@ -397,7 +406,7 @@ impl DdnsEngine {
             },
         );
 
-        let mut sync_results = Vec::new();
+        let mut sync_results = Vec::with_capacity(parsed_v4.len() + parsed_v6.len());
         let mut panicked_domains = 0usize;
         while let Some(res) = sync_join_set.join_next().await {
             match res {
@@ -419,11 +428,22 @@ impl DdnsEngine {
         sync_results.extend(invalid_v4);
         sync_results.extend(invalid_v6);
 
+        let effective_v4_count = if supports_v4 {
+            parsed_v4.len() + v4_invalid_count
+        } else {
+            v4_invalid_count
+        };
+        let effective_v6_count = if supports_v6 {
+            parsed_v6.len() + v6_invalid_count
+        } else {
+            v6_invalid_count
+        };
+
         sync::update_runtime_state_after_sync(SyncStateUpdateParams {
             task,
             current_state: &mut current_state,
-            v4_count: parsed_v4.len() + v4_invalid_count,
-            v6_count: parsed_v6.len() + v6_invalid_count,
+            v4_count: effective_v4_count,
+            v6_count: effective_v6_count,
             ipv4_opt,
             ipv6_opt,
             sync_results: &sync_results,
