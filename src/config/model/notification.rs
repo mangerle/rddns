@@ -117,6 +117,42 @@ impl NotificationConfig {
             restore_str(&mut c.password, &old_c.password);
         }
     }
+
+    /// 仅保留指定名称的单个通知渠道，将其余渠道置空（用于单渠道在线测试）
+    ///
+    /// 返回 `true` 表示渠道名称合法，返回 `false` 表示未知的渠道标识。
+    pub fn retain_only_channel(&mut self, channel: &str) -> bool {
+        let keep = match channel {
+            "wechat_official" | "wecom" | "telegram" | "dingtalk" | "feishu" | "bark" | "email"
+            | "webhook" => channel,
+            _ => return false,
+        };
+        if keep != "wechat_official" {
+            self.wechat_official = None;
+        }
+        if keep != "wecom" {
+            self.wecom = None;
+        }
+        if keep != "telegram" {
+            self.telegram = None;
+        }
+        if keep != "dingtalk" {
+            self.dingtalk = None;
+        }
+        if keep != "feishu" {
+            self.feishu = None;
+        }
+        if keep != "bark" {
+            self.bark = None;
+        }
+        if keep != "email" {
+            self.email = None;
+        }
+        if keep != "webhook" {
+            self.webhook = None;
+        }
+        true
+    }
 }
 
 /// 微信公众号原生模板消息推送配置
