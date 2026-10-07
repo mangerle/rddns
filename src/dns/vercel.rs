@@ -1,7 +1,7 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
-use crate::util::http::url_encode;
+use crate::util::http::{create_default_dns_client, url_encode};
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -76,17 +76,32 @@ fn check_vercel_error(
     Ok(())
 }
 
+/// 根据当前页响应推进或清空分页游标
+fn resolve_next_cursor(
+    pagination: Option<&VercelPagination>,
+    page_len: usize,
+    page_size: usize,
+) -> Option<u64> {
+    if page_len >= page_size
+        && let Some(pag) = pagination
+    {
+        pag.next
+    } else {
+        None
+    }
+}
+
 impl VercelProvider {
     pub fn new(token: String, team_id: Option<String>, http_interface: Option<&str>) -> Self {
         Self {
             token,
             team_id: team_id.filter(|t| !t.trim().is_empty()),
-            client: crate::util::http::create_default_dns_client(http_interface),
+            client: create_default_dns_client(http_interface),
         }
     }
 
     fn build_headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
+        let mut headers = HeaderMap::with_capacity(2);
         if let Ok(mut hv) = HeaderValue::from_str(&format!("Bearer {}", self.token)) {
             hv.set_sensitive(true);
             headers.insert(AUTHORIZATION, hv);
@@ -121,11 +136,12 @@ impl RecordOps for VercelProvider {
         domain: &ParsedDomain,
         record_type: DnsRecordType,
     ) -> Result<Vec<RemoteRecord>, DnsProviderError> {
-        let mut all_records = Vec::new();
-        let mut next_cursor: Option<u64> = None;
         // 单页条数与最大翻页数：Vercel records API 的 limit 上限为 100
         const PAGE_SIZE: usize = 100;
         const MAX_PAGES: usize = 10;
+
+        let mut all_records = Vec::with_capacity(PAGE_SIZE);
+        let mut next_cursor: Option<u64> = None;
 
         for _ in 0..MAX_PAGES {
             let base_url = format!(
@@ -155,12 +171,8 @@ impl RecordOps for VercelProvider {
             let page_len = records.len();
             all_records.extend(records);
 
-            if let Some(pagination) = parsed.pagination
-                && let Some(next) = pagination.next
-                && page_len >= PAGE_SIZE
-            {
-                next_cursor = Some(next);
-            } else {
+            next_cursor = resolve_next_cursor(parsed.pagination.as_ref(), page_len, PAGE_SIZE);
+            if next_cursor.is_none() {
                 // 已拉取到最后一页，正常结束
                 break;
             }
@@ -259,5 +271,27 @@ impl RecordOps for VercelProvider {
         let body_text = patch_resp.text().await?;
         check_vercel_error(&body_text, patch_status)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_next_cursor_clears_on_final_partial_page() {
+        // 第 1 页满 100 条且带有 next 游标：应返回 Some(next)
+        let page1_pag = VercelPagination { next: Some(123456) };
+        let mut cursor = resolve_next_cursor(Some(&page1_pag), 100, 100);
+        assert_eq!(cursor, Some(123456));
+
+        // 第 2 页仅 20 条（最后一页），即使服务端或旧状态带有 next，游标也必须清零为 None，
+        // 避免循环退出后误判“翻页达到 10 页上限”
+        let page2_pag = VercelPagination { next: Some(789012) };
+        cursor = resolve_next_cursor(Some(&page2_pag), 20, 100);
+        assert!(
+            cursor.is_none(),
+            "最后一页不满 PAGE_SIZE 时必须将游标置为 None"
+        );
     }
 }
