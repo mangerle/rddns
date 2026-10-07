@@ -160,12 +160,23 @@ impl AppConfig {
 
     /// 保存配置时根据旧配置还原掩码凭据 (P1-5)
     pub fn restore_masked_credentials(&mut self, old: &Self) {
+        let mut new_names = HashSet::with_capacity(self.dns_tasks.len());
+        for task in &self.dns_tasks {
+            new_names.insert(task.name.clone());
+        }
         for (i, new_task) in self.dns_tasks.iter_mut().enumerate() {
             let matched_old = old
                 .dns_tasks
                 .iter()
                 .find(|t| t.name == new_task.name)
-                .or_else(|| old.dns_tasks.get(i));
+                .or_else(|| {
+                    old.dns_tasks.get(i).filter(|old_task| {
+                        !new_names.contains(&old_task.name)
+                            && new_task
+                                .provider
+                                .is_same_account_identity(&old_task.provider)
+                    })
+                });
             if let Some(old_task) = matched_old {
                 new_task
                     .provider
@@ -371,6 +382,8 @@ pub struct UserAuthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::model::CREDENTIAL_MASK;
+    use crate::config::model::notification::DingTalkConfig;
 
     #[test]
     fn test_app_config_validation() {
@@ -387,5 +400,101 @@ mod tests {
 
         config.listen_port = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_restore_masked_credentials_clears_optional_and_prevents_cross_task_leak() {
+        let old_config = AppConfig {
+            dns_tasks: vec![
+                DnsTaskConfig {
+                    name: "Task A".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "LTAI_A".to_string(),
+                        access_key_secret: "secret_A".to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+                DnsTaskConfig {
+                    name: "Task B".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "LTAI_B".to_string(),
+                        access_key_secret: "secret_B".to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+            ],
+            notifications: NotificationConfig {
+                dingtalk: Some(DingTalkConfig {
+                    enabled: true,
+                    access_token: "dt_token".to_string(),
+                    secret: Some("dt_secret".to_string()),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // 用户删除了 Task A（使得 Task B 前移到第 0 位），并在第 1 位新增了使用不同账号 ID 的 Task C，
+        // 同时主动清空了钉钉的加签 secret (设为 None)
+        let mut new_config = AppConfig {
+            dns_tasks: vec![
+                DnsTaskConfig {
+                    name: "Task B".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "LTAI_B".to_string(),
+                        access_key_secret: CREDENTIAL_MASK.to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+                DnsTaskConfig {
+                    name: "Task C".to_string(),
+                    provider: ProviderConfig::AliDns {
+                        access_key_id: "LTAI_C".to_string(),
+                        access_key_secret: CREDENTIAL_MASK.to_string(),
+                        endpoint: None,
+                    },
+                    ..Default::default()
+                },
+            ],
+            notifications: NotificationConfig {
+                dingtalk: Some(DingTalkConfig {
+                    enabled: true,
+                    access_token: CREDENTIAL_MASK.to_string(),
+                    secret: None,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        new_config.restore_masked_credentials(&old_config);
+
+        // Task B 按名称匹配，正确还原 secret_B
+        assert_eq!(
+            match &new_config.dns_tasks[0].provider {
+                ProviderConfig::AliDns {
+                    access_key_secret, ..
+                } => access_key_secret.as_str(),
+                _ => panic!(),
+            },
+            "secret_B"
+        );
+        // Task C 不应按下标 i=1 错误串台继承旧 Task B 的 secret_B
+        assert_eq!(
+            match &new_config.dns_tasks[1].provider {
+                ProviderConfig::AliDns {
+                    access_key_secret, ..
+                } => access_key_secret.as_str(),
+                _ => panic!(),
+            },
+            CREDENTIAL_MASK
+        );
+        // 钉钉 token 还原，但已被用户主动清空的 secret 保持为 None 而不回弹
+        let dt = new_config.notifications.dingtalk.as_ref().unwrap();
+        assert_eq!(dt.access_token, "dt_token");
+        assert!(dt.secret.is_none());
     }
 }

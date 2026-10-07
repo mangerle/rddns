@@ -30,19 +30,20 @@ pub(crate) fn mask_opt(s: &mut Option<String>) {
 
 #[inline]
 pub(crate) fn restore_str(target: &mut String, old: &str) {
-    if target == CREDENTIAL_MASK || target.is_empty() {
+    if target == CREDENTIAL_MASK {
         *target = old.to_string();
     }
 }
 
 #[inline]
 pub(crate) fn restore_opt(target: &mut Option<String>, old: &Option<String>) {
-    if let Some(val) = target.as_deref() {
-        if val == CREDENTIAL_MASK {
+    match target.as_deref() {
+        Some(CREDENTIAL_MASK) => {
             *target = old.clone();
         }
-    } else if old.is_some() {
-        // 若新值为 None 但旧值存在，且未主动传空字符串，保持旧值
-        *target = old.clone();
+        Some(val) if val.trim().is_empty() => {
+            *target = None;
+        }
+        _ => {}
     }
 }

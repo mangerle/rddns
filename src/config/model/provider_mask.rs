@@ -225,4 +225,72 @@ impl ProviderConfig {
             _ => {}
         }
     }
+
+    /// 判断两个服务商配置是否属于同一公开账号标识（用于原地重命名任务时的安全凭据回退核验）
+    pub(crate) fn is_same_account_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Cloudflare { email: a, .. }, Self::Cloudflare { email: b, .. }) => a == b,
+            (
+                Self::AliDns {
+                    access_key_id: a, ..
+                },
+                Self::AliDns {
+                    access_key_id: b, ..
+                },
+            )
+            | (
+                Self::AliEsa {
+                    access_key_id: a, ..
+                },
+                Self::AliEsa {
+                    access_key_id: b, ..
+                },
+            ) => a == b,
+            (Self::TencentCloud { secret_id: a, .. }, Self::TencentCloud { secret_id: b, .. })
+            | (Self::EdgeOne { secret_id: a, .. }, Self::EdgeOne { secret_id: b, .. }) => a == b,
+            (
+                Self::HuaweiCloud {
+                    access_key_id: a, ..
+                },
+                Self::HuaweiCloud {
+                    access_key_id: b, ..
+                },
+            )
+            | (
+                Self::BaiduCloud {
+                    access_key_id: a, ..
+                },
+                Self::BaiduCloud {
+                    access_key_id: b, ..
+                },
+            )
+            | (
+                Self::TrafficRoute {
+                    access_key_id: a, ..
+                },
+                Self::TrafficRoute {
+                    access_key_id: b, ..
+                },
+            ) => a == b,
+            (Self::Porkbun { api_key: a, .. }, Self::Porkbun { api_key: b, .. })
+            | (Self::GoDaddy { api_key: a, .. }, Self::GoDaddy { api_key: b, .. })
+            | (Self::Spaceship { api_key: a, .. }, Self::Spaceship { api_key: b, .. }) => a == b,
+            (Self::DnsLa { api_id: a, .. }, Self::DnsLa { api_id: b, .. }) => a == b,
+            (Self::ClouDNS { auth_id: a, .. }, Self::ClouDNS { auth_id: b, .. }) => a == b,
+            (Self::NameCom { username: a, .. }, Self::NameCom { username: b, .. }) => a == b,
+            (Self::HipmDnsMgr { endpoint: a, .. }, Self::HipmDnsMgr { endpoint: b, .. }) => a == b,
+            (Self::NowCn { id: a, .. }, Self::NowCn { id: b, .. })
+            | (Self::Eranet { id: a, .. }, Self::Eranet { id: b, .. })
+            | (Self::TNetHk { id: a, .. }, Self::TNetHk { id: b, .. }) => a == b,
+            (Self::Vercel { team_id: a, .. }, Self::Vercel { team_id: b, .. }) => a == b,
+            (Self::Namecheap { .. }, Self::Namecheap { .. })
+            | (Self::Dynadot { .. }, Self::Dynadot { .. })
+            | (Self::Dynv6 { .. }, Self::Dynv6 { .. })
+            | (Self::NameSilo { .. }, Self::NameSilo { .. })
+            | (Self::RainYun { .. }, Self::RainYun { .. })
+            | (Self::Gcore { .. }, Self::Gcore { .. })
+            | (Self::NsOne { .. }, Self::NsOne { .. }) => true,
+            _ => false,
+        }
+    }
 }
