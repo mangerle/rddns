@@ -1,15 +1,23 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
+use crate::util::crypto::sha256_hex;
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::LazyLock;
 
 const GCORE_API_BASE: &str = "https://api.gcore.com/dns/v2";
 const GCORE_DEFAULT_TTL: u32 = 120;
+
+static GLOBAL_GCORE_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
 
 /// Gcore DNS 提供商
 pub struct GcoreProvider {
@@ -111,6 +119,12 @@ impl RecordOps for GcoreProvider {
     }
 
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let auth_id = sha256_hex(self.api_key.trim().as_bytes());
+        let cache_key = ZoneCacheKey::new(auth_id, root_domain);
+        if let Some(zone_name) = GLOBAL_GCORE_ZONE_CACHE.get(&cache_key) {
+            return Ok(zone_name);
+        }
+
         let zone_url = format!("{}/zones?name={}", GCORE_API_BASE, root_domain);
         let zone_resp = self
             .client
@@ -130,6 +144,7 @@ impl RecordOps for GcoreProvider {
             .find(|z| z.name.eq_ignore_ascii_case(root_domain))
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
+        GLOBAL_GCORE_ZONE_CACHE.insert(cache_key, zone.name.clone());
         Ok(zone.name)
     }
 

@@ -14,6 +14,29 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
+/// DNS Zone ID 缓存默认生存期（2 小时）
+pub const DEFAULT_ZONE_CACHE_TTL: Duration = Duration::from_secs(7200);
+
+/// DNS Zone ID 缓存默认容量上限
+pub const DEFAULT_ZONE_CACHE_CAPACITY: usize = 128;
+
+/// 跨提供商通用的 Zone ID 缓存复合键（按凭据摘要 + 根域名隔离）
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct ZoneCacheKey {
+    pub auth_identity: String,
+    pub root_domain: String,
+}
+
+impl ZoneCacheKey {
+    /// 构造标准化的 Zone 缓存键（自动将根域名转为小写）
+    pub fn new(auth_identity: impl Into<String>, root_domain: &str) -> Self {
+        Self {
+            auth_identity: auth_identity.into(),
+            root_domain: root_domain.to_ascii_lowercase(),
+        }
+    }
+}
+
 /// 带 TTL 与容量上限的并发安全缓存池
 pub struct TtlCache<K: Eq + Hash + Clone, V: Clone> {
     entries: RwLock<HashMap<K, (Instant, V)>>,

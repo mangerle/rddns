@@ -1,19 +1,28 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
+use crate::util::crypto::sha256_hex;
 use crate::util::http::url_encode;
 use async_trait::async_trait;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 const NSONE_API_ENDPOINT: &str = "https://api.nsone.net/v1/zones";
+
+static GLOBAL_NSONE_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
 
 /// IBM NS1 Connect DNS 提供商
 pub struct NsOneProvider {
     client: Client,
     /// 逐请求携带的鉴权头（含敏感凭据，禁止写入日志）
     headers: HeaderMap,
+    auth_identity: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +88,8 @@ impl NsOneProvider {
             ));
         }
 
+        let auth_identity = sha256_hex(api_key.trim().as_bytes());
+
         // 凭据不固化进 Client，而是逐请求通过请求头携带，
         // 以便 HTTP Client 可安全地放入全局连接池缓存跨任务复用
         let mut auth_val = HeaderValue::from_str(api_key.trim()).map_err(|e| {
@@ -93,7 +104,11 @@ impl NsOneProvider {
         // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
         let client = crate::util::http::create_default_dns_client(http_interface);
 
-        Ok(Self { client, headers })
+        Ok(Self {
+            client,
+            headers,
+            auth_identity,
+        })
     }
 
     /// 构造携带鉴权头的请求
@@ -161,8 +176,15 @@ impl RecordOps for NsOneProvider {
     }
 
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let cache_key = ZoneCacheKey::new(self.auth_identity.clone(), root_domain);
+        if let Some(zone) = GLOBAL_NSONE_ZONE_CACHE.get(&cache_key) {
+            return Ok(zone);
+        }
+
         self.check_zone(root_domain).await?;
-        Ok(root_domain.to_string())
+        let zone = root_domain.to_string();
+        GLOBAL_NSONE_ZONE_CACHE.insert(cache_key, zone.clone());
+        Ok(zone)
     }
 
     async fn list_records(

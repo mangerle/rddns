@@ -122,10 +122,13 @@ impl DdnsEngine {
     pub async fn run_once(&self, force_cloud_sync: bool, in_startup_grace: bool) {
         let config = self.config_manager.get_config();
 
-        // 1. 同步清理已被用户删除的任务历史状态快照，防止内存泄漏
+        // 1. 同步清理已被用户删除的任务历史状态快照与错误冷却追踪，防止内存泄漏与旧状态残留
         let active_task_names: Vec<String> =
             config.dns_tasks.iter().map(|t| t.name.clone()).collect();
         self.state_manager.retain_active_tasks(&active_task_names);
+        self.error_trackers
+            .write()
+            .retain(|k, _| active_task_names.iter().any(|name| name == k));
 
         let dispatcher = NotificationDispatcher::new_with_trackers_and_statuses(
             config.notifications.clone(),

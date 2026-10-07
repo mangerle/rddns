@@ -1,6 +1,9 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
 use crate::util::crypto::{build_canonical_query_string, hmac_sha256, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -8,12 +11,16 @@ use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::LazyLock;
 
 const VOLC_HOST: &str = "open.volcengineapi.com";
 const VOLC_ENDPOINT: &str = "https://open.volcengineapi.com";
 const VOLC_SERVICE: &str = "DNS";
 const VOLC_REGION: &str = "cn-north-1";
 const VOLC_VERSION: &str = "2018-08-01";
+
+static GLOBAL_VOLC_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
 
 /// 火山引擎 TrafficRoute DNS 提供商
 pub struct TrafficRouteProvider {
@@ -175,6 +182,12 @@ impl RecordOps for TrafficRouteProvider {
     }
 
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let auth_id = sha256_hex(format!("{}:{}", self.ak.trim(), self.sk.trim()).as_bytes());
+        let cache_key = ZoneCacheKey::new(auth_id, root_domain);
+        if let Some(zid_str) = GLOBAL_VOLC_ZONE_CACHE.get(&cache_key) {
+            return Ok(zid_str);
+        }
+
         let zones_result = self
             .request_volc("ListZones", vec![("Key", root_domain.to_string())], None)
             .await?;
@@ -185,7 +198,9 @@ impl RecordOps for TrafficRouteProvider {
             .find(|z| z.zone_name.eq_ignore_ascii_case(root_domain))
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
-        Ok(zone.zid.to_string())
+        let zid_str = zone.zid.to_string();
+        GLOBAL_VOLC_ZONE_CACHE.insert(cache_key, zid_str.clone());
+        Ok(zid_str)
     }
 
     async fn list_records(

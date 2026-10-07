@@ -1,15 +1,22 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
-use crate::util::crypto::build_pop_signed_query;
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
+use crate::util::crypto::{build_pop_signed_query, sha256_hex};
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 const DEFAULT_ALIESA_ENDPOINT: &str = "https://esa.cn-hangzhou.aliyuncs.com";
+
+static GLOBAL_ALIESA_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, i64>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
 
 /// 阿里云 ESA (Edge Security Acceleration) 提供商
 pub struct AliEsaProvider {
@@ -173,8 +180,22 @@ impl AliEsaProvider {
         Ok(parsed)
     }
 
-    /// 获取站点 ID
+    /// 获取站点 ID (优先从带凭据隔离的内存缓存读取)
     async fn get_site_id(&self, root_domain: &str) -> Result<i64, DnsProviderError> {
+        let auth_id = sha256_hex(
+            format!(
+                "{}:{}:{}",
+                self.access_key_id.trim(),
+                self.access_key_secret.trim(),
+                self.endpoint
+            )
+            .as_bytes(),
+        );
+        let cache_key = ZoneCacheKey::new(auth_id, root_domain);
+        if let Some(site_id) = GLOBAL_ALIESA_ZONE_CACHE.get(&cache_key) {
+            return Ok(site_id);
+        }
+
         let resp: AliEsaSiteResp = self
             .request_pop(
                 "GET",
@@ -189,6 +210,7 @@ impl AliEsaProvider {
             .find(|s| s.site_name.eq_ignore_ascii_case(root_domain))
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
+        GLOBAL_ALIESA_ZONE_CACHE.insert(cache_key, site.site_id);
         Ok(site.site_id)
     }
 }

@@ -3,9 +3,14 @@ use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::tencent_eo_types::*;
 use crate::dns::tencentcloud::{Tc3ApiEndpoint, Tc3Client};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, default_ttl};
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
+use crate::util::crypto::sha256_hex;
 use crate::util::http::create_default_dns_client;
 use async_trait::async_trait;
 use serde_json::json;
+use std::sync::LazyLock;
 
 const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
     host: "teo.tencentcloudapi.com",
@@ -13,9 +18,13 @@ const TEO_ENDPOINT: Tc3ApiEndpoint = Tc3ApiEndpoint {
     version: "2022-09-01",
 };
 
+static GLOBAL_TEO_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
+
 /// 腾讯云 EdgeOne (TEO) 全球边缘加速与 DNS 同步驱动
 pub struct TencentEoProvider {
     tc3: Tc3Client,
+    auth_identity: String,
 }
 
 impl TencentEoProvider {
@@ -40,15 +49,22 @@ impl TencentEoProvider {
             ));
         }
 
+        let auth_identity =
+            sha256_hex(format!("{}:{}", secret_id.trim(), secret_key.trim()).as_bytes());
         // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
         let client = create_default_dns_client(http_interface);
         let tc3 = Tc3Client::new(client, secret_id, secret_key, TEO_ENDPOINT);
 
-        Ok(Self { tc3 })
+        Ok(Self { tc3, auth_identity })
     }
 
-    /// 获取 Zone ID
+    /// 获取 Zone ID (优先从带凭据隔离的内存缓存读取)
     async fn get_zone_id(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let cache_key = ZoneCacheKey::new(self.auth_identity.clone(), root_domain);
+        if let Some(zone_id) = GLOBAL_TEO_ZONE_CACHE.get(&cache_key) {
+            return Ok(zone_id);
+        }
+
         let payload = json!({
             "Filters": [
                 {
@@ -66,6 +82,7 @@ impl TencentEoProvider {
             .find(|z| z.zone_name.eq_ignore_ascii_case(root_domain))
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
+        GLOBAL_TEO_ZONE_CACHE.insert(cache_key, matched.zone_id.clone());
         Ok(matched.zone_id)
     }
 

@@ -1,6 +1,9 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType, MIN_DNS_TTL, clamp_ttl};
+use crate::dns::zone_cache::{
+    DEFAULT_ZONE_CACHE_CAPACITY, DEFAULT_ZONE_CACHE_TTL, TtlCache, ZoneCacheKey,
+};
 use crate::util::crypto::{
     append_ntp_hint_if_expired, build_canonical_query_string, hmac_sha256_hex, sha256_hex,
 };
@@ -10,9 +13,13 @@ use reqwest::header::{CONTENT_TYPE, HOST, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::LazyLock;
 
 const DEFAULT_HUAWEI_ENDPOINT: &str = "https://dns.myhuaweicloud.com";
 const HUAWEI_DEFAULT_TTL: u32 = 300;
+
+static GLOBAL_HUAWEI_ZONE_CACHE: LazyLock<TtlCache<ZoneCacheKey, String>> =
+    LazyLock::new(|| TtlCache::new(DEFAULT_ZONE_CACHE_TTL, DEFAULT_ZONE_CACHE_CAPACITY));
 
 /// 华为云 DNS 提供商
 pub struct HuaweiDnsProvider {
@@ -167,8 +174,16 @@ impl RecordOps for HuaweiDnsProvider {
         "华为云 (Huawei Cloud)"
     }
 
-    /// 解析公网根域名对应的 Zone ID
+    /// 解析公网根域名对应的 Zone ID (优先从带凭据隔离的内存缓存读取)
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
+        let auth_id = sha256_hex(
+            format!("{}:{}:{}", self.ak.trim(), self.sk.trim(), self.endpoint).as_bytes(),
+        );
+        let cache_key = ZoneCacheKey::new(auth_id, root_domain);
+        if let Some(zone_id) = GLOBAL_HUAWEI_ZONE_CACHE.get(&cache_key) {
+            return Ok(zone_id);
+        }
+
         let hw_root_name = format!("{}.", root_domain);
         let zones_resp: HwZonesResponse = self
             .request_hw_api(
@@ -185,6 +200,7 @@ impl RecordOps for HuaweiDnsProvider {
             .find(|z| z.name.eq_ignore_ascii_case(&hw_root_name))
             .ok_or_else(|| DnsProviderError::ZoneNotFound(root_domain.to_string()))?;
 
+        GLOBAL_HUAWEI_ZONE_CACHE.insert(cache_key, zone.id.clone());
         Ok(zone.id)
     }
 
