@@ -264,8 +264,8 @@ pub(crate) fn parse_stun_server_entry(entry: &str) -> Result<(&str, u16), String
             trimmed
         ));
     }
-    if trimmed.starts_with('[') {
-        if let Some((host_part, port_part)) = trimmed[1..].split_once("]:") {
+    if let Some(stripped) = trimmed.strip_prefix('[') {
+        if let Some((host_part, port_part)) = stripped.split_once("]:") {
             let port = port_part
                 .parse::<u16>()
                 .ok()
@@ -275,7 +275,7 @@ pub(crate) fn parse_stun_server_entry(entry: &str) -> Result<(&str, u16), String
                 return Err(format!("STUN 服务器 [{}] IPv6 地址格式无效", trimmed));
             }
             Ok((host_part, port))
-        } else if let Some(host_part) = trimmed[1..].strip_suffix(']') {
+        } else if let Some(host_part) = stripped.strip_suffix(']') {
             if host_part.parse::<Ipv6Addr>().is_err() {
                 return Err(format!("STUN 服务器 [{}] IPv6 地址格式无效", trimmed));
             }

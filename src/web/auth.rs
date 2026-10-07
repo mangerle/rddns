@@ -202,25 +202,15 @@ fn extract_basic_auth_context(req: &Request) -> Option<(String, String, String)>
 
 /// 校验提取出的 Basic Auth 凭据（含限流锁定检查、快速凭据缓存与常量时间哈希比对）
 ///
-/// 返回 `Ok(true)` 表示认证通过，`Ok(false)` 表示凭据无效，`Err(Response)` 表示触发防暴破锁定拦截。
+/// 返回 `Ok(true)` 表示认证通过，`Ok(false)` 表示凭据无效，`Err(String)` 表示触发防暴破锁定拦截的错误消息。
 async fn verify_basic_credentials(
     user: &str,
     pass: &str,
     limiter_key: &str,
     auth_conf: &crate::config::model::UserAuthConfig,
-) -> Result<bool, Response> {
+) -> Result<bool, String> {
     // 校验账号是否已锁定，防止持续暴破 (S-3, S-8)
-    if let Err(locked_err) = crate::web::handlers::auth::check_login_locked(limiter_key) {
-        let resp = Response::builder()
-            .status(StatusCode::TOO_MANY_REQUESTS)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .body(axum::body::Body::from(format!(
-                r#"{{"success":false,"message":"{}"}}"#,
-                locked_err
-            )))
-            .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
-        return Err(resp);
-    }
+    crate::web::handlers::auth::check_login_locked(limiter_key).map_err(|e| e.to_string())?;
 
     // 优先检查快速凭据缓存，避免每轮受保护请求触发昂贵的 bcrypt 哈希验证 (P-1)
     let pass_sha = crate::util::crypto::sha256_bytes(pass.as_bytes());
@@ -297,7 +287,16 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         match verify_basic_credentials(&user, &pass, &limiter_key, auth_conf).await {
             Ok(true) => return next.run(req).await,
             Ok(false) => {}
-            Err(locked_resp) => return locked_resp,
+            Err(locked_err) => {
+                return Response::builder()
+                    .status(StatusCode::TOO_MANY_REQUESTS)
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .body(axum::body::Body::from(format!(
+                        r#"{{"success":false,"message":"{}"}}"#,
+                        locked_err
+                    )))
+                    .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
+            }
         }
     }
 

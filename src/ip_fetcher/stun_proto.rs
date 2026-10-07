@@ -104,15 +104,6 @@ fn parse_error_code(val_bytes: &[u8]) -> Option<(u16, String)> {
     Some((code, reason))
 }
 
-/// 解析 STUN 响应二进制报文 (支持 XOR-MAPPED-ADDRESS 与传统 MAPPED-ADDRESS)
-///
-/// # Errors
-///
-/// - 报文长度不足 20 字节
-/// - 报文头类别比特非法 (最高 2 位非 0)
-/// - 收到 STUN Binding Error Response 或非期望的消息类型
-/// - Magic Cookie 或 Transaction ID 校验失败
-/// - 报文中不存在有效的反射地址属性
 /// 解析 STUN Binding Error Response (0x0111) 中的 ERROR-CODE 属性并返回对应错误
 fn parse_binding_error_response(buf: &[u8], end_offset: usize) -> FetchError {
     let mut offset = 20;
@@ -186,6 +177,15 @@ fn extract_mapped_ip_from_attrs(
     })
 }
 
+/// 解析 STUN 响应二进制报文 (支持 XOR-MAPPED-ADDRESS 与传统 MAPPED-ADDRESS)
+///
+/// # Errors
+///
+/// - 报文长度不足 20 字节
+/// - 报文头类别比特非法 (最高 2 位非 0)
+/// - 收到 STUN Binding Error Response 或非期望的消息类型
+/// - Magic Cookie 或 Transaction ID 校验失败
+/// - 报文中不存在有效的反射地址属性
 pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr, FetchError> {
     if buf.len() < 20 {
         return Err(FetchError::Other(format!(

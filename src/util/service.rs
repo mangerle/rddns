@@ -1,7 +1,9 @@
 #[path = "service_unix.rs"]
 mod service_unix;
 
-use anyhow::{Context, Result, bail};
+#[cfg(any(windows, not(any(target_os = "linux", target_os = "macos"))))]
+use anyhow::bail;
+use anyhow::{Context, Result};
 #[cfg(windows)]
 use log::{info, warn};
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
