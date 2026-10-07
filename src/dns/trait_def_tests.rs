@@ -245,6 +245,104 @@ fn test_dns_provider_error_truncation_precedes_sanitization() {
     );
 }
 
+/// 构造带有多层 source 链的测试错误，用于验证根因展开逻辑
+///
+/// # 设计原理
+/// `source()` 需返回对下一层的引用，故下一层以 `Box` 在构造期一次性递归建好，
+/// 而非在 `source()` 内创建临时值——后者会返回悬垂引用而无法通过编译。
+#[derive(Debug)]
+struct ChainedError {
+    text: String,
+    next: Option<Box<ChainedError>>,
+}
+
+impl ChainedError {
+    /// 依据错误文本序列构建一条自顶向下的错误链
+    fn chain(layers: &[&str]) -> Self {
+        match layers.split_first() {
+            None => Self {
+                text: String::new(),
+                next: None,
+            },
+            Some((head, rest)) => Self {
+                text: (*head).to_string(),
+                next: Some(Box::new(Self::chain(rest))),
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for ChainedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.text)
+    }
+}
+
+impl std::error::Error for ChainedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.next
+            .as_deref()
+            .map(|n| n as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// 回归用例 (P1-21)：HTTP 错误必须保留 source 链根因，仅取 to_string 会丢失全部定位信息
+#[test]
+fn test_format_error_chain_preserves_root_cause() {
+    let err = ChainedError::chain(&[
+        "error sending request for url (https://example.com/api)",
+        "client error (Connect)",
+        "tcp connect error: Connection refused",
+    ]);
+
+    let chain = format_error_chain_with_root_cause(&err);
+    assert!(
+        chain.contains("tcp connect error: Connection refused"),
+        "根因必须出现在错误链文本中，实际: {}",
+        chain
+    );
+    assert!(
+        chain.contains("client error (Connect)"),
+        "中间层不得丢失，实际: {}",
+        chain
+    );
+    assert!(
+        chain.contains("->"),
+        "多层错误必须以箭头连接，实际: {}",
+        chain
+    );
+}
+
+/// 单层错误不应输出无意义箭头
+#[test]
+fn test_format_error_chain_single_layer_has_no_arrow() {
+    let chain = format_error_chain_with_root_cause(&ChainedError::chain(&["单一错误"]));
+    assert_eq!(chain, "单一错误");
+    assert!(!chain.contains("->"));
+}
+
+/// 错误链展开后仍须经由脱敏出口，不得泄漏 URL 中的凭据
+#[test]
+fn test_error_chain_output_is_still_sanitized() {
+    let err = ChainedError::chain(&[
+        "error sending request for url (https://api.example.com/dnsListRecords?key=LEAK_SECRET_VALUE&domain=a.com)",
+        "dns error: no such host",
+    ]);
+
+    let chain = format_error_chain_with_root_cause(&err);
+    let sanitized = format_sanitized_err(&chain);
+    assert!(
+        !sanitized.contains("LEAK_SECRET_VALUE"),
+        "错误链中的凭据必须被脱敏，实际: {}",
+        sanitized
+    );
+    assert!(
+        sanitized.contains(MASK_PLACEHOLDER),
+        "应输出脱敏占位符，实际: {}",
+        sanitized
+    );
+}
+
 #[test]
 fn test_clamp_ttl_and_default_ttl() {
     // 默认行为：None 回退为 DEFAULT_DNS_TTL (600)

@@ -18,7 +18,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
@@ -33,6 +33,16 @@ pub(crate) use params::*;
 /// - **实现初衷**: 防止多端点 URL 或 STUN 节点连续网络超时导致整个探测流程挂起达数十秒 (P1-16)。
 /// - **核心优势**: 强制在 20 秒内闭环返回结果，释放 Tokio 协程调度，防止调度循环与手动触发被持续阻塞。
 const IP_PROBE_AGGREGATE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// 启动宽限期内不派发失败告警的时长 (P1-21)
+///
+/// # 设计原理
+/// - **实现初衷**: 开机自启动时，即便网络就绪探测已通过，系统 DNS Client 与 TLS
+///   链路仍可能存在数秒瞬态波动，使首轮同步整体失败。此类失败并非真实配置问题，
+///   照常告警只会产生噪声。
+/// - **核心优势**: 以时间窗限定抑制范围而非永久放宽——若宽限期后问题依旧存在，
+///   后续轮次将正常派发告警，绝不会掩盖真实故障。
+const STARTUP_GRACE_PERIOD: Duration = Duration::from_secs(90);
 
 /// DDNS 核心调度引擎
 ///
@@ -107,7 +117,9 @@ impl DdnsEngine {
     }
 
     /// 执行单次全量任务检查与同步 (多任务并发执行)
-    pub async fn run_once(&self, force_cloud_sync: bool) {
+    ///
+    /// * `in_startup_grace`: 本次调用是否处于启动宽限期内，用于抑制开机瞬态误告警
+    pub async fn run_once(&self, force_cloud_sync: bool, in_startup_grace: bool) {
         let config = self.config_manager.get_config();
 
         // 1. 同步清理已被用户删除的任务历史状态快照，防止内存泄漏
@@ -142,6 +154,7 @@ impl DdnsEngine {
                     state_manager: &state_manager,
                     semaphore: sem,
                     force_sync: force_cloud_sync,
+                    in_startup_grace,
                 })
                 .await;
             });
@@ -175,6 +188,7 @@ impl DdnsEngine {
             state_manager,
             semaphore,
             force_sync,
+            in_startup_grace,
         } = params;
 
         if !decision::validate_task_preconditions(task) {
@@ -312,6 +326,7 @@ impl DdnsEngine {
                     ipv4_opt,
                     ipv6_opt,
                     fail_results,
+                    in_startup_grace,
                 );
             } else {
                 debug!(
@@ -425,19 +440,29 @@ impl DdnsEngine {
         }
 
         state_manager.update_task_state(&task.name, |s| *s = current_state);
-        sync::dispatch_sync_notification(&task.name, dispatcher, ipv4_opt, ipv6_opt, sync_results);
+        sync::dispatch_sync_notification(
+            &task.name,
+            dispatcher,
+            ipv4_opt,
+            ipv6_opt,
+            sync_results,
+            in_startup_grace,
+        );
         info!("======== 任务 [{}] 同步执行完毕 ========\n", task.name);
     }
 
     /// 伴随取消令牌执行单次全量检查，若在执行期间收到停止信号，返回 false 提示调用方平滑退出
+    ///
+    /// * `in_startup_grace`: 本次调用是否处于启动宽限期内，用于抑制开机瞬态误告警
     async fn run_once_cancellable(
         &self,
         force_cloud_sync: bool,
+        in_startup_grace: bool,
         cancel_token: &CancellationToken,
     ) -> bool {
         select! {
             _ = cancel_token.cancelled() => false,
-            _ = self.run_once(force_cloud_sync) => true,
+            _ = self.run_once(force_cloud_sync, in_startup_grace) => true,
         }
     }
 
@@ -461,6 +486,8 @@ impl DdnsEngine {
         let mut timer = interval(current_interval);
         timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        // 记录网络就绪时刻作为启动宽限期的起算点 (P1-21)
+        let startup_grace_deadline = Instant::now() + STARTUP_GRACE_PERIOD;
         let mut trigger_rx_closed = false;
         let mut config_rx_closed = false;
         let mut in_fast_retry = false;
@@ -472,7 +499,9 @@ impl DdnsEngine {
                     break 'engine_loop;
                 }
                 _ = timer.tick() => {
-                    if !self.run_once_cancellable(false, &cancel_token).await {
+                    // 宽限期边界前抑制全失败告警，边界后恢复正常告警 (P1-21)
+                    let in_startup_grace = Instant::now() < startup_grace_deadline;
+                    if !self.run_once_cancellable(false, in_startup_grace, &cancel_token).await {
                         info!("定时同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
                         break 'engine_loop;
                     }
@@ -506,7 +535,8 @@ impl DdnsEngine {
                     match manual_req {
                         Some(_) => {
                             info!("收到手动强制同步触发指令");
-                            if !self.run_once_cancellable(true, &cancel_token).await {
+                            // 手动触发源自用户显式操作，无论是否处于启动宽限期均如实派发告警
+                            if !self.run_once_cancellable(true, false, &cancel_token).await {
                                 info!("手动同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
                                 break 'engine_loop;
                             }

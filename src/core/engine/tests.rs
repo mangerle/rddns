@@ -36,7 +36,7 @@ async fn test_disabled_task_skipped_in_run_once() {
         .unwrap();
 
     let (engine, _tx) = DdnsEngine::new(config_manager.clone(), StateManager::new());
-    engine.run_once(false).await;
+    engine.run_once(false, false).await;
 
     // 验证由于任务被禁用，state_manager 中不应存在该任务的状态记录（从未执行 process_task）
     let state = engine.state_manager.get_task_state("已关闭的任务");

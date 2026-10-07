@@ -23,6 +23,13 @@ pub(crate) struct TaskProcessParams<'a> {
     pub state_manager: &'a StateManager,
     pub semaphore: Arc<Semaphore>,
     pub force_sync: bool,
+    /// 本轮是否处于启动宽限期内 (P1-21)
+    ///
+    /// # 设计原理
+    /// 开机自启动阶段，即便网络就绪探测已通过，系统 DNS 与 TLS 链路仍可能存在
+    /// 数秒瞬态波动，导致首轮同步整体失败。此类失败并非真实配置或凭据问题，
+    /// 若照常派发告警将产生纯噪声通知。
+    pub in_startup_grace: bool,
 }
 
 /// 单协议域名并发同步入参对象（参数对象模式，避免平铺多参）

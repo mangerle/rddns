@@ -282,20 +282,54 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
     }
 }
 
+/// 判定本轮失败是否应因启动宽限期而被抑制告警 (P1-21)
+///
+/// # 设计原理
+/// - **实现初衷**: 开机阶段系统 DNS 与 TLS 链路瞬态未就绪会导致首轮同步整体失败，
+///   该失败并非真实配置或凭据问题，照常派发告警只会产生纯噪声通知。
+/// - **核心优势**: 提取为无副作用纯函数，使判定逻辑可独立于通知渠道进行单元测试；
+///   且以「存在任意成功记录」作为网络已恢复的判据——一旦有记录同步成功，
+///   即说明业务链路已打通，此后的失败必须如实告警。
+/// - **代价与局限**: 仅抑制全失败轮次，部分失败（部分记录成功）仍会派发告警，
+///   因其可能反映真实的单域名配置问题。
+fn should_suppress_failure_in_grace(
+    in_startup_grace: bool,
+    sync_results: &[SyncRecordResult],
+) -> bool {
+    if !in_startup_grace {
+        return false;
+    }
+    let has_failed = sync_results.iter().any(|r| r.status == SyncStatus::Failed);
+    let has_success = sync_results.iter().any(|r| r.status != SyncStatus::Failed);
+    has_failed && !has_success
+}
+
 /// 评估同步结果并向已启用的渠道派发通知事件
 ///
 /// # 设计原理
 /// - **实现初衷**: 解耦 DNS 记录修改与外部告警通知，根据全量、部分或全部失败计算总体状态并异步通知。
+/// - **核心优势**: 在启动宽限期内抑制「全网不可达型瞬态失败」的告警派发，
+///   消除开机阶段的噪声通知；判定逻辑委托 [`should_suppress_failure_in_grace`]。
 pub(crate) fn dispatch_sync_notification(
     task_name: &str,
     dispatcher: &NotificationDispatcher,
     ipv4_opt: Option<Ipv4Addr>,
     ipv6_opt: Option<Ipv6Addr>,
     sync_results: Vec<SyncRecordResult>,
+    in_startup_grace: bool,
 ) {
     if sync_results.is_empty() {
         return;
     }
+
+    if should_suppress_failure_in_grace(in_startup_grace, &sync_results) {
+        warn!(
+            "[{}] 启动宽限期内本轮同步全部失败，判定为开机网络瞬态（系统 DNS 与 TLS 链路尚未完全就绪），本次不派发失败告警；若下一轮仍失败将正常告警",
+            task_name
+        );
+        return;
+    }
+
     let has_success = sync_results.iter().any(|r| r.status != SyncStatus::Failed);
     let has_failed = sync_results.iter().any(|r| r.status == SyncStatus::Failed);
     let has_actual_updates = sync_results

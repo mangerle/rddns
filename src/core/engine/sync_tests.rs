@@ -106,15 +106,49 @@ async fn test_spawn_protocol_sync_tasks_short_circuit_and_force() {
 fn test_dispatch_sync_notification_statuses() {
     let dispatcher = NotificationDispatcher::new(NotificationConfig::default());
 
-    // 验证空列表安全跳过
-    dispatch_sync_notification("task", &dispatcher, None, None, Vec::new());
+    // 验证空列表安全跳过（非启动宽限期）
+    dispatch_sync_notification("task", &dispatcher, None, None, Vec::new(), false);
 
     // 构造三态结果验证
     let s1 = SyncRecordResult::unchanged("a.com", DnsRecordType::A, "1.1.1.1");
     let s2 = SyncRecordResult::failed("b.com", DnsRecordType::A, "1.1.1.1", "err");
-    dispatch_sync_notification("task", &dispatcher, None, None, vec![s1.clone()]);
-    dispatch_sync_notification("task", &dispatcher, None, None, vec![s2.clone()]);
-    dispatch_sync_notification("task", &dispatcher, None, None, vec![s1, s2]);
+    dispatch_sync_notification("task", &dispatcher, None, None, vec![s1.clone()], false);
+    dispatch_sync_notification("task", &dispatcher, None, None, vec![s2.clone()], false);
+    dispatch_sync_notification("task", &dispatcher, None, None, vec![s1, s2], false);
+}
+
+/// 回归用例 (P1-21)：启动宽限期内全失败不得派发告警，部分失败与宽限期后必须照常派发
+#[test]
+fn test_startup_grace_suppresses_only_total_failure() {
+    let failed = SyncRecordResult::failed("b.com", DnsRecordType::A, "1.1.1.1", "网络错误");
+    let ok = SyncRecordResult::unchanged("a.com", DnsRecordType::A, "1.1.1.1");
+    let updated = SyncRecordResult::updated("c.com", DnsRecordType::A, "1.1.1.2");
+
+    // 宽限期内全失败：静默抑制
+    assert!(
+        should_suppress_failure_in_grace(true, &[failed.clone()]),
+        "启动宽限期内全失败轮次必须被抑制"
+    );
+
+    // 宽限期内含任意成功：视为网络已恢复，不得抑制
+    assert!(
+        !should_suppress_failure_in_grace(true, &[failed.clone(), ok.clone()]),
+        "存在成功记录即说明业务链路已打通，失败部分必须正常告警"
+    );
+    assert!(
+        !should_suppress_failure_in_grace(true, &[failed.clone(), updated.clone()]),
+        "部分成功属部分失败场景，不得被宽限期静默"
+    );
+
+    // 宽限期后全失败：恢复正常告警，不得被永久静默
+    assert!(
+        !should_suppress_failure_in_grace(false, &[failed]),
+        "启动宽限期结束后必须恢复真实失败告警"
+    );
+
+    // 全成功与空列表均不属抑制范畴
+    assert!(!should_suppress_failure_in_grace(true, &[ok, updated]));
+    assert!(!should_suppress_failure_in_grace(true, &[]));
 }
 
 struct HangProvider;

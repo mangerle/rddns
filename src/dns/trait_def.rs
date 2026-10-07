@@ -262,9 +262,53 @@ impl fmt::Debug for DnsProviderError {
     }
 }
 
+/// reqwest 错误链最大展开层级
+///
+/// # 设计原理
+/// 底层 `source()` 链在正常情况下仅 2~4 层（reqwest 包装 → hyper 错误 →
+/// 系统套接字错误），设上限仅为防御异常库实现导致的环状引用或超深链路。
+const MAX_ERR_CHAIN_DEPTH: usize = 6;
+
+/// 展开底层错误的完整 source 链，产出可定位到根因的诊断文本
+///
+/// # 设计原理
+/// - **实现初衷**: `reqwest::Error` 的 `Display` 仅为 `error sending request for url (...)`
+///   这类模板化外壳，真正决定根因的分支（DNS 解析失败 / 连接被拒 / TLS 握手失败 /
+///   响应超时）全部挂在其 `source()` 链上。仅取 `to_string()` 会把这些关键信息
+///   全部丢弃，导致排障时无法区分网络层故障类型。
+/// - **核心优势**: 逐层剥离 `source()` 并以 `->` 连接，使日志可直接呈现
+///   「外壳 -> 中间层 -> 系统级根因」的完整因果链，同时复用既有脱敏出口确保
+///   展开过程中新增的 URL 片段（如重定向地址）不会绕过凭据脱敏。
+pub fn format_error_chain_with_root_cause(err: &dyn std::error::Error) -> String {
+    let mut chain = vec![err.to_string()];
+    let mut current = err.source();
+    let mut depth = 0usize;
+
+    while let Some(cause) = current
+        && depth < MAX_ERR_CHAIN_DEPTH
+    {
+        let text = cause.to_string();
+        // 防御异常实现返回自引用文本造成的死循环
+        if text.is_empty() || text == *chain.last().expect("链首元素恒存在") {
+            break;
+        }
+        chain.push(text);
+        current = cause.source();
+        depth = depth.saturating_add(1);
+    }
+
+    // 仅有一层时退化为原始文本，避免输出无信息量的 "xxx -> xxx" 形态
+    if chain.len() == 1 {
+        return chain.pop().unwrap_or_default();
+    }
+    chain.join(" -> ")
+}
+
 impl From<reqwest::Error> for DnsProviderError {
     fn from(err: reqwest::Error) -> Self {
-        Self::Http(err.to_string())
+        // 展开 source 链以保留 DNS 解析失败 / 连接被拒 / TLS 握手失败等根因信息，
+        // 交由 Display 层的统一脱敏出口收口，绝不泄漏 URL 中的凭据
+        Self::Http(format_error_chain_with_root_cause(&err))
     }
 }
 

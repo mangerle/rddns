@@ -185,7 +185,7 @@ async fn test_disabled_task_state_is_not_created() {
     let (engine, _tx) = DdnsEngine::new(config_manager.clone(), state_manager.clone());
 
     // 执行一轮同步，禁用任务应被跳过
-    engine.run_once(false).await;
+    engine.run_once(false, false).await;
 
     // 状态表应保持为空，证明前置校验确实短路了流程
     assert!(
@@ -228,7 +228,7 @@ async fn test_retain_active_tasks_purges_deleted_task_state() {
             ..Default::default()
         })
         .unwrap();
-    engine.run_once(false).await;
+    engine.run_once(false, false).await;
 
     // 引擎内的生命周期回收应清除已删除任务的状态
     let snapshot = state_manager.snapshot_all();
