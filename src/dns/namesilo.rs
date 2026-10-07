@@ -54,7 +54,7 @@ impl NameSiloProvider {
         const NAMESILO_MIN_TTL: u32 = 3600;
         let configured = ttl.unwrap_or(NAMESILO_MIN_TTL);
         if configured < NAMESILO_MIN_TTL {
-            log::info!(
+            log::debug!(
                 "[NameSilo] 用户配置的 TTL ({} 秒) 低于服务商官方最低限制 (3600 秒)，已自动修正为 3600 秒",
                 configured
             );

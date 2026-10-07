@@ -201,6 +201,34 @@ pub trait RecordOps: Send + Sync {
     }
 }
 
+/// 清理除保留索引外的冗余同名同类型解析记录
+async fn cleanup_redundant_records<O: RecordOps + ?Sized>(
+    ops: &O,
+    zone: &str,
+    (records, keep_idx): (&[RemoteRecord], usize),
+    params: &RecordParams<'_>,
+) {
+    if records.len() <= 1 {
+        return;
+    }
+    let full_domain = params.domain.full_domain();
+    for (i, rec) in records.iter().enumerate() {
+        if i != keep_idx
+            && rec.has_id()
+            && let Err(e) = ops.delete_record(zone, rec, params).await
+        {
+            log::warn!(
+                "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
+                ops.provider_name(),
+                full_domain,
+                rec.id,
+                rec.value,
+                e
+            );
+        }
+    }
+}
+
 /// 按「查 → 比 → 改/建」编排完成单条记录同步
 ///
 /// # 设计原理
@@ -226,7 +254,6 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
     let target_ip = ip.to_string();
     let zone = ops.resolve_zone(&domain.root_domain).await?;
     let params = RecordParams::new(domain, record_type, ip, ttl);
-
     let records = ops.list_records(&zone, domain, record_type).await?;
 
     if records.is_empty() {
@@ -239,7 +266,6 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         ));
     }
 
-    // 检查是否存在同名同类型的多条解析记录 (P1-14)
     if records.len() > 1 {
         log::warn!(
             "[{}] 域名 {} 存在 {} 条同名同类型的解析记录，建议清理历史残留记录以防 DNS 解析异常",
@@ -249,7 +275,6 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         );
     }
 
-    // 优先检查是否有记录已经与目标 IP 一致
     if let Some((idx, matched)) = records
         .iter()
         .enumerate()
@@ -262,24 +287,7 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
             matched.id,
             target_ip
         );
-        // 若存在多条记录且仅当前条匹配目标 IP，对其余具备独立 ID 的旧记录尝试调用 delete_record 清理
-        if records.len() > 1 {
-            for (i, rec) in records.iter().enumerate() {
-                if i != idx
-                    && rec.has_id()
-                    && let Err(e) = ops.delete_record(&zone, rec, &params).await
-                {
-                    log::warn!(
-                        "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
-                        ops.provider_name(),
-                        full_domain,
-                        rec.id,
-                        rec.value,
-                        e
-                    );
-                }
-            }
-        }
+        cleanup_redundant_records(ops, &zone, (&records, idx), &params).await;
         return Ok(SyncRecordResult::unchanged_log(
             ops.provider_name(),
             full_domain,
@@ -288,26 +296,8 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         ));
     }
 
-    // 所有现有记录均未匹配目标 IP：更新首条记录，并对其余具备独立 ID 的多余旧记录尝试清理
-    let primary = &records[0];
-    ops.update_record(&zone, &primary.id, &params).await?;
-
-    if records.len() > 1 {
-        for rec in &records[1..] {
-            if rec.has_id()
-                && let Err(e) = ops.delete_record(&zone, rec, &params).await
-            {
-                log::warn!(
-                    "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
-                    ops.provider_name(),
-                    full_domain,
-                    rec.id,
-                    rec.value,
-                    e
-                );
-            }
-        }
-    }
+    ops.update_record(&zone, &records[0].id, &params).await?;
+    cleanup_redundant_records(ops, &zone, (&records, 0), &params).await;
 
     Ok(SyncRecordResult::updated_log(
         ops.provider_name(),

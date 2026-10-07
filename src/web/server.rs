@@ -29,6 +29,19 @@ use tokio_util::sync::CancellationToken;
 /// - **核心优势**: 相比 Axum 默认的 2MB 限制更紧凑，充分满足配置保存（通常仅数 KB）的同时强化防攻击屏障。
 pub const MAX_BODY_LIMIT_BYTES: usize = 256 * 1024;
 
+/// Web 服务初始化配置参数
+///
+/// # 设计原理
+/// - **实现初衷**: 收敛 [`WebServer::new`] 的 5 个平铺参数，遵循入参不超过 4 个的参数对象模式规范。
+/// - **核心优势**: 明确表达构造所需的各项运行时依赖与命令行覆盖项，提升调用处的可读性。
+pub struct WebServerConfig {
+    pub config_manager: Arc<ConfigManager>,
+    pub trigger_sender: mpsc::Sender<()>,
+    pub log_buffer: LogBuffer,
+    pub state_manager: StateManager,
+    pub cli_listen: Option<String>,
+}
+
 pub struct WebServer {
     config_manager: Arc<ConfigManager>,
     trigger_sender: mpsc::Sender<()>,
@@ -38,19 +51,13 @@ pub struct WebServer {
 }
 
 impl WebServer {
-    pub fn new(
-        config_manager: Arc<ConfigManager>,
-        trigger_sender: mpsc::Sender<()>,
-        log_buffer: LogBuffer,
-        state_manager: StateManager,
-        cli_listen: Option<String>,
-    ) -> Self {
+    pub fn new(config: WebServerConfig) -> Self {
         Self {
-            config_manager,
-            trigger_sender,
-            log_buffer,
-            state_manager,
-            cli_listen,
+            config_manager: config.config_manager,
+            trigger_sender: config.trigger_sender,
+            log_buffer: config.log_buffer,
+            state_manager: config.state_manager,
+            cli_listen: config.cli_listen,
         }
     }
 

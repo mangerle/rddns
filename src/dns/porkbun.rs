@@ -60,7 +60,7 @@ impl PorkbunProvider {
         const PORKBUN_MIN_TTL: u32 = DEFAULT_DNS_TTL;
         let configured = ttl.unwrap_or(PORKBUN_MIN_TTL);
         if configured < PORKBUN_MIN_TTL {
-            log::info!(
+            log::debug!(
                 "[Porkbun] 用户配置的 TTL ({} 秒) 低于服务商官方最低限制 (600 秒)，已自动修正为 600 秒",
                 configured
             );

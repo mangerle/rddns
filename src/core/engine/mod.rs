@@ -1,38 +1,29 @@
 pub(crate) mod decision;
 pub(crate) mod params;
 pub(crate) mod sync;
+pub(crate) mod task_runner;
 
 #[cfg(test)]
 mod tests;
 
 use crate::config::storage::ConfigManager;
-use crate::core::domain::parse_domain_list_split_invalid;
 use crate::core::state::StateManager;
-use crate::dns::create_dns_provider;
-use crate::dns::trait_def::{DnsRecordType, SyncRecordResult};
+#[cfg(test)]
+use crate::dns::trait_def::DnsRecordType;
 use crate::notifier::dispatcher::{ErrorTrackerMap, NotificationDispatcher};
 use crate::util::wait_internet::wait_for_internet;
-use chrono::Local;
 use log::{debug, error, info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::select;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
-use tokio::time::{MissedTickBehavior, interval, timeout};
+use tokio::time::{Interval, MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) use params::*;
-
-/// 单个任务 IP 探测的总聚合超时上限（秒）
-///
-/// # 设计原理
-/// - **实现初衷**: 防止多端点 URL 或 STUN 节点连续网络超时导致整个探测流程挂起达数十秒 (P1-16)。
-/// - **核心优势**: 强制在 20 秒内闭环返回结果，释放 Tokio 协程调度，防止调度循环与手动触发被持续阻塞。
-const IP_PROBE_AGGREGATE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 启动宽限期内不派发失败告警的时长 (P1-21)
 ///
@@ -64,10 +55,6 @@ impl DdnsEngine {
     /// # 设计原理
     /// - **实现初衷**: 允许调用方（Web 层）注入与引擎共享的 `StateManager` 实例，使运行状态可被外部读取，避免引擎状态成为自闭环数据。
     /// - **核心优势**: `StateManager` 内部为 `Arc<DashMap<..>>`，克隆即共享同一份数据，无需额外的跨模块通信通道。
-    ///
-    /// # Parameters
-    /// - `config_manager`: 配置管理器句柄
-    /// - `state_manager`: 任务运行时状态管理器
     pub fn new(
         config_manager: Arc<ConfigManager>,
         state_manager: StateManager,
@@ -84,36 +71,8 @@ impl DdnsEngine {
     }
 
     /// 获取任务运行时状态管理器句柄
-    ///
-    /// # 设计原理
-    /// 供上层（如集成测试、状态查询端点）读取引擎所持有的状态实例。
     pub fn state_manager(&self) -> StateManager {
         self.state_manager.clone()
-    }
-
-    /// 将格式非法的域名条目转换为同步失败记录 (P1-17)
-    ///
-    /// # 设计原理
-    /// 非法域名的存在本身必须反映到同步结果中——若被静默忽略，引擎会判定
-    /// 本轮为全绿健康，用户将完全无从察觉自己的域名配置有误。
-    ///
-    /// 此处构造逻辑从 `core::domain` 上移至引擎层，使该模块得以回归纯基础
-    /// 设施（不依赖 `dns`），从而解除 `config → core` 的逆向依赖。
-    fn build_invalid_domain_results(
-        invalid_domains: Vec<String>,
-        record_type: DnsRecordType,
-    ) -> Vec<SyncRecordResult> {
-        invalid_domains
-            .into_iter()
-            .map(|domain| {
-                SyncRecordResult::failed(
-                    domain,
-                    record_type,
-                    "未知/解析失败",
-                    "域名格式非法或无法识别有效根域名",
-                )
-            })
-            .collect()
     }
 
     /// 执行单次全量任务检查与同步 (多任务并发执行)
@@ -137,7 +96,6 @@ impl DdnsEngine {
         );
 
         let cache_times = config.cache_times;
-
         let mut join_set = JoinSet::new();
         let semaphore = self.dns_sync_semaphore.clone();
         for task in config.dns_tasks.iter() {
@@ -150,7 +108,7 @@ impl DdnsEngine {
             let state_manager = self.state_manager.clone();
             let sem = semaphore.clone();
             join_set.spawn(async move {
-                Self::process_task(TaskProcessParams {
+                task_runner::process_task(TaskProcessParams {
                     task: &task,
                     cache_times,
                     dispatcher: &dispatcher_clone,
@@ -182,301 +140,7 @@ impl DdnsEngine {
         }
     }
 
-    /// 处理单个 DNS 任务
-    async fn process_task(params: TaskProcessParams<'_>) {
-        let TaskProcessParams {
-            task,
-            cache_times,
-            dispatcher,
-            state_manager,
-            semaphore,
-            force_sync,
-            in_startup_grace,
-        } = params;
-
-        if !decision::validate_task_preconditions(task) {
-            return;
-        }
-
-        info!("======== 开始执行任务: [{}] ========", task.name);
-        let mut current_state = state_manager.get_task_state(&task.name);
-
-        let (ipv4_opt, ipv6_opt) =
-            match timeout(IP_PROBE_AGGREGATE_TIMEOUT, sync::probe_task_ips(task)).await {
-                Ok(ips) => ips,
-                Err(_) => {
-                    warn!(
-                        "[{}] IP 探测聚合耗时超过 {} 秒上限，触发熔断并跳过本轮",
-                        task.name,
-                        IP_PROBE_AGGREGATE_TIMEOUT.as_secs()
-                    );
-                    (None, None)
-                }
-            };
-        let v4_active = task.ipv4.has_configured_domains();
-        let v6_active = task.ipv6.has_configured_domains();
-        let mut ip_fetch_failed = false;
-        let mut fetch_errors = Vec::with_capacity(2);
-        if v4_active {
-            if ipv4_opt.is_some() {
-                current_state.ipv4_fail_count = 0;
-            } else {
-                current_state.ipv4_fail_count = current_state.ipv4_fail_count.saturating_add(1);
-                ip_fetch_failed = true;
-                fetch_errors.push(format!(
-                    "[{}] 公网 IPv4 获取失败（连续 {} 次），本轮跳过云端同步",
-                    task.name, current_state.ipv4_fail_count
-                ));
-            }
-        }
-        if v6_active {
-            if ipv6_opt.is_some() {
-                current_state.ipv6_fail_count = 0;
-            } else {
-                current_state.ipv6_fail_count = current_state.ipv6_fail_count.saturating_add(1);
-                ip_fetch_failed = true;
-                fetch_errors.push(format!(
-                    "[{}] 公网 IPv6 获取失败（连续 {} 次），本轮跳过云端同步",
-                    task.name, current_state.ipv6_fail_count
-                ));
-            }
-        }
-        if !fetch_errors.is_empty() {
-            current_state.last_error = Some(fetch_errors.join("；"));
-        }
-
-        // 域名解析与失败记录构造在此处编排（P1-17）：
-        // `core::domain` 已回归纯基础设施（不再构造 DNS 同步结果），
-        // 同步失败记录的生成上移至引擎层，保持 `domain` 不依赖 `dns`。
-        let (parsed_v4, invalid_v4) = if v4_active {
-            let (ok, bad) = parse_domain_list_split_invalid(&task.ipv4.domains);
-            (
-                ok,
-                Self::build_invalid_domain_results(bad, DnsRecordType::A),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let (parsed_v6, invalid_v6) = if v6_active {
-            let (ok, bad) = parse_domain_list_split_invalid(&task.ipv6.domains);
-            (
-                ok,
-                Self::build_invalid_domain_results(bad, DnsRecordType::AAAA),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let has_invalid_domains = !invalid_v4.is_empty() || !invalid_v6.is_empty();
-
-        current_state.check_counter = current_state.check_counter.saturating_add(1);
-        if !force_sync && decision::should_backoff(&current_state, cache_times, ip_fetch_failed) {
-            debug!(
-                "[{}] IP 探测连续失败且处于指数退避期 (计数: {})，跳过云端请求",
-                task.name, current_state.check_counter
-            );
-            current_state.last_sync_time =
-                Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-            state_manager.update_task_state(&task.name, |s| *s = current_state);
-            return;
-        }
-        let reach_cache_limit =
-            decision::is_reach_cache_limit(current_state.check_counter, cache_times);
-        let should_sync = has_invalid_domains
-            || decision::evaluate_sync_necessity(&SyncEvaluationParams {
-                task,
-                cache_times,
-                current_state: &current_state,
-                v4_domains: &parsed_v4,
-                v6_domains: &parsed_v6,
-                ipv4_opt,
-                ipv6_opt,
-                force_sync,
-            });
-
-        if !should_sync {
-            if ip_fetch_failed {
-                warn!(
-                    "[{}] 公网 IP 获取失败，跳过云端同步并派发告警通知",
-                    task.name
-                );
-                current_state.check_counter = 0;
-                current_state.consecutive_failures =
-                    current_state.consecutive_failures.saturating_add(1);
-                current_state.last_sync_time =
-                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-                state_manager.update_task_state(&task.name, |s| *s = current_state.clone());
-
-                let mut fail_results = Vec::with_capacity(parsed_v4.len() + parsed_v6.len());
-                if v4_active && ipv4_opt.is_none() {
-                    for d in &parsed_v4 {
-                        fail_results.push(SyncRecordResult::failed(
-                            d.full_domain(),
-                            DnsRecordType::A,
-                            "未知/获取失败",
-                            "获取本地公网 IPv4 地址失败",
-                        ));
-                    }
-                }
-                if v6_active && ipv6_opt.is_none() {
-                    for d in &parsed_v6 {
-                        fail_results.push(SyncRecordResult::failed(
-                            d.full_domain(),
-                            DnsRecordType::AAAA,
-                            "未知/获取失败",
-                            "获取本地公网 IPv6 地址失败",
-                        ));
-                    }
-                }
-                fail_results.extend(invalid_v4);
-                fail_results.extend(invalid_v6);
-
-                sync::dispatch_sync_notification(
-                    &task.name,
-                    dispatcher,
-                    ipv4_opt,
-                    ipv6_opt,
-                    fail_results,
-                    in_startup_grace,
-                );
-            } else {
-                debug!(
-                    "[{}] 本地 IP 未发生变动 (IPv4: {:?}, IPv6: {:?})，未达服务商校对周期 ({}/{})，跳过云端请求",
-                    task.name, ipv4_opt, ipv6_opt, current_state.check_counter, cache_times
-                );
-                current_state.last_sync_time =
-                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-                state_manager.update_task_state(&task.name, |s| *s = current_state);
-            }
-            return;
-        }
-
-        if reach_cache_limit {
-            info!(
-                "[{}] 达到服务商校对周期 ({}/{})，强制发起云端真实记录对比",
-                task.name, current_state.check_counter, cache_times
-            );
-        }
-
-        let dns_provider = match create_dns_provider(&task.provider, task.http_interface.as_deref())
-        {
-            Ok(p) => p,
-            Err(e) => {
-                error!("[{}] 创建 DNS 服务商驱动失败: {}", task.name, e);
-                current_state.consecutive_failures =
-                    current_state.consecutive_failures.saturating_add(1);
-                current_state.last_error = Some(format!("创建 DNS 服务商驱动失败: {}", e));
-                current_state.last_sync_time =
-                    Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-                state_manager.update_task_state(&task.name, |s| *s = current_state);
-                return;
-            }
-        };
-
-        let supports_v4 = dns_provider.supports_record_type(DnsRecordType::A);
-        let supports_v6 = dns_provider.supports_record_type(DnsRecordType::AAAA);
-        let mut sync_join_set = JoinSet::new();
-        let force_sync_all = force_sync || reach_cache_limit;
-
-        sync::spawn_protocol_sync_tasks(
-            &mut sync_join_set,
-            ProtocolSyncParams {
-                enabled: v4_active,
-                domains: &parsed_v4,
-                ip_opt: ipv4_opt.map(IpAddr::V4),
-                record_type: DnsRecordType::A,
-                provider: dns_provider.clone(),
-                task_name: task.name.clone(),
-                ttl: task.ttl,
-                semaphore: semaphore.clone(),
-                force_sync_all,
-                synced_domains: &current_state.synced_domains,
-            },
-        );
-
-        sync::spawn_protocol_sync_tasks(
-            &mut sync_join_set,
-            ProtocolSyncParams {
-                enabled: v6_active,
-                domains: &parsed_v6,
-                ip_opt: ipv6_opt.map(IpAddr::V6),
-                record_type: DnsRecordType::AAAA,
-                provider: dns_provider,
-                task_name: task.name.clone(),
-                ttl: task.ttl,
-                semaphore,
-                force_sync_all,
-                synced_domains: &current_state.synced_domains,
-            },
-        );
-
-        let mut sync_results = Vec::with_capacity(parsed_v4.len() + parsed_v6.len());
-        let mut panicked_domains = 0usize;
-        while let Some(res) = sync_join_set.join_next().await {
-            match res {
-                Ok(r) => sync_results.push(r),
-                Err(join_err) => {
-                    panicked_domains = panicked_domains.saturating_add(1);
-                    error!(
-                        "[{}] 域名同步子任务异常终止 (panic={}): {}",
-                        task.name,
-                        join_err.is_panic(),
-                        join_err
-                    );
-                }
-            }
-        }
-
-        let v4_invalid_count = invalid_v4.len();
-        let v6_invalid_count = invalid_v6.len();
-        sync_results.extend(invalid_v4);
-        sync_results.extend(invalid_v6);
-
-        let effective_v4_count = if supports_v4 {
-            parsed_v4.len() + v4_invalid_count
-        } else {
-            v4_invalid_count
-        };
-        let effective_v6_count = if supports_v6 {
-            parsed_v6.len() + v6_invalid_count
-        } else {
-            v6_invalid_count
-        };
-
-        sync::update_runtime_state_after_sync(SyncStateUpdateParams {
-            task,
-            current_state: &mut current_state,
-            v4_count: effective_v4_count,
-            v6_count: effective_v6_count,
-            ipv4_opt,
-            ipv6_opt,
-            sync_results: &sync_results,
-            reach_cache_limit,
-        });
-
-        if panicked_domains > 0 {
-            current_state.consecutive_failures += panicked_domains as u32;
-            let panic_note = format!("{} 个域名同步子任务异常终止", panicked_domains);
-            current_state.last_error = Some(match current_state.last_error.take() {
-                Some(prev) => format!("{}; {}", prev, panic_note),
-                None => panic_note,
-            });
-        }
-
-        state_manager.update_task_state(&task.name, |s| *s = current_state);
-        sync::dispatch_sync_notification(
-            &task.name,
-            dispatcher,
-            ipv4_opt,
-            ipv6_opt,
-            sync_results,
-            in_startup_grace,
-        );
-        info!("======== 任务 [{}] 同步执行完毕 ========\n", task.name);
-    }
-
     /// 伴随取消令牌执行单次全量检查，若在执行期间收到停止信号，返回 false 提示调用方平滑退出
-    ///
-    /// * `in_startup_grace`: 本次调用是否处于启动宽限期内，用于抑制开机瞬态误告警
     async fn run_once_cancellable(
         &self,
         force_cloud_sync: bool,
@@ -486,6 +150,58 @@ impl DdnsEngine {
         select! {
             _ = cancel_token.cancelled() => false,
             _ = self.run_once(force_cloud_sync, in_startup_grace) => true,
+        }
+    }
+
+    /// 评估并切换自愈快速重试定时器与常规周期定时器
+    fn update_fast_retry_timer(
+        &self,
+        timer: &mut Interval,
+        in_fast_retry: &mut bool,
+        current_interval: Duration,
+    ) {
+        let fast_retry_interval = Duration::from_secs(30);
+        let has_recent_failures = self.state_manager.has_recent_failures(5);
+        if has_recent_failures && !*in_fast_retry && current_interval > fast_retry_interval {
+            *in_fast_retry = true;
+            info!(
+                "检测到任务同步存在偶发故障，临时启用自愈快速重试调度 (每 {} 秒检测一次)...",
+                fast_retry_interval.as_secs()
+            );
+            let mut fast_timer = interval(fast_retry_interval);
+            fast_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            fast_timer.reset();
+            *timer = fast_timer;
+        } else if !has_recent_failures && *in_fast_retry {
+            *in_fast_retry = false;
+            info!(
+                "任务同步已恢复正常或超出快速自愈阈值，定时同步恢复为正常周期: {} 秒",
+                current_interval.as_secs()
+            );
+            let mut normal_timer = interval(current_interval);
+            normal_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            normal_timer.reset();
+            *timer = normal_timer;
+        }
+    }
+
+    /// 应用配置变更广播中的新轮询间隔
+    fn apply_interval_change(
+        new_secs: u64,
+        current_interval: &mut Duration,
+        in_fast_retry: bool,
+        timer: &mut Interval,
+    ) {
+        let clamped_secs = new_secs.max(5);
+        if Duration::from_secs(clamped_secs) != *current_interval {
+            *current_interval = Duration::from_secs(clamped_secs);
+            if !in_fast_retry {
+                let mut new_timer = interval(*current_interval);
+                new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                new_timer.reset();
+                *timer = new_timer;
+            }
+            info!("DDNS 轮询周期热更新为: {} 秒", clamped_secs);
         }
     }
 
@@ -509,7 +225,6 @@ impl DdnsEngine {
         let mut timer = interval(current_interval);
         timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        // 记录网络就绪时刻作为启动宽限期的起算点 (P1-21)
         let startup_grace_deadline = Instant::now() + STARTUP_GRACE_PERIOD;
         let mut trigger_rx_closed = false;
         let mut config_rx_closed = false;
@@ -522,74 +237,32 @@ impl DdnsEngine {
                     break 'engine_loop;
                 }
                 _ = timer.tick() => {
-                    // 宽限期边界前抑制全失败告警，边界后恢复正常告警 (P1-21)
                     let in_startup_grace = Instant::now() < startup_grace_deadline;
                     if !self.run_once_cancellable(false, in_startup_grace, &cancel_token).await {
                         info!("定时同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
                         break 'engine_loop;
                     }
-
-                    // 评估是否需要启动或退出自愈快速重试调度
-                    let fast_retry_interval = Duration::from_secs(30);
-                    let has_recent_failures = self.state_manager.has_recent_failures(5);
-                    if has_recent_failures && !in_fast_retry && current_interval > fast_retry_interval {
-                        in_fast_retry = true;
-                        info!(
-                            "检测到任务同步存在偶发故障，临时启用自愈快速重试调度 (每 {} 秒检测一次)...",
-                            fast_retry_interval.as_secs()
-                        );
-                        let mut fast_timer = interval(fast_retry_interval);
-                        fast_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                        fast_timer.reset();
-                        timer = fast_timer;
-                    } else if !has_recent_failures && in_fast_retry {
-                        in_fast_retry = false;
-                        info!(
-                            "任务同步已恢复正常或超出快速自愈阈值，定时同步恢复为正常周期: {} 秒",
-                            current_interval.as_secs()
-                        );
-                        let mut normal_timer = interval(current_interval);
-                        normal_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                        normal_timer.reset();
-                        timer = normal_timer;
-                    }
+                    self.update_fast_retry_timer(&mut timer, &mut in_fast_retry, current_interval);
                 }
                 manual_req = self.trigger_receiver.recv(), if !trigger_rx_closed => {
-                    match manual_req {
-                        Some(_) => {
-                            info!("收到手动强制同步触发指令");
-                            // 手动触发源自用户显式操作，无论是否处于启动宽限期均如实派发告警
-                            if !self.run_once_cancellable(true, false, &cancel_token).await {
-                                info!("手动同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
-                                break 'engine_loop;
-                            }
+                    if manual_req.is_some() {
+                        info!("收到手动强制同步触发指令");
+                        if !self.run_once_cancellable(true, false, &cancel_token).await {
+                            info!("手动同步执行期间收到停止信号，DDNS 调度引擎平滑退出");
+                            break 'engine_loop;
                         }
-                        None => {
-                            warn!("手动同步触发通道已关闭，已停用手动指令监听分支，防止 CPU 空转");
-                            trigger_rx_closed = true;
-                        }
+                    } else {
+                        warn!("手动同步触发通道已关闭，已停用手动指令监听分支，防止 CPU 空转");
+                        trigger_rx_closed = true;
                     }
                 }
                 res = config_rx.changed(), if !config_rx_closed => {
-                    match res {
-                        Ok(()) => {
-                            let new_conf = config_rx.borrow_and_update().clone();
-                            let new_secs = new_conf.interval_secs.max(5);
-                            if Duration::from_secs(new_secs) != current_interval {
-                                current_interval = Duration::from_secs(new_secs);
-                                if !in_fast_retry {
-                                    let mut new_timer = interval(current_interval);
-                                    new_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                                    new_timer.reset();
-                                    timer = new_timer;
-                                }
-                                info!("DDNS 轮询周期热更新为: {} 秒", new_secs);
-                            }
-                        }
-                        Err(_) => {
-                            warn!("配置变更广播通道已关闭，已停用配置监听分支，防止 CPU 空转");
-                            config_rx_closed = true;
-                        }
+                    if res.is_ok() {
+                        let new_secs = config_rx.borrow_and_update().interval_secs;
+                        Self::apply_interval_change(new_secs, &mut current_interval, in_fast_retry, &mut timer);
+                    } else {
+                        warn!("配置变更广播通道已关闭，已停用配置监听分支，防止 CPU 空转");
+                        config_rx_closed = true;
                     }
                 }
             }
@@ -617,5 +290,13 @@ impl DdnsEngine {
     #[cfg(test)]
     pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>) {
         sync::update_runtime_state_after_sync(params);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_invalid_domain_results(
+        invalid_domains: Vec<String>,
+        record_type: DnsRecordType,
+    ) -> Vec<crate::dns::trait_def::SyncRecordResult> {
+        task_runner::build_invalid_domain_results(invalid_domains, record_type)
     }
 }

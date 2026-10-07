@@ -19,7 +19,7 @@ use rddns::util::http::set_skip_verify;
 use rddns::util::logging::{LogBuffer, init_logger};
 use rddns::util::service::handle_service_command;
 use rddns::util::update::{run_startup_version_check, upgrade_self};
-use rddns::web::server::WebServer;
+use rddns::web::server::{WebServer, WebServerConfig};
 use shipup::{check_and_recover_current, confirm_update_success};
 use std::env::{current_dir, current_exe};
 use std::path::{Path, PathBuf};
@@ -360,13 +360,13 @@ async fn run_core_app(
 
     // 初始化 Web 管理服务器
     let web_handle = if !args.no_web {
-        let web_server = WebServer::new(
-            config_manager.clone(),
-            trigger_tx,
+        let web_server = WebServer::new(WebServerConfig {
+            config_manager: config_manager.clone(),
+            trigger_sender: trigger_tx,
             log_buffer,
             state_manager,
-            args.listen,
-        );
+            cli_listen: args.listen,
+        });
         let web_token = cancel_token.clone();
         Some(spawn(async move {
             if let Err(e) = web_server.run(web_token).await {

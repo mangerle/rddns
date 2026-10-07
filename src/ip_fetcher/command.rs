@@ -1,7 +1,7 @@
 use crate::ip_fetcher::trait_def::{FetchError, IpFetcher};
 use crate::util::net::{extract_ipv4, extract_ipv6, is_global_unicast_ipv6, is_public_ipv4};
 use async_trait::async_trait;
-use log::warn;
+use log::debug;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Stdio;
 use std::time::Duration;
@@ -113,7 +113,7 @@ impl CommandIpFetcher {
                     // 命令串由用户配置，可能内嵌凭据（如 curl -H 'Authorization: Bearer xxx'），
                     // 打印前统一经脱敏出口 (P1-3)
                     let safe_cmd = crate::util::text::sanitize_sensitive_params(&self.cmd);
-                    warn!("执行命令 '{}' 退出码异常: {:?}", safe_cmd, status.code());
+                    debug!("执行命令 '{}' 退出码异常: {:?}", safe_cmd, status.code());
                     return Err(FetchError::Other(format!(
                         "命令执行退出码异常 ({:?})",
                         status.code()
@@ -146,7 +146,7 @@ impl IpFetcher for CommandIpFetcher {
         if is_public_ipv4(&ip) {
             Ok(Some(ip))
         } else {
-            warn!("命令返回的 IPv4 非公网单播地址，已拒绝采纳: {}", ip);
+            debug!("命令返回的 IPv4 非公网单播地址，已拒绝采纳: {}", ip);
             Err(FetchError::NoValidIpv4(format!(
                 "命令返回的 IPv4 非公网单播地址: {}",
                 ip
@@ -163,7 +163,7 @@ impl IpFetcher for CommandIpFetcher {
         if is_global_unicast_ipv6(&ip) {
             Ok(Some(ip))
         } else {
-            warn!("命令返回的 IPv6 非全球单播地址，已拒绝采纳: {}", ip);
+            debug!("命令返回的 IPv6 非全球单播地址，已拒绝采纳: {}", ip);
             Err(FetchError::NoValidIpv6(format!(
                 "命令返回的 IPv6 非全球单播地址: {}",
                 ip

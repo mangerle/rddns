@@ -228,7 +228,7 @@ async fn download_package(update: &Update) -> Result<DownloadedUpdate> {
                 ..
             } => {
                 let speed_kb = speed_bytes_per_sec.unwrap_or(0) / 1024;
-                info!("更新包下载进度: {:.1}% (当前速度: {} KB/s)", p, speed_kb);
+                log::debug!("更新包下载进度: {:.1}% (当前速度: {} KB/s)", p, speed_kb);
             }
             UpdateEvent::VerifyingChecksum => {
                 info!("正在校验更新包 SHA-256 完整性哈希...");

@@ -1,80 +1,22 @@
+#[path = "service_unix.rs"]
+mod service_unix;
+
 use anyhow::{Context, Result, bail};
-use log::info;
 #[cfg(windows)]
-use log::warn;
+use log::{info, warn};
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+use service_unix::*;
 use std::env;
 use std::path::Path;
+#[cfg(any(windows, test))]
 use std::process::Command;
 #[cfg(windows)]
 use std::thread::sleep;
 #[cfg(windows)]
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::fs;
-
 #[cfg(any(windows, target_os = "linux"))]
-const SERVICE_NAME: &str = "rddns";
-#[cfg(target_os = "linux")]
-const SERVICE_DESCRIPTION: &str = "基于 Rust 的高性能动态域名解析 (DDNS) 系统自启守护服务";
-
-/// 转义路径，使其可安全嵌入 systemd unit 的 `ExecStart=` 行 (P1-10)
-///
-/// # 设计原理
-/// - **实现初衷**: `ExecStart=` 的值支持双引号包裹，但 systemd 的引号解析
-///   **不处理嵌入的换行符**。配置文件路径由用户通过 `-c` 参数完全控制，
-///   若路径含换行，后续文本将被 systemd 当作新的 unit 指令解析——攻击者
-///   可借此注入 `User=root`、`ExecStartPre=` 等任意指令实现提权。
-/// - **核心优势**: 采用与 systemd 引号语义一致的反斜杠转义：显式剔除
-///   控制字符（换行、回车、制表符等一律无法进入 unit 文件），并对
-///   反斜杠与双引号做转义。
-///
-/// # 不变式保证
-/// 返回值**必定**为单行且不含裸换行符，可安全嵌入 unit 指令值。
-#[cfg(any(target_os = "linux", test))]
-fn escape_systemd_exec_arg(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() + 8);
-    for ch in raw.chars() {
-        match ch {
-            // 控制字符一律剔除（含换行/回车/制表符），杜绝指令注入
-            c if c.is_control() => {}
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            // 空格需保留在引号内，仅剔除可能导致 unit 结构异常的字符
-            '$' => out.push_str("\\$"),
-            '%' => out.push_str("\\%"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// 转义字符串，使其可安全嵌入 XML 文本节点 (P1-10)
-///
-/// # 设计原理
-/// - **实现初衷**: launchd plist 将程序路径与配置路径直接嵌入 XML 文本节点。
-///   macOS 路径可合法包含 `&` 与 `<`（如 `/Applications/A&B/rddns`），直接
-///   嵌入会产生格式错误的 plist，进而导致 launchd 拒绝加载；更严重的是
-///   恶意构造的路径可注入额外 XML 节点改写服务定义。
-/// - **核心优势**: 按 XML 规范对四类保留字符做实体转义。
-///
-/// # 不变式保证
-/// 返回值**必定**为合法 XML 文本节点内容，不含裸 `&`、`<`、`>`。
-#[cfg(any(target_os = "macos", test))]
-fn escape_xml_text(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len() + 16);
-    for ch in raw.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
+pub(crate) const SERVICE_NAME: &str = "rddns";
 
 /// 处理系统服务管理命令 (install | uninstall | start | stop | restart | status)
 ///
@@ -145,58 +87,65 @@ fn decode_output(bytes: &[u8]) -> String {
     }
     #[cfg(windows)]
     {
-        unsafe extern "system" {
-            fn MultiByteToWideChar(
-                code_page: u32,
-                flags: u32,
-                multi_byte_str: *const u8,
-                multi_byte_len: i32,
-                wide_char_str: *mut u16,
-                wide_char_len: i32,
-            ) -> i32;
+        if let Some(decoded) = try_decode_win32_codepages(bytes) {
+            return decoded;
         }
+    }
+    String::from_utf8_lossy(bytes).to_string()
+}
 
-        const MB_ERR_INVALID_CHARS: u32 = 0x0000_0008;
+#[cfg(windows)]
+fn try_decode_win32_codepages(bytes: &[u8]) -> Option<String> {
+    unsafe extern "system" {
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            multi_byte_str: *const u8,
+            multi_byte_len: i32,
+            wide_char_str: *mut u16,
+            wide_char_len: i32,
+        ) -> i32;
+    }
 
-        // 非 UTF-8 输出在 Windows 下极大概率来自中文本地控制台（CP936/GBK）。
-        // 优先使用 CP936 结合严格无效字符校验 (MB_ERR_INVALID_CHARS) 进行判定，
-        // 杜绝英文 Windows 系统（如 CI Runner ACP=1252 单字节代码页）错误将多字节字符识别为西欧拉丁符号；
-        // 若非合法 GBK，再依序回退尝试系统默认 ANSI (0)、控制台 OEM (1) 以及宽松 GBK。
-        for &(cp, flags) in &[
-            (936u32, MB_ERR_INVALID_CHARS),
-            (0u32, 0u32),
-            (1u32, 0u32),
-            (936u32, 0u32),
-        ] {
-            let len = unsafe {
+    const MB_ERR_INVALID_CHARS: u32 = 0x0000_0008;
+
+    // 优先使用 CP936 结合严格无效字符校验 (MB_ERR_INVALID_CHARS) 进行判定，
+    // 杜绝英文 Windows 系统错误将多字节字符识别为西欧拉丁符号；
+    // 若非合法 GBK，再依序回退尝试系统默认 ANSI (0)、控制台 OEM (1) 以及宽松 GBK。
+    for &(cp, flags) in &[
+        (936u32, MB_ERR_INVALID_CHARS),
+        (0u32, 0u32),
+        (1u32, 0u32),
+        (936u32, 0u32),
+    ] {
+        let len = unsafe {
+            MultiByteToWideChar(
+                cp,
+                flags,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if len > 0 {
+            let mut wide = vec![0u16; len as usize];
+            let written = unsafe {
                 MultiByteToWideChar(
                     cp,
                     flags,
                     bytes.as_ptr(),
                     bytes.len() as i32,
-                    std::ptr::null_mut(),
-                    0,
+                    wide.as_mut_ptr(),
+                    len,
                 )
             };
-            if len > 0 {
-                let mut wide = vec![0u16; len as usize];
-                let written = unsafe {
-                    MultiByteToWideChar(
-                        cp,
-                        flags,
-                        bytes.as_ptr(),
-                        bytes.len() as i32,
-                        wide.as_mut_ptr(),
-                        len,
-                    )
-                };
-                if written > 0 {
-                    return String::from_utf16_lossy(&wide);
-                }
+            if written > 0 {
+                return Some(String::from_utf16_lossy(&wide));
             }
         }
     }
-    String::from_utf8_lossy(bytes).to_string()
+    None
 }
 
 /// 构造用于注册 Windows 服务的 sc.exe create 命令。
@@ -233,10 +182,7 @@ pub(crate) fn build_sc_create_command(
 }
 
 #[cfg(windows)]
-fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
-    info!("正在配置 Windows NT 原生自愈服务 [{}]...", SERVICE_NAME);
-
-    // 1. 迁移清理旧版本可能残留的计划任务与注册表自启项
+fn cleanup_legacy_windows_autostart() {
     let _ = Command::new("schtasks.exe")
         .args(["/delete", "/tn", SERVICE_NAME, "/f"])
         .output();
@@ -253,24 +199,10 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
     let _ = Command::new("sc.exe")
         .args(["delete", SERVICE_NAME])
         .output();
+}
 
-    // 2. 构造 SCM 原生系统服务创建指令
-    let mut create_cmd = build_sc_create_command(SERVICE_NAME, exe_path, config_path);
-    let create_out = create_cmd
-        .output()
-        .context("调用 sc.exe 创建系统服务失败")?;
-
-    if !create_out.status.success() {
-        let out_msg = decode_output(&create_out.stdout);
-        let err_msg = decode_output(&create_out.stderr);
-        bail!(
-            "创建 Windows 服务失败：\n{}\n{}\n提示：注册 Windows 系统服务需要管理员权限，请以管理员身份运行终端后重试。",
-            out_msg.trim(),
-            err_msg.trim()
-        );
-    }
-
-    // 3. 配置服务中文描述
+#[cfg(windows)]
+fn configure_windows_service_recovery() {
     let _ = Command::new("sc.exe")
         .args([
             "description",
@@ -279,7 +211,7 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
         ])
         .output();
 
-    // 4. 配置 SCM 故障恢复策略：异常崩溃或任务管理器强杀后 2 秒自动拉活重启，稳定运行 60 秒后自动清零重置失败计数
+    // 配置 SCM 故障恢复策略：异常崩溃或任务管理器强杀后 2 秒自动拉活重启，稳定运行 60 秒后自动清零重置失败计数
     let failure_out = Command::new("sc.exe")
         .args([
             "failure",
@@ -301,8 +233,31 @@ fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
     let _ = Command::new("sc.exe")
         .args(["failureflag", SERVICE_NAME, "1"])
         .output();
+}
 
-    // 5. 立即启动服务
+#[cfg(windows)]
+fn install_windows_service(exe_path: &Path, config_path: &Path) -> Result<()> {
+    info!("正在配置 Windows NT 原生自愈服务 [{}]...", SERVICE_NAME);
+
+    cleanup_legacy_windows_autostart();
+
+    let mut create_cmd = build_sc_create_command(SERVICE_NAME, exe_path, config_path);
+    let create_out = create_cmd
+        .output()
+        .context("调用 sc.exe 创建系统服务失败")?;
+
+    if !create_out.status.success() {
+        let out_msg = decode_output(&create_out.stdout);
+        let err_msg = decode_output(&create_out.stderr);
+        bail!(
+            "创建 Windows 服务失败：\n{}\n{}\n提示：注册 Windows 系统服务需要管理员权限，请以管理员身份运行终端后重试。",
+            out_msg.trim(),
+            err_msg.trim()
+        );
+    }
+
+    configure_windows_service_recovery();
+
     info!("正在启动 [{}] Windows 系统服务...", SERVICE_NAME);
     let start_out = Command::new("sc.exe")
         .args(["start", SERVICE_NAME])
@@ -331,7 +286,6 @@ fn uninstall_windows_service() -> Result<()> {
         .output()
         .context("调用 sc.exe 删除系统服务失败")?;
 
-    // 清理历史残留计划任务与注册表
     let _ = Command::new("schtasks.exe")
         .args(["/delete", "/tn", SERVICE_NAME, "/f"])
         .output();
@@ -422,398 +376,6 @@ fn handle_windows_service(action: &str, exe_path: &Path, config_path: &Path) -> 
     }
 }
 
-#[cfg(target_os = "linux")]
-fn handle_linux_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
-    let service_file_path = "/etc/systemd/system/rddns.service";
-
-    match action {
-        "install" => {
-            let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
-            info!("正在生成 systemd 服务配置文件 [{}]...", service_file_path);
-
-            // 路径经转义后嵌入，防止换行注入任意 unit 指令 (P1-10)
-            let exe_dir_safe = escape_systemd_exec_arg(&exe_dir.display().to_string());
-            let exe_safe = escape_systemd_exec_arg(&exe_path.display().to_string());
-            let config_safe = escape_systemd_exec_arg(&config_path.display().to_string());
-
-            let service_content = format!(
-                r#"[Unit]
-Description={}
-Documentation=https://github.com/mangerle/rddns
-After=network.target network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory="{}"
-ExecStart="{}" -c "{}"
-Restart=always
-RestartSec=5s
-LimitNOFILE=65535
-
-[Install]
-WantedBy=multi-user.target
-"#,
-                SERVICE_DESCRIPTION, exe_dir_safe, exe_safe, config_safe
-            );
-
-            fs::write(service_file_path, service_content).context("写入 systemd 服务文件失败")?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(service_file_path, fs::Permissions::from_mode(0o644));
-            }
-            info!("正在重载 systemd 守护进程并启用自启服务...");
-            Command::new("systemctl")
-                .args(["daemon-reload"])
-                .status()
-                .context("重载 systemd 失败")?;
-            Command::new("systemctl")
-                .args(["enable", "--now", SERVICE_NAME])
-                .status()
-                .context("启用 systemd 服务失败")?;
-
-            info!("==========================================");
-            info!("RDDNS systemd 服务已成功安装并启动！");
-            info!("服务文件: {}", service_file_path);
-            info!("工作目录: {}", exe_dir.display());
-            info!("运行程序: {}", exe_path.display());
-            info!("配置文件: {}", config_path.display());
-            info!("可使用 systemctl status rddns 查看服务实时状态");
-            info!("==========================================");
-        }
-        "uninstall" => {
-            info!("正在停止并卸载 systemd 服务 [{}]...", SERVICE_NAME);
-            let _ = Command::new("systemctl")
-                .args(["disable", "--now", SERVICE_NAME])
-                .status();
-            if Path::new(service_file_path).exists() {
-                fs::remove_file(service_file_path).context("删除 systemd 服务文件失败")?;
-            }
-            let _ = Command::new("systemctl").args(["daemon-reload"]).status();
-            info!("[{}] systemd 服务已成功卸载！", SERVICE_NAME);
-        }
-        "start" => {
-            Command::new("systemctl")
-                .args(["start", SERVICE_NAME])
-                .status()
-                .context("启动 systemd 服务失败")?;
-            info!("[{}] 服务已启动", SERVICE_NAME);
-        }
-        "stop" => {
-            Command::new("systemctl")
-                .args(["stop", SERVICE_NAME])
-                .status()
-                .context("停止 systemd 服务失败")?;
-            info!("[{}] 服务已停止", SERVICE_NAME);
-        }
-        "restart" => {
-            Command::new("systemctl")
-                .args(["restart", SERVICE_NAME])
-                .status()
-                .context("重启 systemd 服务失败")?;
-            info!("[{}] 服务已重启", SERVICE_NAME);
-        }
-        "status" => {
-            Command::new("systemctl")
-                .args(["status", SERVICE_NAME])
-                .status()
-                .context("查询 systemd 状态失败")?;
-        }
-        _ => {
-            bail!(
-                "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
-                action
-            );
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn handle_macos_service(action: &str, exe_path: &Path, config_path: &Path) -> Result<()> {
-    let plist_path = "/Library/LaunchDaemons/com.mangerle.rddns.plist";
-
-    match action {
-        "install" => {
-            let exe_dir = exe_path.parent().unwrap_or_else(|| Path::new("/"));
-            info!("正在生成 launchd 配置文件 [{}]...", plist_path);
-
-            // 路径经 XML 转义后嵌入，防止 plist 格式错误与节点注入 (P1-10)
-            let exe_dir_xml = escape_xml_text(&exe_dir.display().to_string());
-            let exe_xml = escape_xml_text(&exe_path.display().to_string());
-            let config_xml = escape_xml_text(&config_path.display().to_string());
-
-            let plist_content = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.mangerle.rddns</string>
-    <key>WorkingDirectory</key>
-    <string>{}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-        <string>-c</string>
-        <string>{}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardErrorPath</key>
-    <string>/var/log/rddns.err</string>
-    <key>StandardOutPath</key>
-    <string>/var/log/rddns.log</string>
-</dict>
-</plist>
-"#,
-                exe_dir_xml, exe_xml, config_xml
-            );
-
-            fs::write(plist_path, plist_content).context("写入 launchd plist 失败")?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(plist_path, fs::Permissions::from_mode(0o644));
-            }
-            Command::new("launchctl")
-                .args(["load", "-w", plist_path])
-                .status()
-                .context("加载 launchd 服务失败")?;
-
-            info!("==========================================");
-            info!("RDDNS macOS launchd 服务已成功安装并启动！");
-            info!("配置文件: {}", plist_path);
-            info!("工作目录: {}", exe_dir.display());
-            info!("==========================================");
-        }
-        "uninstall" => {
-            let _ = Command::new("launchctl")
-                .args(["unload", "-w", plist_path])
-                .status();
-            if Path::new(plist_path).exists() {
-                fs::remove_file(plist_path).context("删除 launchd plist 文件失败")?;
-            }
-            info!("RDDNS macOS launchd 服务已成功卸载！");
-        }
-        "start" => {
-            Command::new("launchctl")
-                .args(["start", "com.mangerle.rddns"])
-                .status()
-                .context("启动 launchd 服务失败")?;
-        }
-        "stop" => {
-            Command::new("launchctl")
-                .args(["stop", "com.mangerle.rddns"])
-                .status()
-                .context("停止 launchd 服务失败")?;
-        }
-        "restart" => {
-            let _ = Command::new("launchctl")
-                .args(["stop", "com.mangerle.rddns"])
-                .status();
-            Command::new("launchctl")
-                .args(["start", "com.mangerle.rddns"])
-                .status()
-                .context("重启 launchd 服务失败")?;
-        }
-        "status" => {
-            Command::new("launchctl")
-                .args(["list", "com.mangerle.rddns"])
-                .status()
-                .context("查询 launchd 状态失败")?;
-        }
-        _ => {
-            bail!(
-                "未知的服务指令: {} (支持指令: install, uninstall, start, stop, restart, status)",
-                action
-            );
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_service_action() {
-        let dummy_path = Path::new("dummy.yaml");
-        let res = handle_service_command("invalid_action_xyz", dummy_path);
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_clean_windows_path() {
-        let unc_path = Path::new(r"\\?\C:\Program Files\rddns\rddns.exe");
-        assert_eq!(
-            clean_windows_path(unc_path),
-            r"C:\Program Files\rddns\rddns.exe"
-        );
-
-        let normal_path = Path::new(r"C:\rddns\rddns.exe");
-        assert_eq!(clean_windows_path(normal_path), r"C:\rddns\rddns.exe");
-    }
-
-    #[test]
-    fn test_decode_output() {
-        // 1. 空字节测试
-        assert_eq!(decode_output(b""), "");
-
-        // 2. 标准 UTF-8 中文测试
-        let utf8_bytes = "RDDNS 服务运行正常".as_bytes();
-        assert_eq!(decode_output(utf8_bytes), "RDDNS 服务运行正常");
-
-        // 3. GBK 编码转换测试
-        #[cfg(windows)]
-        {
-            unsafe extern "system" {
-                fn WideCharToMultiByte(
-                    code_page: u32,
-                    flags: u32,
-                    wide_char_str: *const u16,
-                    wide_char_len: i32,
-                    multi_byte_str: *mut u8,
-                    multi_byte_len: i32,
-                    default_char: *const u8,
-                    used_default_char: *mut i32,
-                ) -> i32;
-            }
-            let original = "拒绝访问。提示：注册 Windows 系统服务需要管理员权限。";
-            let wide: Vec<u16> = original.encode_utf16().collect();
-            let len = unsafe {
-                WideCharToMultiByte(
-                    936,
-                    0,
-                    wide.as_ptr(),
-                    wide.len() as i32,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null_mut(),
-                )
-            };
-            assert!(len > 0);
-            let mut gbk_bytes = vec![0u8; len as usize];
-            unsafe {
-                WideCharToMultiByte(
-                    936,
-                    0,
-                    wide.as_ptr(),
-                    wide.len() as i32,
-                    gbk_bytes.as_mut_ptr(),
-                    len,
-                    std::ptr::null(),
-                    std::ptr::null_mut(),
-                );
-            }
-            assert_eq!(decode_output(&gbk_bytes), original);
-        }
-    }
-
-    #[test]
-    fn test_build_sc_create_command() {
-        let exe = Path::new(r"C:\Program Files\rddns\rddns.exe");
-        let cfg = Path::new(r"C:\Program Files\rddns\config.json");
-        let cmd = build_sc_create_command("rddns", exe, cfg);
-        let cmd_str = format!("{:?}", cmd);
-
-        // 验证 sc.exe 指令结构与独立键值参数
-        assert!(cmd_str.contains("\"sc.exe\""));
-        assert!(cmd_str.contains("\"create\""));
-        assert!(cmd_str.contains("\"rddns\""));
-        assert!(cmd_str.contains("\"binPath=\""));
-        assert!(cmd_str.contains("\"start=\""));
-        assert!(cmd_str.contains("\"auto\""));
-        assert!(cmd_str.contains("\"DisplayName=\""));
-        assert!(cmd_str.contains(r#""C:\\Program Files\\rddns\\rddns.exe\" -c \"C:\\Program Files\\rddns\\config.json\" --windows-service"#));
-    }
-
-    #[test]
-    fn test_escape_systemd_exec_arg_prevents_unit_injection() {
-        // 回归用例 (P1-10)：配置文件路径由用户通过 -c 参数完全控制。
-        // systemd 的引号解析不处理嵌入换行，恶意路径可注入任意 unit 指令
-        // 实现提权（如注入 User=root / ExecStartPre=）。
-        let malicious = "/tmp/a\nUser=root\nExecStartPre=/bin/sh -c 'id > /tmp/pwn'\nExecStart=";
-
-        let escaped = escape_systemd_exec_arg(malicious);
-
-        // 核心不变式：结果必须为单行，不含任何换行符。
-        // 这正是注入被阻断的原理——systemd 按行解析 unit 文件，
-        // 换行一旦消失，后续文本就只能作为 ExecStart 参数的一部分，
-        // 而无法成为独立的 User= / ExecStartPre= 指令。
-        assert!(
-            !escaped.contains('\n') && !escaped.contains('\r'),
-            "转义结果绝不可包含换行符，否则可注入 unit 指令: {:?}",
-            escaped
-        );
-        // 注入内容可作为路径文本残留（无害），但绝不可产生新的行结构。
-        // 逐行校验每一行都不含 unit 指令语法。
-        for line in escaped.lines() {
-            let trimmed = line.trim_start();
-            assert!(
-                !trimmed.starts_with("User=")
-                    && !trimmed.starts_with("ExecStartPre=")
-                    && !trimmed.starts_with("ExecStart="),
-                "转义后不得出现独立的 unit 指令行，实际行: {:?}",
-                line
-            );
-        }
-        // 其余内容仍应保留（剔除控制字符而非整体丢弃路径）
-        assert!(
-            escaped.contains("/tmp/a"),
-            "合法路径部分应被保留: {:?}",
-            escaped
-        );
-        assert!(
-            escaped.contains("User=root"),
-            "注入文本可作为路径内容残留，但因无换行而不构成指令: {:?}",
-            escaped
-        );
-    }
-
-    #[test]
-    fn test_escape_systemd_exec_arg_escapes_quotes_and_specials() {
-        // 双引号与反斜杠必须转义，否则可提前闭合引号改变解析结构
-        assert_eq!(
-            escape_systemd_exec_arg(r#"/path/with"quote"#),
-            r#"/path/with\"quote"#
-        );
-        assert_eq!(
-            escape_systemd_exec_arg(r"/path/with\backslash"),
-            r"/path/with\\backslash"
-        );
-        // systemd 将 $ 与 % 用作变量/规格展开标记，需转义防注入
-        assert_eq!(escape_systemd_exec_arg("/path/$USER"), r"/path/\$USER");
-        assert_eq!(escape_systemd_exec_arg("/path/%i"), r"/path/\%i");
-        // 空格与中文路径属合法内容，不应被破坏
-        assert_eq!(
-            escape_systemd_exec_arg("/opt/my apps/我的程序"),
-            "/opt/my apps/我的程序"
-        );
-    }
-
-    #[test]
-    fn test_escape_xml_text_prevents_plist_corruption() {
-        // 回归用例 (P1-10)：macOS 路径可合法包含 & 与 <，直接嵌入会产生
-        // 格式错误的 plist，恶意路径还可注入额外 XML 节点改写服务定义。
-        let escaped = escape_xml_text("/Applications/A&B/rddns");
-        assert_eq!(escaped, "/Applications/A&amp;B/rddns");
-
-        // 节点注入尝试
-        let injection = "/tmp/x</string></dict><dict><key>Label</key><string>evil</string>";
-        let esc = escape_xml_text(injection);
-        assert!(!esc.contains('<'));
-        assert!(!esc.contains('>'));
-
-        // 四类 XML 保留字符全覆盖
-        assert_eq!(
-            escape_xml_text(r#"<a href="x">&'</a>"#),
-            "&lt;a href=&quot;x&quot;&gt;&amp;&apos;&lt;/a&gt;"
-        );
-    }
-}
+#[path = "service_tests.rs"]
+mod service_tests;
