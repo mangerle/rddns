@@ -48,13 +48,30 @@ impl Notifier for BarkNotifier {
             payload["sound"] = json!(sound);
         }
 
-        crate::notifier::trait_def::send_json_post(
+        let resp_body = crate::notifier::trait_def::send_json_post(
             &self.client,
             &url,
             &payload,
             self.channel_name(),
         )
         .await?;
+
+        #[derive(serde::Deserialize)]
+        struct BarkResponse {
+            code: Option<i64>,
+            message: Option<String>,
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<BarkResponse>(&resp_body)
+            && let Some(code) = parsed.code
+            && code != 200
+        {
+            let msg = parsed.message.unwrap_or(resp_body);
+            return Err(NotifyError::Provider(format!(
+                "Bark 推送返回业务错误 [{}]: {}",
+                code, msg
+            )));
+        }
 
         info!("[{}] Bark 消息推送成功", self.channel_name());
         Ok(())

@@ -42,6 +42,18 @@ impl WechatOfficialNotifier {
         Self { config, client }
     }
 
+    /// 构造包含 AppID 与 AppSecret 摘要的缓存键（避免更新 Secret 后仍命中旧缓存）
+    fn token_cache_key(&self) -> String {
+        let app_id = self.config.app_id.trim();
+        let secret_hash = crate::util::crypto::sha256_hex(self.config.app_secret.trim().as_bytes());
+        format!("{}:{}", app_id, secret_hash)
+    }
+
+    /// 判断微信错误码是否属于 AccessToken 失效或过期（40001 / 40014 / 42001）
+    const fn is_token_invalid_errcode(errcode: i64) -> bool {
+        matches!(errcode, 40001 | 40014 | 42001)
+    }
+
     /// 获取公众号全局接口调用凭证 access_token (优先从内存缓存中获取)
     ///
     /// # 设计原理
@@ -50,9 +62,10 @@ impl WechatOfficialNotifier {
     async fn fetch_access_token(&self) -> Result<String, NotifyError> {
         let app_id = self.config.app_id.trim();
         let app_secret = self.config.app_secret.trim();
+        let cache_key = self.token_cache_key();
 
         WECHAT_TOKEN_CACHE
-            .get_or_fetch(app_id, || async {
+            .get_or_fetch(&cache_key, || async {
                 let url = format!(
                     "https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
                     app_id,
@@ -166,6 +179,28 @@ impl WechatOfficialNotifier {
             "phrase1": { "value": status_str, "color": "#173177" }
         })
     }
+
+    /// 向单个 OpenID 发送模板消息
+    async fn send_to_single_user(
+        &self,
+        token: &str,
+        payload: &serde_json::Value,
+    ) -> Result<WechatSendResponse, String> {
+        let send_url = format!(
+            "https://api.weixin.qq.com/cgi-bin/message/template/send?access_token={}",
+            token
+        );
+        let resp = self
+            .client
+            .post(&send_url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| crate::util::text::sanitize_sensitive_params(&e.to_string()))?;
+        resp.json::<WechatSendResponse>()
+            .await
+            .map_err(|e| crate::util::text::sanitize_sensitive_params(&e.to_string()))
+    }
 }
 
 #[async_trait]
@@ -175,12 +210,8 @@ impl Notifier for WechatOfficialNotifier {
     }
 
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError> {
-        let token = self.fetch_access_token().await?;
+        let mut token = self.fetch_access_token().await?;
         let data_payload = self.build_template_data(event);
-        let send_url = format!(
-            "https://api.weixin.qq.com/cgi-bin/message/template/send?access_token={}",
-            token
-        );
 
         // 支持逗号分隔的多个 OpenID 接收者
         let users: Vec<&str> = self
@@ -199,6 +230,7 @@ impl Notifier for WechatOfficialNotifier {
 
         let mut success_count = 0;
         let mut last_error = None;
+        let mut token_refreshed = false;
 
         for user_openid in users {
             let mut payload = json!({
@@ -213,48 +245,40 @@ impl Notifier for WechatOfficialNotifier {
                 payload["url"] = json!(jump_url.trim());
             }
 
-            match self.client.post(&send_url).json(&payload).send().await {
-                Ok(resp) => match resp.json::<WechatSendResponse>().await {
-                    Ok(send_result) => {
-                        if send_result.errcode == 0 {
-                            success_count += 1;
-                        } else {
-                            warn!(
-                                "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
-                                self.channel_name(),
-                                user_openid,
-                                send_result.errcode,
-                                send_result.errmsg
-                            );
-                            last_error = Some(format!(
-                                "微信推送失败 [{}]: {}",
-                                send_result.errcode, send_result.errmsg
-                            ));
-                        }
-                    }
-                    Err(e) => {
-                        // 脱敏后再入库 (P1-3)：Decode 错误文本通常不含凭据，
-                        // 但统一走脱敏出口可避免未来错误类型变更导致泄漏回归
-                        let safe_text =
-                            crate::util::text::sanitize_sensitive_params(&e.to_string());
+            let mut send_res = self.send_to_single_user(&token, &payload).await;
+            if let Ok(ref res) = send_res
+                && Self::is_token_invalid_errcode(res.errcode)
+                && !token_refreshed
+            {
+                token_refreshed = true;
+                WECHAT_TOKEN_CACHE.invalidate(&self.token_cache_key());
+                if let Ok(new_token) = self.fetch_access_token().await {
+                    token = new_token;
+                    send_res = self.send_to_single_user(&token, &payload).await;
+                }
+            }
+
+            match send_res {
+                Ok(send_result) => {
+                    if send_result.errcode == 0 {
+                        success_count += 1;
+                    } else {
                         warn!(
-                            "[{}] 解析向用户 {} 推送响应失败: {}",
+                            "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
                             self.channel_name(),
                             user_openid,
-                            safe_text
+                            send_result.errcode,
+                            send_result.errmsg
                         );
-                        last_error = Some(safe_text);
+                        last_error = Some(format!(
+                            "微信推送失败 [{}]: {}",
+                            send_result.errcode, send_result.errmsg
+                        ));
                     }
-                },
-                Err(e) => {
-                    // reqwest::Error 的 Display 会输出完整请求 URL，其中含
-                    // `access_token=<明文>` 查询参数。直接格式化将导致微信
-                    // access_token 每次网络失败都明文写入日志文件，而日志文件
-                    // 权限为 0644（见 util/logging/file.rs），本地任意用户可读。
-                    // 此处必须经脱敏出口 (P1-3)。
-                    let safe_text = crate::util::text::sanitize_sensitive_params(&e.to_string());
+                }
+                Err(safe_text) => {
                     warn!(
-                        "[{}] 向用户 {} 发送网络请求失败: {}",
+                        "[{}] 向用户 {} 发送或解析模板消息失败: {}",
                         self.channel_name(),
                         user_openid,
                         safe_text

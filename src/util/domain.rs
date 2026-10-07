@@ -258,7 +258,7 @@ pub fn parse_domain_list_split_invalid(raw_list: &[String]) -> (Vec<ParsedDomain
     let mut invalid = Vec::new();
     for raw in raw_list {
         let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
             continue;
         }
         match parse_domain(trimmed) {
@@ -281,7 +281,11 @@ pub fn parse_domain_list_split_invalid(raw_list: &[String]) -> (Vec<ParsedDomain
 pub fn parse_domain_list(raw_list: &[String]) -> Vec<ParsedDomain> {
     let mut parsed = Vec::with_capacity(raw_list.len());
     for raw in raw_list {
-        match parse_domain(raw) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        match parse_domain(trimmed) {
             Some(domain) => parsed.push(domain),
             None => {
                 warn!(

@@ -64,15 +64,35 @@ impl Notifier for TelegramNotifier {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
 
-        if status.is_success() {
-            info!("[{}] 消息发送成功", self.channel_name());
-            Ok(())
-        } else {
-            Err(NotifyError::Provider(format!(
+        if !status.is_success() {
+            return Err(NotifyError::Provider(format!(
                 "Telegram 返回错误 [{}]: {}",
                 status, body
-            )))
+            )));
         }
+
+        #[derive(serde::Deserialize)]
+        struct TgResponse {
+            ok: Option<bool>,
+            description: Option<String>,
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<TgResponse>(&body) {
+            if parsed.ok == Some(true) {
+                info!("[{}] 消息发送成功", self.channel_name());
+                return Ok(());
+            }
+            let desc = parsed.description.unwrap_or(body);
+            return Err(NotifyError::Provider(format!(
+                "Telegram 业务响应失败: {}",
+                desc
+            )));
+        }
+
+        Err(NotifyError::Provider(format!(
+            "Telegram 返回非预期的响应格式: {}",
+            body
+        )))
     }
 }
 

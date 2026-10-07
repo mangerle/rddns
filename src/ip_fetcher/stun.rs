@@ -229,6 +229,83 @@ impl StunIpFetcher {
     /// STUN 服务器地址字符串最大合法长度 (255 字符)
     const MAX_STUN_SERVER_LEN: usize = 255;
 
+    /// 向单个已解析的 STUN 候选目标地址发送探测请求并校验响应
+    async fn probe_target_addr(
+        &self,
+        bind_addr: SocketAddr,
+        target_addr: SocketAddr,
+        is_ipv6: bool,
+    ) -> Result<IpAddr, FetchError> {
+        let socket = UdpSocket::bind(bind_addr).await.map_err(|e| {
+            if is_ipv6 {
+                FetchError::Other(format!(
+                    "绑定本地 IPv6 UDP 失败: 本地网络可能未分配公网 IPv6 地址或无 IPv6 协议栈 (错误: {})",
+                    e
+                ))
+            } else {
+                FetchError::from(e)
+            }
+        })?;
+
+        let (req_bytes, tx_id) = Self::build_binding_request();
+        socket.send_to(&req_bytes, target_addr).await.map_err(|e| {
+            debug!("向 STUN 目标 [{}] 发送数据包失败: {}", target_addr, e);
+            FetchError::from(e)
+        })?;
+
+        let mut recv_buf = [0u8; 1024];
+        let (len, from_addr) = match timeout(self.timeout, socket.recv_from(&mut recv_buf)).await {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                debug!("从 STUN 目标 [{}] 接收数据失败: {}", target_addr, e);
+                return Err(FetchError::from(e));
+            }
+            Err(_) => {
+                debug!("STUN 目标 [{}] 响应超时", target_addr);
+                return Err(FetchError::Timeout);
+            }
+        };
+
+        if from_addr.is_ipv6() != target_addr.is_ipv6() {
+            let msg = format!(
+                "STUN 响应协议族不匹配: 期望 {}, 实际 {}",
+                target_addr, from_addr
+            );
+            debug!("{}", msg);
+            return Err(FetchError::Other(msg));
+        }
+
+        if from_addr != target_addr {
+            debug!(
+                "STUN 响应来源地址与目标不完全一致 (Anycast/多宿主节点特性): 目标 {}, 来源 {}",
+                target_addr, from_addr
+            );
+        }
+
+        let ip = Self::parse_binding_response(&recv_buf[..len], &tx_id).inspect_err(|e| {
+            debug!("解析 STUN 目标 [{}] 响应失败: {}", target_addr, e);
+        })?;
+
+        let is_public = match ip {
+            IpAddr::V4(v4) => is_public_ipv4(&v4),
+            IpAddr::V6(v6) => is_global_unicast_ipv6(&v6),
+        };
+        if is_public {
+            return Ok(ip);
+        }
+
+        let reason = format!(
+            "STUN 服务器 [{}] 返回的映射地址 {} 非公网单播地址（可能是运营商 CGNAT 或内网地址），已跳过该节点继续尝试",
+            target_addr, ip
+        );
+        debug!("{}", reason);
+        if is_ipv6 {
+            Err(FetchError::NoValidIpv6(reason))
+        } else {
+            Err(FetchError::NoValidIpv4(reason))
+        }
+    }
+
     /// 向单个 STUN 服务器发送 UDP 请求并接收解析 IP (支持多解析候选地址遍历与 Anycast 兼容)
     async fn probe_single_server(&self, server: &str, is_ipv6: bool) -> Result<IpAddr, FetchError> {
         let trimmed = server.trim();
@@ -242,94 +319,14 @@ impl StunIpFetcher {
         let target_addrs = Self::resolve_stun_target_addrs(&norm_server, is_ipv6).await?;
         let bind_addr = Self::determine_bind_addr(self.http_interface.as_deref(), is_ipv6);
 
-        let socket = UdpSocket::bind(bind_addr).await.map_err(|e| {
-            if is_ipv6 {
-                FetchError::Other(format!(
-                    "绑定本地 IPv6 UDP 失败: 本地网络可能未分配公网 IPv6 地址或无 IPv6 协议栈 (错误: {})",
-                    e
-                ))
-            } else {
-                FetchError::from(e)
-            }
-        })?;
-
         let mut last_err = None;
-
         for target_addr in target_addrs {
-            let (req_bytes, tx_id) = Self::build_binding_request();
-            if let Err(e) = socket.send_to(&req_bytes, target_addr).await {
-                debug!("向 STUN 目标 [{}] 发送数据包失败: {}", target_addr, e);
-                last_err = Some(FetchError::from(e));
-                continue;
-            }
-
-            let mut recv_buf = [0u8; 1024];
-            let recv_future = socket.recv_from(&mut recv_buf);
-
-            let recv_result = timeout(self.timeout, recv_future).await;
-            let (len, from_addr) = match recv_result {
-                Ok(Ok(pair)) => pair,
-                Ok(Err(e)) => {
-                    debug!("从 STUN 目标 [{}] 接收数据失败: {}", target_addr, e);
-                    last_err = Some(FetchError::from(e));
-                    continue;
-                }
-                Err(_) => {
-                    debug!("STUN 目标 [{}] 响应超时", target_addr);
-                    last_err = Some(FetchError::Timeout);
-                    continue;
-                }
-            };
-
-            // 严格保证响应来自同协议族
-            if from_addr.is_ipv6() != target_addr.is_ipv6() {
-                debug!(
-                    "STUN 响应协议族不匹配: 期望 {}, 实际 {}",
-                    target_addr, from_addr
-                );
-                last_err = Some(FetchError::Other(format!(
-                    "STUN 响应协议族不匹配: 期望 {}, 实际 {}",
-                    target_addr, from_addr
-                )));
-                continue;
-            }
-
-            // 对于 Anycast/集群部署的 STUN 服务，源地址可能与发往的目的 VIP 不完全一致，
-            // RFC 5389 核心依靠 96 位密码学 Transaction ID 进行响应归属绑定
-            if from_addr != target_addr {
-                debug!(
-                    "STUN 响应来源地址与目标不完全一致 (Anycast/多宿主节点特性): 目标 {}, 来源 {}",
-                    target_addr, from_addr
-                );
-            }
-
-            match Self::parse_binding_response(&recv_buf[..len], &tx_id) {
-                Ok(ip) => {
-                    // 公网地址校验必须置于节点遍历**内部** (P1-14)
-                    //
-                    // 若在 `fetch_ipv4` / `fetch_ipv6` 的最外层校验，
-                    // 首个返回 CGNAT / 私网地址的节点即导致整轮探测失败，
-                    // 而不会继续尝试剩余 5 个节点——降级链在此断裂。
-                    // `url.rs` 与 `command.rs` 的同类校验均位于遍历体内，
-                    // 此处必须对齐，否则 STUN 是四个探测器中唯一不可降级的。
-                    let is_public = match ip {
-                        IpAddr::V4(v4) => is_public_ipv4(&v4),
-                        IpAddr::V6(v6) => is_global_unicast_ipv6(&v6),
-                    };
-                    if is_public {
-                        return Ok(ip);
-                    }
-                    let reason = format!(
-                        "STUN 服务器 [{}] 返回的映射地址 {} 非公网单播地址（可能是运营商 CGNAT 或内网地址），已跳过该节点继续尝试",
-                        target_addr, ip
-                    );
-                    debug!("{}", reason);
-                    last_err = Some(FetchError::NoValidIpv4(reason));
-                }
-                Err(e) => {
-                    debug!("解析 STUN 目标 [{}] 响应失败: {}", target_addr, e);
-                    last_err = Some(e);
-                }
+            match self
+                .probe_target_addr(bind_addr, target_addr, is_ipv6)
+                .await
+            {
+                Ok(ip) => return Ok(ip),
+                Err(e) => last_err = Some(e),
             }
         }
 

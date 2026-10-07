@@ -22,18 +22,53 @@ impl WeComNotifier {
         Self { config, client }
     }
 
+    /// 构造包含 corp_id 与 corp_secret 摘要的缓存键（避免多应用或更换密钥后命中旧缓存）
+    fn token_cache_key(corp_id: &str, corp_secret: &str) -> String {
+        let secret_hash = crate::util::crypto::sha256_hex(corp_secret.trim().as_bytes());
+        format!("{}:{}", corp_id.trim(), secret_hash)
+    }
+
+    /// 判断企业微信响应 JSON 是否表示 access_token 已失效（40001 / 40014 / 42001）
+    fn is_token_invalid_response(body: &str) -> bool {
+        #[derive(Deserialize)]
+        struct ErrCodeOnly {
+            #[serde(default)]
+            errcode: i64,
+        }
+        serde_json::from_str::<ErrCodeOnly>(body)
+            .is_ok_and(|r| matches!(r.errcode, 40001 | 40014 | 42001))
+    }
+
+    /// 对企业微信群机器人 Markdown 动态文本进行安全转义，防止特殊标签或链接注入破坏排版
+    fn escape_wecom_markdown(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        for ch in raw.chars() {
+            match ch {
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '[' => out.push_str("\\["),
+                ']' => out.push_str("\\]"),
+                '`' => out.push_str("\\`"),
+                '*' => out.push_str("\\*"),
+                _ => out.push(ch),
+            }
+        }
+        out
+    }
+
     /// 获取并缓存企业微信自建应用 access_token (有效生命周期内复用，避免频繁请求触发限流)
     ///
     /// # 设计原理
     /// - **实现初衷**: 避免在 Token 过期瞬间多个并发通知任务同时穿透去请求企业微信 Token 接口，触发 API 限流。
-    /// - **核心优势**: 借助 DclTokenCache 双重检查锁安全复用，且仅以 corp_id 为键，避免 corp_secret 敏感凭据在全局缓存驻留。
+    /// - **核心优势**: 借助 DclTokenCache 双重检查锁安全复用，并以 `corp_id + sha256(corp_secret)` 为键，既隔离多应用又避免明文密钥常驻。
     async fn get_access_token(
         &self,
         corp_id: &str,
         corp_secret: &str,
     ) -> Result<String, NotifyError> {
+        let cache_key = Self::token_cache_key(corp_id, corp_secret);
         WECOM_TOKEN_CACHE
-            .get_or_fetch(corp_id, || async {
+            .get_or_fetch(&cache_key, || async {
                 let token_url = format!(
                     "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={}&corpsecret={}",
                     corp_id, corp_secret
@@ -90,12 +125,12 @@ impl WeComNotifier {
             **详细结果**：\n{}",
             status_color,
             event.overall_status.as_str(),
-            event.task_name,
+            Self::escape_wecom_markdown(&event.task_name),
             event.ipv4_str(),
             event.ipv6_str(),
-            event.domains_comma_separated(),
+            Self::escape_wecom_markdown(&event.domains_comma_separated()),
             event.time_str(),
-            event.format_details_text()
+            Self::escape_wecom_markdown(&event.format_details_text())
         );
 
         let payload = json!({
@@ -134,15 +169,6 @@ impl WeComNotifier {
             .ok_or_else(|| NotifyError::Provider("企业微信自建应用缺少 agent_id".to_string()))?;
         let to_user = self.config.to_user.as_deref().unwrap_or("@all");
 
-        // 1. 获取 access_token (优先从内存缓存获取)
-        let access_token = self.get_access_token(corp_id, corp_secret).await?;
-
-        // 2. 发送应用消息 (文本卡片)
-        let send_url = format!(
-            "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={}",
-            access_token
-        );
-
         let description = format!(
             "<div class=\"gray\">{}</div><div class=\"normal\">任务：{}</div><div class=\"normal\">IPv4：{}</div><div class=\"normal\">IPv6：{}</div><div class=\"normal\">域名：{}</div>\n\n{}",
             event.timestamp.format("%Y-%m-%d %H:%M:%S"),
@@ -171,13 +197,34 @@ impl WeComNotifier {
             }
         });
 
-        let body = crate::notifier::trait_def::send_json_post(
+        let access_token = self.get_access_token(corp_id, corp_secret).await?;
+        let send_url = format!(
+            "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={}",
+            access_token
+        );
+        let mut body = crate::notifier::trait_def::send_json_post(
             &self.client,
             &send_url,
             &payload,
             "企业微信应用消息",
         )
         .await?;
+
+        if Self::is_token_invalid_response(&body) {
+            WECOM_TOKEN_CACHE.invalidate(&Self::token_cache_key(corp_id, corp_secret));
+            let refreshed_token = self.get_access_token(corp_id, corp_secret).await?;
+            let retry_url = format!(
+                "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={}",
+                refreshed_token
+            );
+            body = crate::notifier::trait_def::send_json_post(
+                &self.client,
+                &retry_url,
+                &payload,
+                "企业微信应用消息",
+            )
+            .await?;
+        }
 
         crate::notifier::trait_def::check_errcode_response(&body, "企业微信应用消息")?;
         info!("[{}] 应用消息发送成功", self.channel_name());

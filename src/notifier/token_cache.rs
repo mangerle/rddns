@@ -28,10 +28,15 @@ impl DclTokenCache {
     /// 创建指定容量上限的 Token 缓存池
     pub fn new(max_capacity: usize) -> Self {
         Self {
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(HashMap::with_capacity(max_capacity)),
             mutex: tokio::sync::Mutex::new(()),
             max_capacity,
         }
+    }
+
+    /// 主动剔除指定键的缓存 Token（用于远端接口返回 Token 失效错误码时的自愈刷新）
+    pub fn invalidate(&self, key: &str) {
+        self.cache.write().remove(key);
     }
 
     /// 获取 Token，若缓存缺失或过期则调用 `fetcher` 异步刷新
@@ -67,13 +72,21 @@ impl DclTokenCache {
         let (token, ttl) = fetcher().await?;
         let expires_at = Instant::now() + ttl;
 
-        // 5. 写入写锁并进行容量保护淘汰
+        // 5. 写入写锁并进行容量保护淘汰（优先清理已过期项，仍满时仅淘汰最早过期项以防缓存雪崩）
         let mut guard = self.cache.write();
-        if guard.len() >= self.max_capacity {
+        if guard.len() >= self.max_capacity && !guard.contains_key(key) {
             let now = Instant::now();
             guard.retain(|_, v| v.expires_at > now);
-            if guard.len() >= self.max_capacity {
-                guard.clear();
+            while guard.len() >= self.max_capacity && !guard.is_empty() {
+                if let Some(oldest_key) = guard
+                    .iter()
+                    .min_by_key(|(_, v)| v.expires_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    guard.remove(&oldest_key);
+                } else {
+                    break;
+                }
             }
         }
         guard.insert(
@@ -103,46 +116,59 @@ mod tests {
         let count_clone = fetch_count.clone();
         let token = cache
             .get_or_fetch("app_1", || async {
-                count_clone.fetch_add(1, Ordering::SeqCst);
+                count_clone.fetch_add(1, Ordering::Relaxed);
                 Ok(("token_abc".to_string(), Duration::from_secs(60)))
             })
             .await
             .unwrap();
         assert_eq!(token, "token_abc");
-        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 1);
 
         // 缓存有效期内复用，不触发拉取
         let count_clone = fetch_count.clone();
         let token = cache
             .get_or_fetch("app_1", || async {
-                count_clone.fetch_add(1, Ordering::SeqCst);
+                count_clone.fetch_add(1, Ordering::Relaxed);
                 Ok(("token_new".to_string(), Duration::from_secs(60)))
             })
             .await
             .unwrap();
         assert_eq!(token, "token_abc");
-        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 1);
+
+        // 主动剔除后重新触发拉取
+        cache.invalidate("app_1");
+        let count_clone = fetch_count.clone();
+        let token = cache
+            .get_or_fetch("app_1", || async {
+                count_clone.fetch_add(1, Ordering::Relaxed);
+                Ok(("token_refreshed".to_string(), Duration::from_secs(60)))
+            })
+            .await
+            .unwrap();
+        assert_eq!(token, "token_refreshed");
+        assert_eq!(fetch_count.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
     async fn test_dcl_token_cache_capacity_eviction() {
         let cache = DclTokenCache::new(2);
 
-        // 插入 2 个有效 key
+        // 插入 2 个有效 key，其中 k1 过期时间更早
         cache
             .get_or_fetch("k1", || async {
-                Ok(("t1".to_string(), Duration::from_secs(60)))
+                Ok(("t1".to_string(), Duration::from_secs(30)))
             })
             .await
             .unwrap();
         cache
             .get_or_fetch("k2", || async {
-                Ok(("t2".to_string(), Duration::from_secs(60)))
+                Ok(("t2".to_string(), Duration::from_secs(120)))
             })
             .await
             .unwrap();
 
-        // 插入第 3 个 key 触发清理，由于 k1 和 k2 都未过期且已达上限，执行清理
+        // 插入第 3 个 key 触发清理，仅淘汰最早过期的 k1，保留 k2
         cache
             .get_or_fetch("k3", || async {
                 Ok(("t3".to_string(), Duration::from_secs(60)))
@@ -151,6 +177,9 @@ mod tests {
             .unwrap();
 
         let guard = cache.cache.read();
-        assert!(guard.len() <= 2);
+        assert_eq!(guard.len(), 2);
+        assert!(!guard.contains_key("k1"));
+        assert!(guard.contains_key("k2"));
+        assert!(guard.contains_key("k3"));
     }
 }
