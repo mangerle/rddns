@@ -17,10 +17,10 @@ use tokio::task::spawn_blocking;
 pub enum ConfigError {
     #[error("配置文件 I/O 操作失败: {0}")]
     Io(#[from] IoError),
-    #[error("TOML 反序列化错误: {0}")]
-    TomlDe(#[from] toml::de::Error),
-    #[error("TOML 序列化错误: {0}")]
-    TomlSer(#[from] toml::ser::Error),
+    #[error("解析配置文件 [{path}] TOML 语法失败: {reason}")]
+    TomlDe { path: String, reason: String },
+    #[error("序列化配置为 TOML 格式失败: {0}")]
+    TomlSer(String),
     #[error("原子替换临时文件错误: {0}")]
     TempFile(String),
     /// 配置校验失败
@@ -43,12 +43,12 @@ pub enum ConfigError {
 /// # 设计原理
 /// - **实现初衷**：集中管理整个应用程序的动态配置生命周期，支持 CLI 覆写、Web API 实时更新与后台 Worker 变更订阅。
 /// - **核心优势**：
-///   1. 读写分离与无锁读取：内存快照使用 `Arc<RwLock<Arc<AppConfig>>>`，读取端纯无锁或极轻量读锁，吞吐极高。
+///   1. 读写分离与无锁读取：内存快照使用 `RwLock<Arc<AppConfig>>`，读取端极轻量读锁克隆 `Arc`，吞吐极高。
 ///   2. 严格串行化防并发更新丢失：集成异步写互斥锁，确保并发 HTTP 提交时安全按序处理。
 ///   3. 原子写盘防损坏：采用“写入同目录临时文件 -> fsync 刷盘 -> 原子重命名”机制，即便遭遇掉电也不会破坏原配置。
 pub struct ConfigManager {
     file_path: PathBuf,
-    current: Arc<RwLock<Arc<AppConfig>>>,
+    current: RwLock<Arc<AppConfig>>,
     sender: watch::Sender<Arc<AppConfig>>,
     async_write_lock: TokioMutex<()>,
 }
@@ -78,8 +78,8 @@ impl ConfigManager {
     /// 此类失败通常源于程序版本升级引入的新校验规则，用户有能力自行修复。
     ///
     /// # Errors
-    /// 当配置**内容非法**（返回 [`ConfigError::Validation`]）或磁盘无写入
-    /// 权限导致无法创建默认配置时返回错误。
+    /// 当配置**内容非法**（返回 [`ConfigError::Validation`]）或首次创建默认配置且磁盘无写入
+    /// 权限时返回错误。
     pub fn load_or_create(path: PathBuf) -> Result<Self, ConfigError> {
         let config = if path.exists() {
             info!("正在加载配置文件: {}", path.display());
@@ -97,13 +97,13 @@ impl ConfigManager {
                     );
                     Self::backup_corrupted_file(&path);
                     let default_conf = AppConfig::default();
-                    // 回退配置同样落盘，保证下次启动读取到的是合法配置
-                    Self::atomic_save_to_path(&path, &default_conf).inspect_err(|e| {
+                    // 回退配置尝试落盘，若磁盘只读或写盘失败仅记录告警，确保服务仍能以内存默认配置启动
+                    if let Err(e) = Self::atomic_save_to_path(&path, &default_conf) {
                         warn!(
                             "回退默认配置写入磁盘失败（服务仍将以内存默认配置启动）: {}",
                             e
                         );
-                    })?;
+                    }
                     default_conf
                 }
             }
@@ -119,7 +119,7 @@ impl ConfigManager {
 
         Ok(Self {
             file_path: path,
-            current: Arc::new(RwLock::new(config_arc)),
+            current: RwLock::new(config_arc),
             sender,
             async_write_lock: TokioMutex::new(()),
         })
@@ -131,7 +131,10 @@ impl ConfigManager {
     /// 文件读取失败、语法解析失败或业务校验失败时返回错误。
     fn load_existing(path: &Path) -> Result<AppConfig, ConfigError> {
         let content = fs::read_to_string(path)?;
-        let mut conf: AppConfig = toml::from_str(&content)?;
+        let mut conf: AppConfig = toml::from_str(&content).map_err(|e| ConfigError::TomlDe {
+            path: path.display().to_string(),
+            reason: e.to_string(),
+        })?;
 
         // 显式版本迁移：字段级 default 只能兜住「新增字段」，
         // 字段语义变更必须经由此处升级到当前版本 (P1-4)
@@ -302,7 +305,8 @@ impl ConfigManager {
         let parent_dir = target_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent_dir)?;
 
-        let toml_str = toml::to_string_pretty(config)?;
+        let toml_str =
+            toml::to_string_pretty(config).map_err(|e| ConfigError::TomlSer(e.to_string()))?;
 
         let mut temp_file = NamedTempFile::new_in(parent_dir)
             .map_err(|e| ConfigError::TempFile(format!("创建临时文件失败: {}", e)))?;
@@ -492,16 +496,38 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
             .collect();
-        assert_eq!(
-            backups.len(),
-            1,
-            "损坏的配置���件必须被备份为带时间戳的副本"
-        );
+        assert_eq!(backups.len(), 1, "损坏的配置文件必须被备份为带时间戳的副本");
 
         // 下次启动必须能正常读取（磁盘上已是合法配置），不得重复进入兜底分支
         let reloaded =
             ConfigManager::load_or_create(config_file).expect("回退后的配置必须可被正常加载");
         assert_eq!(reloaded.get_config().listen_port, 9876);
+    }
+
+    #[test]
+    fn test_corrupted_readonly_config_still_starts_in_memory() {
+        let dir = tempdir().unwrap();
+        let config_file = dir.path().join("readonly_corrupt.toml");
+
+        fs::write(&config_file, "损坏的语法 ][{{").unwrap();
+
+        // 将文件设为只读，使 Windows/Unix 上针对该目标路径的 persist 替换失败或受限，
+        // 验证即使 atomic_save_to_path 失败，load_or_create 依然能以内存默认配置成功启动
+        let mut perms = fs::metadata(&config_file).unwrap().permissions();
+        perms.set_readonly(true);
+        let _ = fs::set_permissions(&config_file, perms);
+
+        let manager = ConfigManager::load_or_create(config_file.clone())
+            .expect("回退默认配置写盘失败时仍应以内存默认配置启动");
+        assert_eq!(manager.get_config().listen_port, 9876);
+
+        // 恢复写权限以便 tempdir 清理
+        if let Ok(meta) = fs::metadata(&config_file) {
+            let mut p = meta.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            p.set_readonly(false);
+            let _ = fs::set_permissions(&config_file, p);
+        }
     }
 
     #[test]
