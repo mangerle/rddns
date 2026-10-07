@@ -1,5 +1,5 @@
 use crate::config::model::DnsTaskConfig;
-use crate::core::domain::ParsedDomain;
+use crate::core::domain::{ParsedDomain, parse_domain};
 use crate::core::engine::decision::is_protocol_all_ok;
 use crate::core::engine::params::{ProtocolSyncParams, SyncStateUpdateParams};
 use crate::dns::trait_def::{
@@ -10,9 +10,11 @@ use crate::notifier::dispatcher::NotificationDispatcher;
 use crate::notifier::trait_def::{NotificationEvent, NotificationOverallStatus};
 use chrono::Local;
 use log::{debug, error, info, warn};
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 
@@ -88,6 +90,73 @@ pub(crate) async fn probe_task_ips(task: &DnsTaskConfig) -> (Option<Ipv4Addr>, O
     )
 }
 
+/// 单个域名并发同步任务的上下文载荷
+struct DomainSyncJob {
+    provider: Arc<dyn DnsProvider>,
+    task_name: String,
+    domain: ParsedDomain,
+    record_type: DnsRecordType,
+    type_str: &'static str,
+    ip: IpAddr,
+    ttl: Option<u32>,
+    semaphore: Arc<Semaphore>,
+}
+
+/// 执行单个域名的信号量受控同步任务（带超时与日志记录）
+async fn execute_domain_sync_task(job: DomainSyncJob) -> SyncRecordResult {
+    let _permit = job.semaphore.acquire().await.ok();
+    let start_time = Instant::now();
+    let full_domain = job.domain.full_domain();
+    let sync_future = sync_record_with_retry(
+        &job.provider,
+        &job.task_name,
+        &job.domain,
+        job.record_type,
+        &job.ip,
+        job.ttl,
+    );
+    match timeout(DNS_SYNC_TIMEOUT, sync_future).await {
+        Ok(Ok(res)) => {
+            let cost_ms = start_time.elapsed().as_millis();
+            info!(
+                "[{}] 同步域名 {} ({}) 完成: {} (耗时 {}ms)",
+                job.task_name,
+                full_domain,
+                job.type_str,
+                res.status.as_str(),
+                cost_ms
+            );
+            res
+        }
+        Ok(Err(e)) => {
+            let cost_ms = start_time.elapsed().as_millis();
+            error!(
+                "[{}] 同步域名 {} ({}) 失败: {} (耗时 {}ms)",
+                job.task_name, full_domain, job.type_str, e, cost_ms
+            );
+            SyncRecordResult::failed(
+                full_domain,
+                job.record_type,
+                job.ip.to_string(),
+                e.to_string(),
+            )
+        }
+        Err(_elapsed) => {
+            let cost_ms = start_time.elapsed().as_millis();
+            error!(
+                "[{}] 同步域名 {} ({}) 超时 (超过 {:?}) (耗时 {}ms)",
+                job.task_name, full_domain, job.type_str, DNS_SYNC_TIMEOUT, cost_ms
+            );
+            SyncRecordResult::failed(
+                full_domain,
+                job.record_type,
+                job.ip.to_string(),
+                format!("DNS 同步请求超时 (超过 {:?})", DNS_SYNC_TIMEOUT),
+            )
+        }
+    }
+}
+
 /// 调度单个网络协议 (IPv4/IPv6) 下所有域名的并发同步任务
 ///
 /// # 设计原理
@@ -136,59 +205,17 @@ pub(crate) fn spawn_protocol_sync_tasks(
                 continue;
             }
 
-            let domain = domain.clone();
-            let provider = params.provider.clone();
-            let task_name = params.task_name.clone();
-            let sem = params.semaphore.clone();
-            let rec_type = params.record_type;
-            let ttl = params.ttl;
-            sync_join_set.spawn(async move {
-                let _permit = sem.acquire().await.ok();
-                let start_time = Instant::now();
-                let full_domain = domain.full_domain();
-                let sync_future =
-                    sync_record_with_retry(&provider, &task_name, &domain, rec_type, &ip, ttl);
-                match timeout(DNS_SYNC_TIMEOUT, sync_future).await {
-                    Ok(Ok(res)) => {
-                        let cost_ms = start_time.elapsed().as_millis();
-                        info!(
-                            "[{}] 同步域名 {} ({}) 完成: {} (耗时 {}ms)",
-                            task_name,
-                            full_domain,
-                            type_str,
-                            res.status.as_str(),
-                            cost_ms
-                        );
-                        res
-                    }
-                    Ok(Err(e)) => {
-                        let cost_ms = start_time.elapsed().as_millis();
-                        error!(
-                            "[{}] 同步域名 {} ({}) 失败: {} (耗时 {}ms)",
-                            task_name, full_domain, type_str, e, cost_ms
-                        );
-                        SyncRecordResult::failed(
-                            full_domain,
-                            rec_type,
-                            ip.to_string(),
-                            e.to_string(),
-                        )
-                    }
-                    Err(_elapsed) => {
-                        let cost_ms = start_time.elapsed().as_millis();
-                        error!(
-                            "[{}] 同步域名 {} ({}) 超时 (超过 {:?}) (耗时 {}ms)",
-                            task_name, full_domain, type_str, DNS_SYNC_TIMEOUT, cost_ms
-                        );
-                        SyncRecordResult::failed(
-                            full_domain,
-                            rec_type,
-                            ip.to_string(),
-                            format!("DNS 同步请求超时 (超过 {:?})", DNS_SYNC_TIMEOUT),
-                        )
-                    }
-                }
-            });
+            let job = DomainSyncJob {
+                provider: params.provider.clone(),
+                task_name: params.task_name.clone(),
+                domain: domain.clone(),
+                record_type: params.record_type,
+                type_str,
+                ip,
+                ttl: params.ttl,
+                semaphore: params.semaphore.clone(),
+            };
+            sync_join_set.spawn(execute_domain_sync_task(job));
         }
     } else {
         for domain in params.domains {
@@ -224,18 +251,17 @@ pub(crate) fn update_runtime_state_after_sync(params: SyncStateUpdateParams<'_>)
     }
 
     // 裁剪已从当前任务配置中移除的废弃域名记录，防止内存持续膨胀 (F-6)
-    let mut valid_keys =
-        std::collections::HashSet::with_capacity(params.v4_count + params.v6_count);
+    let mut valid_keys = HashSet::with_capacity(params.v4_count + params.v6_count);
     if params.task.ipv4.enabled {
         for d in &params.task.ipv4.domains {
-            if let Some(parsed) = crate::core::domain::parse_domain(d) {
+            if let Some(parsed) = parse_domain(d) {
                 valid_keys.insert(format!("{}:A", parsed.full_domain()));
             }
         }
     }
     if params.task.ipv6.enabled {
         for d in &params.task.ipv6.domains {
-            if let Some(parsed) = crate::core::domain::parse_domain(d) {
+            if let Some(parsed) = parse_domain(d) {
                 valid_keys.insert(format!("{}:AAAA", parsed.full_domain()));
             }
         }

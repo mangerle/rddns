@@ -1,5 +1,5 @@
 use crate::config::model::EmailConfig;
-use crate::dns::trait_def::SyncStatus;
+use crate::dns::trait_def::{SyncRecordResult, SyncStatus};
 use crate::notifier::trait_def::{
     NotificationEvent, NotificationOverallStatus, Notifier, NotifyError, escape_html,
 };
@@ -10,27 +10,108 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use log::{info, warn};
 use std::time::Duration;
 
+/// 响应式 HTML 邮件基础布局模板
+const EMAIL_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rddns 解析通知</title>
+</head>
+<body style="margin:0;padding:24px 12px;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+    <tr>
+      <td align="center">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
+          <tr>
+            <td height="4" style="background:linear-gradient(90deg,#6366f1 0%,#06b6d4 100%);"></td>
+          </tr>
+          <tr>
+            <td style="padding:24px 28px 16px 28px;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td>
+                    <span style="font-size:20px;font-weight:800;letter-spacing:-0.5px;color:#4f46e5;">rddns</span>
+                    <span style="font-size:14px;color:#64748b;margin-left:8px;font-weight:500;">动态域名解析系统</span>
+                  </td>
+                  <td align="right">
+                    <span style="font-size:12px;color:#94a3b8;font-family:monospace;">__TIME_STR__</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 20px 28px;">
+              <div style="background:__STATUS_BG__;border:1px solid __STATUS_BORDER__;border-radius:8px;padding:14px 16px;">
+                <span style="font-size:14px;font-weight:700;color:__STATUS_COLOR__;">● 状态: __STATUS_TITLE__</span>
+                <span style="font-size:13px;color:__STATUS_COLOR__;margin-left:12px;">任务名称: <strong>__TASK_NAME__</strong></span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 20px 28px;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
+                    <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv4 地址</div>
+                    <div style="font-size:13px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;">__IPV4_STR__</div>
+                  </td>
+                  <td width="4%"></td>
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
+                    <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv6 地址</div>
+                    <div style="font-size:12px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;letter-spacing:-0.2px;">__IPV6_STR__</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 24px 28px;">
+              <div style="font-size:14px;font-weight:700;color:#1e293b;margin-bottom:10px;">解析明细结果</div>
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:8px;border-collapse:collapse;font-size:13px;text-align:left;">
+                <thead>
+                  <tr style="background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;">
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">域名</th>
+                    <th style="padding:10px 6px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">类型</th>
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">目标 IP</th>
+                    <th style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">状态</th>
+                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">详情</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  __TABLE_ROWS__
+                </tbody>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f8fafc;padding:16px 28px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;text-align:center;">
+              本邮件由 <strong>rddns</strong> (基于 Rust 的高性能 DDNS 引擎) 自动发出 · 请勿直接回复
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"#;
+
+/// SMTP 电子邮件通知器
 pub struct EmailNotifier {
     config: EmailConfig,
 }
 
 impl EmailNotifier {
+    /// 创建电子邮件通知器实例
     pub fn new(config: EmailConfig) -> Self {
         Self { config }
     }
 
-    /// 渲染现代响应式 HTML 邮件模板
-    fn render_html(event: &NotificationEvent) -> String {
-        let (status_color, status_bg, status_border, status_title) = match event.overall_status {
-            NotificationOverallStatus::Success => ("#15803d", "#f0fdf4", "#bbf7d0", "全部同步成功"),
-            NotificationOverallStatus::PartialSuccess => {
-                ("#b45309", "#fffbeb", "#fde68a", "部分同步成功")
-            }
-            NotificationOverallStatus::Failed => ("#b91c1c", "#fef2f2", "#fecaca", "同步出现错误"),
-        };
-
-        let mut table_rows = String::new();
-        for r in &event.results {
+    /// 渲染解析明细表格行 HTML 片段
+    fn render_table_rows(results: &[SyncRecordResult]) -> String {
+        let mut table_rows = String::with_capacity(results.len() * 512);
+        for r in results {
             let (status_badge_bg, status_badge_color, status_text) = match r.status {
                 SyncStatus::Created => ("#dcfce7", "#15803d", "新建"),
                 SyncStatus::Updated => ("#e0e7ff", "#4338ca", "更新"),
@@ -55,6 +136,18 @@ impl EmailNotifier {
                 message = escape_html(&r.message)
             ));
         }
+        table_rows
+    }
+
+    /// 渲染现代响应式 HTML 邮件模板
+    fn render_html(event: &NotificationEvent) -> String {
+        let (status_color, status_bg, status_border, status_title) = match event.overall_status {
+            NotificationOverallStatus::Success => ("#15803d", "#f0fdf4", "#bbf7d0", "全部同步成功"),
+            NotificationOverallStatus::PartialSuccess => {
+                ("#b45309", "#fffbeb", "#fde68a", "部分同步成功")
+            }
+            NotificationOverallStatus::Failed => ("#b91c1c", "#fef2f2", "#fecaca", "同步出现错误"),
+        };
 
         let ipv4_str = event
             .ipv4
@@ -65,114 +158,18 @@ impl EmailNotifier {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "未获取 / 未启用".to_string());
         let time_str = event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+        let table_rows = Self::render_table_rows(&event.results);
 
-        format!(
-            r#"<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>rddns 解析通知</title>
-</head>
-<body style="margin:0;padding:24px 12px;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0">
-    <tr>
-      <td align="center">
-        <table width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
-          <!-- 顶部渐变装饰条 -->
-          <tr>
-            <td height="4" style="background:linear-gradient(90deg,#6366f1 0%,#06b6d4 100%);"></td>
-          </tr>
-
-          <!-- 品牌与标题区 -->
-          <tr>
-            <td style="padding:24px 28px 16px 28px;">
-              <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td>
-                    <span style="font-size:20px;font-weight:800;letter-spacing:-0.5px;color:#4f46e5;">rddns</span>
-                    <span style="font-size:14px;color:#64748b;margin-left:8px;font-weight:500;">动态域名解析系统</span>
-                  </td>
-                  <td align="right">
-                    <span style="font-size:12px;color:#94a3b8;font-family:monospace;">{time_str}</span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- 状态通知卡片 -->
-          <tr>
-            <td style="padding:0 28px 20px 28px;">
-              <div style="background:{status_bg};border:1px solid {status_border};border-radius:8px;padding:14px 16px;">
-                <span style="font-size:14px;font-weight:700;color:{status_color};">● 状态: {status_title}</span>
-                <span style="font-size:13px;color:{status_color};margin-left:12px;">任务名称: <strong>{task_name}</strong></span>
-              </div>
-            </td>
-          </tr>
-
-          <!-- IP 地址概览卡片 -->
-          <tr>
-            <td style="padding:0 28px 20px 28px;">
-              <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
-                    <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv4 地址</div>
-                    <div style="font-size:13px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;">{ipv4_str}</div>
-                  </td>
-                  <td width="4%"></td>
-                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;" valign="top">
-                    <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:4px;">IPv6 地址</div>
-                    <div style="font-size:12px;font-family:monospace;font-weight:700;color:#1e293b;white-space:nowrap;letter-spacing:-0.2px;">{ipv6_str}</div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- 域名解析明细表 -->
-          <tr>
-            <td style="padding:0 28px 24px 28px;">
-              <div style="font-size:14px;font-weight:700;color:#1e293b;margin-bottom:10px;">解析明细结果</div>
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:8px;border-collapse:collapse;font-size:13px;text-align:left;">
-                <thead>
-                  <tr style="background:#f8fafc;color:#64748b;font-size:12px;font-weight:600;">
-                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">域名</th>
-                    <th style="padding:10px 6px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">类型</th>
-                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">目标 IP</th>
-                    <th style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;white-space:nowrap;">状态</th>
-                    <th style="padding:10px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;">详情</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {table_rows}
-                </tbody>
-              </table>
-            </td>
-          </tr>
-
-          <!-- 底部版权与说明 -->
-          <tr>
-            <td style="background:#f8fafc;padding:16px 28px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;text-align:center;">
-              本邮件由 <strong>rddns</strong> (基于 Rust 的高性能 DDNS 引擎) 自动发出 · 请勿直接回复
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"#,
-            status_bg = status_bg,
-            status_border = status_border,
-            status_color = status_color,
-            status_title = status_title,
-            task_name = escape_html(&event.task_name),
-            time_str = time_str,
-            ipv4_str = ipv4_str,
-            ipv6_str = ipv6_str,
-            table_rows = table_rows
-        )
+        EMAIL_HTML_TEMPLATE
+            .replace("__STATUS_BG__", status_bg)
+            .replace("__STATUS_BORDER__", status_border)
+            .replace("__STATUS_COLOR__", status_color)
+            .replace("__STATUS_TITLE__", status_title)
+            .replace("__TASK_NAME__", &escape_html(&event.task_name))
+            .replace("__TIME_STR__", &time_str)
+            .replace("__IPV4_STR__", &ipv4_str)
+            .replace("__IPV6_STR__", &ipv6_str)
+            .replace("__TABLE_ROWS__", &table_rows)
     }
 }
 

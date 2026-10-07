@@ -1,5 +1,5 @@
 use crate::config::model::FeishuConfig;
-use crate::dns::trait_def::SyncStatus;
+use crate::dns::trait_def::{SyncRecordResult, SyncStatus};
 use crate::notifier::trait_def::{
     NotificationEvent, NotificationOverallStatus, Notifier, NotifyError,
 };
@@ -12,6 +12,7 @@ use log::info;
 use reqwest::Client;
 use serde_json::{Value, json};
 
+/// 飞书自定义机器人通知器
 pub struct FeishuNotifier {
     config: FeishuConfig,
     client: Client,
@@ -36,9 +37,43 @@ pub fn escape_lark_md(input: &str) -> String {
 }
 
 impl FeishuNotifier {
+    /// 创建飞书机器人通知器实例
     pub fn new(config: FeishuConfig) -> Self {
         let client = crate::util::http::create_notifier_client();
         Self { config, client }
+    }
+
+    /// 构建飞书卡片表格列定义
+    fn build_table_columns() -> Value {
+        json!([
+            { "name": "domain", "display_name": "域名", "data_type": "text", "width": "auto" },
+            { "name": "record_type", "display_name": "类型", "data_type": "text", "width": "auto" },
+            { "name": "target_ip", "display_name": "目标 IP", "data_type": "text", "width": "auto" },
+            { "name": "status", "display_name": "状态", "data_type": "lark_md", "width": "auto" },
+            { "name": "message", "display_name": "详情", "data_type": "text", "width": "auto" }
+        ])
+    }
+
+    /// 构建飞书卡片表格行数据
+    fn build_table_rows(results: &[SyncRecordResult]) -> Vec<Value> {
+        let mut table_rows = Vec::with_capacity(results.len());
+        for r in results {
+            let (status_color, status_text) = match r.status {
+                SyncStatus::Created => ("green", "新建"),
+                SyncStatus::Updated => ("blue", "更新"),
+                SyncStatus::Unchanged => ("grey", "保持"),
+                SyncStatus::Failed => ("red", "失败"),
+            };
+
+            table_rows.push(json!({
+                "domain": r.domain,
+                "record_type": r.record_type.to_string(),
+                "target_ip": r.target_ip,
+                "status": format!("<font color='{}'>{}</font>", status_color, status_text),
+                "message": r.message,
+            }));
+        }
+        table_rows
     }
 
     /// 构建飞书交互式卡片（Schema 2.0）消息载荷，使用原生 Table 表格完美对齐邮件样式
@@ -58,127 +93,48 @@ impl FeishuNotifier {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "未获取 / 未启用".to_string());
         let time_str = event.time_str();
-
-        let mut table_rows = Vec::new();
-        for r in &event.results {
-            let (status_color, status_text) = match r.status {
-                SyncStatus::Created => ("green", "新建"),
-                SyncStatus::Updated => ("blue", "更新"),
-                SyncStatus::Unchanged => ("grey", "保持"),
-                SyncStatus::Failed => ("red", "失败"),
-            };
-
-            table_rows.push(json!({
-                "domain": r.domain,
-                "record_type": r.record_type.to_string(),
-                "target_ip": r.target_ip,
-                "status": format!("<font color='{}'>{}</font>", status_color, status_text),
-                "message": r.message,
-            }));
-        }
-
+        let table_rows = Self::build_table_rows(&event.results);
         let page_size = event.results.len().max(5);
+        let task_md = format!("**任务名称**\n{}", escape_lark_md(&event.task_name));
+        let status_md = format!(
+            "**同步状态**\n<font color='{}'>{}</font>",
+            status_color, status_title
+        );
+        let overview_md = format!(
+            "**IPv4 地址**：{}\n**IPv6 地址**：{}\n**触发时间**：{}",
+            ipv4_str, ipv6_str, time_str
+        );
 
         json!({
             "msg_type": "interactive",
             "card": {
                 "schema": "2.0",
-                "config": {
-                    "wide_screen_mode": true
-                },
+                "config": { "wide_screen_mode": true },
                 "header": {
                     "template": header_template,
-                    "title": {
-                        "tag": "plain_text",
-                        "content": "rddns 动态域名解析通知"
-                    }
+                    "title": { "tag": "plain_text", "content": "rddns 动态域名解析通知" }
                 },
                 "body": {
                     "elements": [
                         {
                             "tag": "div",
                             "fields": [
-                                {
-                                    "is_short": true,
-                                    "text": {
-                                        "tag": "lark_md",
-                                        "content": format!("**任务名称**\n{}", escape_lark_md(&event.task_name))
-                                    }
-                                },
-                                {
-                                    "is_short": true,
-                                    "text": {
-                                        "tag": "lark_md",
-                                        "content": format!("**同步状态**\n<font color='{}'>{}</font>", status_color, status_title)
-                                    }
-                                }
+                                { "is_short": true, "text": { "tag": "lark_md", "content": task_md } },
+                                { "is_short": true, "text": { "tag": "lark_md", "content": status_md } }
                             ]
                         },
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "lark_md",
-                                "content": format!(
-                                    "**IPv4 地址**：{}\n**IPv6 地址**：{}\n**触发时间**：{}",
-                                    ipv4_str, ipv6_str, time_str
-                                )
-                            }
-                        },
-                        {
-                            "tag": "hr"
-                        },
-                        {
-                            "tag": "div",
-                            "text": {
-                                "tag": "lark_md",
-                                "content": "**解析明细结果**"
-                            }
-                        },
+                        { "tag": "div", "text": { "tag": "lark_md", "content": overview_md } },
+                        { "tag": "hr" },
+                        { "tag": "div", "text": { "tag": "lark_md", "content": "**解析明细结果**" } },
                         {
                             "tag": "table",
                             "page_size": page_size,
                             "row_height": "low",
-                            "header_style": {
-                                "bold": true,
-                                "text_align": "left"
-                            },
-                            "columns": [
-                                {
-                                    "name": "domain",
-                                    "display_name": "域名",
-                                    "data_type": "text",
-                                    "width": "auto"
-                                },
-                                {
-                                    "name": "record_type",
-                                    "display_name": "类型",
-                                    "data_type": "text",
-                                    "width": "auto"
-                                },
-                                {
-                                    "name": "target_ip",
-                                    "display_name": "目标 IP",
-                                    "data_type": "text",
-                                    "width": "auto"
-                                },
-                                {
-                                    "name": "status",
-                                    "display_name": "状态",
-                                    "data_type": "lark_md",
-                                    "width": "auto"
-                                },
-                                {
-                                    "name": "message",
-                                    "display_name": "详情",
-                                    "data_type": "text",
-                                    "width": "auto"
-                                }
-                            ],
+                            "header_style": { "bold": true, "text_align": "left" },
+                            "columns": Self::build_table_columns(),
                             "rows": table_rows
                         },
-                        {
-                            "tag": "hr"
-                        },
+                        { "tag": "hr" },
                         {
                             "tag": "div",
                             "text": {

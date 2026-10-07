@@ -113,6 +113,79 @@ fn parse_error_code(val_bytes: &[u8]) -> Option<(u16, String)> {
 /// - 收到 STUN Binding Error Response 或非期望的消息类型
 /// - Magic Cookie 或 Transaction ID 校验失败
 /// - 报文中不存在有效的反射地址属性
+/// 解析 STUN Binding Error Response (0x0111) 中的 ERROR-CODE 属性并返回对应错误
+fn parse_binding_error_response(buf: &[u8], end_offset: usize) -> FetchError {
+    let mut offset = 20;
+    while offset + 4 <= end_offset {
+        let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
+        let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
+        let val_start = offset + 4;
+        let val_end = val_start + attr_len;
+
+        if val_end > end_offset {
+            break;
+        }
+
+        if attr_type == ATTR_ERROR_CODE {
+            let (code, reason) = parse_error_code(&buf[val_start..val_end])
+                .unwrap_or((0, "未提供错误详情".to_string()));
+            return FetchError::Other(format!(
+                "STUN 服务器返回 Binding 错误响应: {} ({})",
+                code, reason
+            ));
+        }
+
+        let padding = (4 - (attr_len % 4)) % 4;
+        offset = val_end + padding;
+    }
+
+    FetchError::Other("STUN 服务器返回 Binding 错误响应，但未包含详细错误代码".to_string())
+}
+
+/// 遍历 STUN 响应属性区段，提取反射地址（优先 XOR-MAPPED-ADDRESS，回退 MAPPED-ADDRESS）
+fn extract_mapped_ip_from_attrs(
+    buf: &[u8],
+    end_offset: usize,
+    expected_tx_id: &[u8; 12],
+) -> Result<IpAddr, FetchError> {
+    let mut offset = 20;
+    let mut mapped_ip: Option<IpAddr> = None;
+    let mut xor_mapped_ip: Option<IpAddr> = None;
+
+    while offset + 4 <= end_offset {
+        let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
+        let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
+        let val_start = offset + 4;
+        let val_end = val_start + attr_len;
+
+        if val_end > end_offset {
+            break;
+        }
+
+        let val_bytes = &buf[val_start..val_end];
+        if attr_type == ATTR_XOR_MAPPED_ADDRESS || attr_type == ATTR_XOR_MAPPED_ADDRESS_ALT {
+            xor_mapped_ip = parse_xor_mapped_address(val_bytes, expected_tx_id).or(xor_mapped_ip);
+        } else if attr_type == ATTR_MAPPED_ADDRESS {
+            mapped_ip = parse_mapped_address(val_bytes).or(mapped_ip);
+        } else if attr_type == ATTR_MESSAGE_INTEGRITY || attr_type == ATTR_MESSAGE_INTEGRITY_SHA256
+        {
+            trace!(
+                "检测到 STUN 报文包含 MESSAGE-INTEGRITY 属性 (类型: 0x{:04x}, 长度: {} 字节)",
+                attr_type, attr_len
+            );
+        } else if attr_type == ATTR_FINGERPRINT {
+            trace!("检测到 STUN 报文包含 FINGERPRINT 校验属性");
+        }
+
+        let padding = (4 - (attr_len % 4)) % 4;
+        offset = val_end + padding;
+    }
+
+    xor_mapped_ip.or(mapped_ip).ok_or_else(|| {
+        FetchError::Other("STUN 响应中未找到有效的 (XOR-)MAPPED-ADDRESS 属性".to_string())
+    })
+}
+
 pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<IpAddr, FetchError> {
     if buf.len() < 20 {
         return Err(FetchError::Other(format!(
@@ -148,35 +221,8 @@ pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<I
     let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
     let end_offset = 20 + msg_len.min(buf.len() - 20);
 
-    // 针对 STUN 错误响应 (0x0111) 进行专门的 ERROR-CODE 属性提取
     if msg_type == STUN_BINDING_ERROR_RESPONSE {
-        let mut offset = 20;
-        while offset + 4 <= end_offset {
-            let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-            let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
-            let val_start = offset + 4;
-            let val_end = val_start + attr_len;
-
-            if val_end > end_offset {
-                break;
-            }
-
-            if attr_type == ATTR_ERROR_CODE {
-                let (code, reason) = parse_error_code(&buf[val_start..val_end])
-                    .unwrap_or((0, "未提供错误详情".to_string()));
-                return Err(FetchError::Other(format!(
-                    "STUN 服务器返回 Binding 错误响应: {} ({})",
-                    code, reason
-                )));
-            }
-
-            let padding = (4 - (attr_len % 4)) % 4;
-            offset = val_end + padding;
-        }
-
-        return Err(FetchError::Other(
-            "STUN 服务器返回 Binding 错误响应，但未包含详细错误代码".to_string(),
-        ));
+        return Err(parse_binding_error_response(buf, end_offset));
     }
 
     if msg_type != STUN_BINDING_RESPONSE {
@@ -186,44 +232,7 @@ pub fn parse_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Result<I
         )));
     }
 
-    let mut offset = 20;
-    let mut mapped_ip: Option<IpAddr> = None;
-    let mut xor_mapped_ip: Option<IpAddr> = None;
-
-    while offset + 4 <= end_offset {
-        let attr_type = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let attr_len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
-        let val_start = offset + 4;
-        let val_end = val_start + attr_len;
-
-        if val_end > end_offset {
-            break;
-        }
-
-        let val_bytes = &buf[val_start..val_end];
-        if attr_type == ATTR_XOR_MAPPED_ADDRESS || attr_type == ATTR_XOR_MAPPED_ADDRESS_ALT {
-            xor_mapped_ip = parse_xor_mapped_address(val_bytes, expected_tx_id).or(xor_mapped_ip);
-        } else if attr_type == ATTR_MAPPED_ADDRESS {
-            mapped_ip = parse_mapped_address(val_bytes).or(mapped_ip);
-        } else if attr_type == ATTR_MESSAGE_INTEGRITY || attr_type == ATTR_MESSAGE_INTEGRITY_SHA256
-        {
-            // RFC 5389 / RFC 8489: 识别 MESSAGE-INTEGRITY 属性并安全步进
-            trace!(
-                "检测到 STUN 报文包含 MESSAGE-INTEGRITY 属性 (类型: 0x{:04x}, 长度: {} 字节)",
-                attr_type, attr_len
-            );
-        } else if attr_type == ATTR_FINGERPRINT {
-            // RFC 5389: 识别 FINGERPRINT 校验属性并安全步进
-            trace!("检测到 STUN 报文包含 FINGERPRINT 校验属性");
-        }
-
-        let padding = (4 - (attr_len % 4)) % 4;
-        offset = val_end + padding;
-    }
-
-    xor_mapped_ip.or(mapped_ip).ok_or_else(|| {
-        FetchError::Other("STUN 响应中未找到有效的 (XOR-)MAPPED-ADDRESS 属性".to_string())
-    })
+    extract_mapped_ip_from_attrs(buf, end_offset, expected_tx_id)
 }
 
 #[cfg(test)]

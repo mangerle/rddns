@@ -201,6 +201,51 @@ impl WechatOfficialNotifier {
             .await
             .map_err(|e| crate::util::text::sanitize_sensitive_params(&e.to_string()))
     }
+    /// 向单个 OpenID 发送模板消息，并在首次遇到 Token 失效错误码时自动驱逐缓存重试
+    async fn deliver_to_user_with_refresh(
+        &self,
+        user_openid: &str,
+        data_payload: &serde_json::Value,
+        token: &mut String,
+        token_refreshed: &mut bool,
+    ) -> Result<(), String> {
+        let mut payload = json!({
+            "touser": user_openid,
+            "template_id": self.config.template_id.trim(),
+            "data": data_payload
+        });
+
+        if let Some(ref jump_url) = self.config.url
+            && !jump_url.trim().is_empty()
+        {
+            payload["url"] = json!(jump_url.trim());
+        }
+
+        let mut send_res = self.send_to_single_user(token, &payload).await;
+        if let Ok(ref res) = send_res
+            && Self::is_token_invalid_errcode(res.errcode)
+            && !*token_refreshed
+        {
+            *token_refreshed = true;
+            WECHAT_TOKEN_CACHE.invalidate(&self.token_cache_key());
+            if let Ok(new_token) = self.fetch_access_token().await {
+                *token = new_token;
+                send_res = self.send_to_single_user(token, &payload).await;
+            }
+        }
+
+        match send_res {
+            Ok(res) if res.errcode == 0 => Ok(()),
+            Ok(res) => Err(format!(
+                "向用户 {} 推送失败 [{}]: {}",
+                user_openid, res.errcode, res.errmsg
+            )),
+            Err(safe_text) => Err(format!(
+                "向用户 {} 发送或解析响应失败: {}",
+                user_openid, safe_text
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -228,67 +273,29 @@ impl Notifier for WechatOfficialNotifier {
             ));
         }
 
-        let mut success_count = 0;
-        let mut last_error = None;
+        let mut success_count = 0usize;
+        let mut failed_errors = Vec::with_capacity(users.len());
         let mut token_refreshed = false;
 
         for user_openid in users {
-            let mut payload = json!({
-                "touser": user_openid,
-                "template_id": self.config.template_id.trim(),
-                "data": data_payload
-            });
-
-            if let Some(ref jump_url) = self.config.url
-                && !jump_url.trim().is_empty()
+            match self
+                .deliver_to_user_with_refresh(
+                    user_openid,
+                    &data_payload,
+                    &mut token,
+                    &mut token_refreshed,
+                )
+                .await
             {
-                payload["url"] = json!(jump_url.trim());
-            }
-
-            let mut send_res = self.send_to_single_user(&token, &payload).await;
-            if let Ok(ref res) = send_res
-                && Self::is_token_invalid_errcode(res.errcode)
-                && !token_refreshed
-            {
-                token_refreshed = true;
-                WECHAT_TOKEN_CACHE.invalidate(&self.token_cache_key());
-                if let Ok(new_token) = self.fetch_access_token().await {
-                    token = new_token;
-                    send_res = self.send_to_single_user(&token, &payload).await;
-                }
-            }
-
-            match send_res {
-                Ok(send_result) => {
-                    if send_result.errcode == 0 {
-                        success_count += 1;
-                    } else {
-                        warn!(
-                            "[{}] 向用户 {} 推送模板消息失败 [{}]: {}",
-                            self.channel_name(),
-                            user_openid,
-                            send_result.errcode,
-                            send_result.errmsg
-                        );
-                        last_error = Some(format!(
-                            "微信推送失败 [{}]: {}",
-                            send_result.errcode, send_result.errmsg
-                        ));
-                    }
-                }
-                Err(safe_text) => {
-                    warn!(
-                        "[{}] 向用户 {} 发送或解析模板消息失败: {}",
-                        self.channel_name(),
-                        user_openid,
-                        safe_text
-                    );
-                    last_error = Some(safe_text);
-                }
+                Ok(()) => success_count += 1,
+                Err(err_msg) => failed_errors.push(err_msg),
             }
         }
 
         if success_count > 0 {
+            for err_msg in &failed_errors {
+                warn!("[{}] 部分接收者推送失败: {}", self.channel_name(), err_msg);
+            }
             info!(
                 "[{}] 模板消息推送完成 (成功: {} 位用户)",
                 self.channel_name(),
@@ -297,7 +304,9 @@ impl Notifier for WechatOfficialNotifier {
             Ok(())
         } else {
             Err(NotifyError::Provider(
-                last_error.unwrap_or_else(|| "全部接收者推送均失败".to_string()),
+                failed_errors
+                    .pop()
+                    .unwrap_or_else(|| "全部接收者推送均失败".to_string()),
             ))
         }
     }

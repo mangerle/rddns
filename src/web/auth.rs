@@ -182,22 +182,103 @@ pub(crate) fn clear_sse_tickets_for_test() {
     SSE_TICKETS.write().tickets.clear();
 }
 
+/// 从请求头同步提取 Basic Auth 的 `(用户名, 密码, 限流键)`，避免跨 `.await` 借用非 `Sync` 的 `Request<Body>`
+fn extract_basic_auth_context(req: &Request) -> Option<(String, String, String)> {
+    let auth_header = req.headers().get(AUTHORIZATION)?;
+    let auth_str = auth_header.to_str().ok()?;
+    let encoded = auth_str.strip_prefix("Basic ")?;
+    let decoded_bytes = BASE64_STANDARD.decode(encoded.trim()).ok()?;
+    let decoded_str = String::from_utf8(decoded_bytes).ok()?;
+    let (user, pass) = decoded_str.split_once(':')?;
+
+    let peer_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+    let client_ip = resolve_client_ip(peer_addr, req.headers());
+    let limiter_key = format!("{}:{}", user, client_ip);
+    Some((user.to_string(), pass.to_string(), limiter_key))
+}
+
+/// 校验提取出的 Basic Auth 凭据（含限流锁定检查、快速凭据缓存与常量时间哈希比对）
+///
+/// 返回 `Ok(true)` 表示认证通过，`Ok(false)` 表示凭据无效，`Err(Response)` 表示触发防暴破锁定拦截。
+async fn verify_basic_credentials(
+    user: &str,
+    pass: &str,
+    limiter_key: &str,
+    auth_conf: &crate::config::model::UserAuthConfig,
+) -> Result<bool, Response> {
+    // 校验账号是否已锁定，防止持续暴破 (S-3, S-8)
+    if let Err(locked_err) = crate::web::handlers::auth::check_login_locked(limiter_key) {
+        let resp = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(axum::body::Body::from(format!(
+                r#"{{"success":false,"message":"{}"}}"#,
+                locked_err
+            )))
+            .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
+        return Err(resp);
+    }
+
+    // 优先检查快速凭据缓存，避免每轮受保护请求触发昂贵的 bcrypt 哈希验证 (P-1)
+    let pass_sha = crate::util::crypto::sha256_bytes(pass.as_bytes());
+    let cache_key = CredentialCacheKey {
+        username: user.to_string(),
+        password_hash: auth_conf.password_hash.clone(),
+        password_sha256: pass_sha,
+    };
+
+    let now = Instant::now();
+    let mut is_valid = {
+        let cache = CREDENTIAL_CACHE.read();
+        cache
+            .entries
+            .get(&cache_key)
+            .is_some_and(|created_at| now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL)
+    };
+
+    if !is_valid {
+        // 常量时间校验凭据，防止利用用户名快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
+        is_valid = crate::util::crypto::verify_credentials_constant_time(
+            user,
+            pass,
+            &auth_conf.username,
+            &auth_conf.password_hash,
+        )
+        .await;
+
+        if is_valid {
+            let mut cache = CREDENTIAL_CACHE.write();
+            if cache.entries.len() >= MAX_CREDENTIAL_CACHE_ENTRIES {
+                cache
+                    .entries
+                    .retain(|_, created_at| now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL);
+            }
+            if cache.entries.len() < MAX_CREDENTIAL_CACHE_ENTRIES {
+                cache.entries.insert(cache_key, now);
+            }
+        }
+    }
+
+    crate::web::handlers::auth::record_login_failure(limiter_key, is_valid);
+    Ok(is_valid)
+}
+
 /// Basic Auth 鉴权中间件
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = state.config_manager.get_config();
 
     // 如果未配置用户认证凭据：所有受保护接口直接拦截，强制要求先初始化管理员账号
-    let auth_conf = match config.auth.as_ref() {
-        Some(conf) => conf,
-        None => {
-            return Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .body(axum::body::Body::from(
-                    r#"{"success":false,"message":"系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
-                ))
-                .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
-        }
+    let Some(auth_conf) = config.auth.as_ref() else {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(axum::body::Body::from(
+                r#"{"success":false,"message":"系统尚未配置管理员账号，请先访问管理页面进行初始化！"}"#,
+            ))
+            .unwrap_or_else(|_| StatusCode::FORBIDDEN.into_response());
     };
 
     // 1. 针对 SSE 流式日志接口 (/logs/sse)，优先检查 URL Query 中的一次性 Ticket
@@ -211,90 +292,16 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         }
     }
 
-    // 2. 尝试从 Authorization Header 提取
-    let mut auth_raw = None;
-    if let Some(auth_header) = req.headers().get(AUTHORIZATION)
-        && let Ok(auth_str) = auth_header.to_str()
-        && auth_str.starts_with("Basic ")
-    {
-        auth_raw = Some(auth_str.trim_start_matches("Basic ").to_string());
-    }
-
-    // 3. 校验提取到的 Base64 编码凭据
-    if let Some(encoded) = auth_raw
-        && let Ok(decoded_bytes) = BASE64_STANDARD.decode(encoded.trim())
-        && let Ok(decoded_str) = String::from_utf8(decoded_bytes)
-        && let Some((user, pass)) = decoded_str.split_once(':')
-    {
-        let peer_addr = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0);
-        let client_ip = resolve_client_ip(peer_addr, req.headers());
-        let limiter_key = format!("{}:{}", user, client_ip);
-
-        // 校验账号是否已锁定，防止持续暴破 (S-3, S-8)
-        if let Err(locked_err) = crate::web::handlers::auth::check_login_locked(&limiter_key) {
-            return Response::builder()
-                .status(StatusCode::TOO_MANY_REQUESTS)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .body(axum::body::Body::from(format!(
-                    r#"{{"success":false,"message":"{}"}}"#,
-                    locked_err
-                )))
-                .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
-        }
-
-        // 优先检查快速凭据缓存，避免每轮受保护请求触发昂贵的 bcrypt 哈希验证 (P-1)
-        let pass_sha = crate::util::crypto::sha256_bytes(pass.as_bytes());
-        let cache_key = CredentialCacheKey {
-            username: user.to_string(),
-            password_hash: auth_conf.password_hash.clone(),
-            password_sha256: pass_sha,
-        };
-
-        let now = Instant::now();
-        let mut is_valid = {
-            let cache = CREDENTIAL_CACHE.read();
-            cache
-                .entries
-                .get(&cache_key)
-                .is_some_and(|created_at| now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL)
-        };
-
-        if !is_valid {
-            // 常量时间校验凭据，防止利用用户名快速短路的时序侧信道攻击枚举系统用户名 (P1-8)
-            is_valid = crate::util::crypto::verify_credentials_constant_time(
-                user,
-                pass,
-                &auth_conf.username,
-                &auth_conf.password_hash,
-            )
-            .await;
-
-            if is_valid {
-                // 校验成功：安全写入快速凭据缓存
-                let mut cache = CREDENTIAL_CACHE.write();
-                if cache.entries.len() >= MAX_CREDENTIAL_CACHE_ENTRIES {
-                    cache.entries.retain(|_, created_at| {
-                        now.duration_since(*created_at) < CREDENTIAL_CACHE_TTL
-                    });
-                }
-                if cache.entries.len() < MAX_CREDENTIAL_CACHE_ENTRIES {
-                    cache.entries.insert(cache_key, now);
-                }
-            }
-        }
-
-        // 记录失败或成功状态
-        crate::web::handlers::auth::record_login_failure(&limiter_key, is_valid);
-
-        if is_valid {
-            return next.run(req).await;
+    // 2. 校验 Authorization Header 中的 Basic Auth 凭据
+    if let Some((user, pass, limiter_key)) = extract_basic_auth_context(&req) {
+        match verify_basic_credentials(&user, &pass, &limiter_key, auth_conf).await {
+            Ok(true) => return next.run(req).await,
+            Ok(false) => {}
+            Err(locked_resp) => return locked_resp,
         }
     }
 
-    // 4. 鉴权失败：返回 401 JSON 响应（绝不附带 WWW-Authenticate 头，避免浏览器拦截弹出原生丑陋登录框）
+    // 3. 鉴权失败：返回 401 JSON 响应（绝不附带 WWW-Authenticate 头，避免浏览器拦截弹出原生丑陋登录框）
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header("Content-Type", "application/json")
