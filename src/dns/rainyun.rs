@@ -110,6 +110,7 @@ impl RainYunProvider {
         // 自动查询域名列表 (支持最多 10 页分页检索)
         let mut page_no = 1u32;
         const MAX_PAGES: u32 = 10;
+        let mut reached_end = false;
         for _ in 0..MAX_PAGES {
             let url = format!(
                 "{}/product/domain/?limit=100&page_no={}",
@@ -158,12 +159,24 @@ impl RainYunProvider {
                 }
 
                 if page_len < 100 {
+                    reached_end = true;
                     break;
                 }
                 page_no = page_no.saturating_add(1);
             } else {
+                reached_end = true;
                 break;
             }
+        }
+
+        if !reached_end {
+            return Err(DnsProviderError::api(
+                "PaginationLimitExceeded",
+                format!(
+                    "雨云域名列表超过分页查询上限 ({} 页)，未能确认根域名 {} 是否存在",
+                    MAX_PAGES, root_domain
+                ),
+            ));
         }
 
         Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
@@ -190,6 +203,7 @@ impl RecordOps for RainYunProvider {
         let mut remotes = Vec::new();
         let mut page_no = 1u32;
         const MAX_PAGES: u32 = 10;
+        let mut reached_end = false;
 
         for _ in 0..MAX_PAGES {
             let list_url = format!(
@@ -204,7 +218,12 @@ impl RecordOps for RainYunProvider {
                 .send()
                 .await?;
 
+            let status = list_resp.status();
             let body_text = list_resp.text().await?;
+            if !status.is_success() {
+                return Err(DnsProviderError::http_status(status, &body_text));
+            }
+
             let res: RainyunResp = serde_json::from_str(&body_text)?;
 
             if res.code != 200 {
@@ -232,9 +251,20 @@ impl RecordOps for RainYunProvider {
             }
 
             if page_len < 100 {
+                reached_end = true;
                 break;
             }
             page_no = page_no.saturating_add(1);
+        }
+
+        if !reached_end {
+            return Err(DnsProviderError::api(
+                "PaginationLimitExceeded",
+                format!(
+                    "雨云 DNS 记录列表超过分页查询上限 ({} 页)，已中止同步以防重复创建记录",
+                    MAX_PAGES
+                ),
+            ));
         }
 
         Ok(remotes)

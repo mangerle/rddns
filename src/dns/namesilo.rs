@@ -91,7 +91,11 @@ impl RecordOps for NameSiloProvider {
             ])
             .send()
             .await?;
+        let status = list_resp.status();
         let list_xml = list_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &list_xml));
+        }
 
         if !Self::is_success_code(&list_xml) {
             let detail = Self::extract_xml_tag(&list_xml, "detail")
@@ -147,7 +151,11 @@ impl RecordOps for NameSiloProvider {
             ])
             .send()
             .await?;
+        let status = add_resp.status();
         let add_xml = add_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &add_xml));
+        }
 
         if Self::is_success_code(&add_xml) {
             Ok(())
@@ -188,7 +196,11 @@ impl RecordOps for NameSiloProvider {
             ])
             .send()
             .await?;
+        let status = update_resp.status();
         let update_xml = update_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &update_xml));
+        }
 
         if Self::is_success_code(&update_xml) {
             Ok(())

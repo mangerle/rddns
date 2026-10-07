@@ -262,10 +262,11 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
             matched.id,
             target_ip
         );
-        // 若存在多条记录且仅当前条匹配目标 IP，对其余旧记录尝试调用 delete_record 清理
+        // 若存在多条记录且仅当前条匹配目标 IP，对其余具备独立 ID 的旧记录尝试调用 delete_record 清理
         if records.len() > 1 {
             for (i, rec) in records.iter().enumerate() {
                 if i != idx
+                    && rec.has_id()
                     && let Err(e) = ops.delete_record(&zone, rec, &params).await
                 {
                     log::warn!(
@@ -287,13 +288,15 @@ pub async fn sync_record_via<O: RecordOps + ?Sized>(
         ));
     }
 
-    // 所有现有记录均未匹配目标 IP：更新首条记录，并对其余多余旧记录尝试清理
+    // 所有现有记录均未匹配目标 IP：更新首条记录，并对其余具备独立 ID 的多余旧记录尝试清理
     let primary = &records[0];
     ops.update_record(&zone, &primary.id, &params).await?;
 
     if records.len() > 1 {
         for rec in &records[1..] {
-            if let Err(e) = ops.delete_record(&zone, rec, &params).await {
+            if rec.has_id()
+                && let Err(e) = ops.delete_record(&zone, rec, &params).await
+            {
                 log::warn!(
                     "[{}] 清理域名 {} 冗余旧解析记录 (ID: {}, 值: {}) 失败: {}",
                     ops.provider_name(),

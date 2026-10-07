@@ -71,10 +71,7 @@ impl RecordOps for ClouDnsProvider {
         let list_text = list_resp.text().await?;
 
         if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("ClouDNS 查询记录失败: {}", list_text),
-            });
+            return Err(DnsProviderError::http_status(status, &list_text));
         }
 
         if let Ok(action_resp) = serde_json::from_str::<ClouDnsActionResp>(&list_text)
@@ -128,7 +125,12 @@ impl RecordOps for ClouDnsProvider {
         ];
 
         let add_resp = self.client.post(&add_url).form(&add_form).send().await?;
+        let status = add_resp.status();
         let add_text = add_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &add_text));
+        }
+
         let res: ClouDnsActionResp = serde_json::from_str(&add_text).unwrap_or(ClouDnsActionResp {
             status: None,
             status_description: None,
@@ -172,7 +174,12 @@ impl RecordOps for ClouDnsProvider {
             .form(&modify_form)
             .send()
             .await?;
+        let status = modify_resp.status();
         let modify_text = modify_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &modify_text));
+        }
+
         let res: ClouDnsActionResp =
             serde_json::from_str(&modify_text).unwrap_or(ClouDnsActionResp {
                 status: None,
@@ -209,7 +216,12 @@ impl RecordOps for ClouDnsProvider {
             .form(&delete_form)
             .send()
             .await?;
+        let status = resp.status();
         let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &text));
+        }
+
         let res: ClouDnsActionResp = serde_json::from_str(&text).unwrap_or(ClouDnsActionResp {
             status: None,
             status_description: None,

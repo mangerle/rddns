@@ -16,13 +16,14 @@ const HIPM_DOMAIN_CACHE_TTL: Duration = Duration::from_secs(7200);
 /// HiPM Domain ID 缓存容量硬上限
 const HIPM_DOMAIN_CACHE_CAPACITY: usize = 128;
 
-/// HiPM Domain ID 缓存键（端点 + 根域名）
+/// HiPM Domain ID 缓存键（端点 + Token 摘要 + 根域名）
 ///
 /// # 设计原理
-/// 以端点参与键构造，确保多套 HiPM 实例（不同面板）的缓存互不污染。
+/// 以端点与 API Token 的 SHA-256 摘要参与键构造，确保多套 HiPM 实例或同一面板不同账号的缓存互不污染。
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 struct HipmDomainCacheKey {
     endpoint: String,
+    token_hash: String,
     root_domain: String,
 }
 
@@ -42,6 +43,7 @@ pub struct HipmDnsMgrProvider {
     /// 逐请求携带的鉴权头（含敏感凭据，禁止写入日志）
     headers: HeaderMap,
     endpoint: String,
+    token_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +75,8 @@ impl HipmDnsMgrProvider {
         api_token: String,
         http_interface: Option<&str>,
     ) -> Result<Self, DnsProviderError> {
-        if api_token.trim().is_empty() {
+        let trimmed_token = api_token.trim();
+        if trimmed_token.is_empty() {
             return Err(DnsProviderError::MissingCredentials(
                 "HiPM DNSMgr 需要配置 API Token (Secret)".to_string(),
             ));
@@ -102,11 +105,13 @@ impl HipmDnsMgrProvider {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         let mut auth_val =
-            HeaderValue::from_str(&format!("Bearer {}", api_token.trim())).map_err(|e| {
+            HeaderValue::from_str(&format!("Bearer {}", trimmed_token)).map_err(|e| {
                 DnsProviderError::MissingCredentials(format!("无效的 API Token: {}", e))
             })?;
         auth_val.set_sensitive(true);
         headers.insert(AUTHORIZATION, auth_val);
+
+        let token_hash = crate::util::crypto::sha256_hex(trimmed_token.as_bytes());
 
         // 复用全局连接池缓存，避免每轮同步重复进行 TCP/TLS 握手
         let client = crate::util::http::create_default_dns_client(http_interface);
@@ -115,6 +120,7 @@ impl HipmDnsMgrProvider {
             client,
             headers,
             endpoint: trimmed_base,
+            token_hash,
         })
     }
 
@@ -154,10 +160,7 @@ impl HipmDnsMgrProvider {
         let body_text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("HiPM DNSMgr HTTP 错误: {}", body_text),
-            });
+            return Err(DnsProviderError::http_status(status, &body_text));
         }
 
         let api_resp: DnsMgrApiResponse = serde_json::from_str(&body_text)?;
@@ -180,6 +183,7 @@ impl HipmDnsMgrProvider {
     async fn get_domain_id(&self, root_domain: &str) -> Result<i64, DnsProviderError> {
         let cache_key = HipmDomainCacheKey {
             endpoint: self.endpoint.clone(),
+            token_hash: self.token_hash.clone(),
             root_domain: root_domain.to_ascii_lowercase(),
         };
         if let Some(cached) = HIPM_DOMAIN_CACHE.get(&cache_key) {
@@ -202,16 +206,17 @@ impl HipmDnsMgrProvider {
         }
 
         // 分页兜底查询
-        for page in 1..=5 {
+        const PAGE_SIZE: usize = 50;
+        const MAX_PAGES: u32 = 5;
+        let mut reached_end = false;
+        for page in 1..=MAX_PAGES {
             let p_str = page.to_string();
             let p_query = [("page", p_str.as_str()), ("pageSize", "50")];
             let p_data = self
                 .request_api(reqwest::Method::GET, "/domains", &p_query, None)
                 .await?;
             let p_domains: Vec<DnsMgrDomainItem> = extract_json_list(&p_data);
-            if p_domains.is_empty() {
-                break;
-            }
+            let page_len = p_domains.len();
             if let Some(matched) = p_domains
                 .into_iter()
                 .find(|d| d.name.eq_ignore_ascii_case(root_domain))
@@ -219,20 +224,32 @@ impl HipmDnsMgrProvider {
                 HIPM_DOMAIN_CACHE.insert(cache_key, matched.id);
                 return Ok(matched.id);
             }
+            if page_len < PAGE_SIZE {
+                reached_end = true;
+                break;
+            }
         }
 
-        // 分页达到上限时显式报错 (P1-6)：静默返回 ZoneNotFound 会使上层
-        // 误判为域名不存在，从而创建重复记录
+        if !reached_end {
+            return Err(DnsProviderError::api(
+                "PaginationLimitExceeded",
+                format!(
+                    "HiPM DNSMgr 域名列表超过分页查询上限 ({} 页)，未能确认根域名 {} 是否存在",
+                    MAX_PAGES, root_domain
+                ),
+            ));
+        }
+
         Err(DnsProviderError::ZoneNotFound(root_domain.to_string()))
     }
 
-    /// 查询指定子域名记录
-    async fn get_record(
+    /// 查询指定子域名记录列表（保留全部同名同类型记录，以支持上层模板清理冗余冲突记录）
+    async fn get_records(
         &self,
         domain_id: i64,
         sub: &str,
         record_type: &str,
-    ) -> Result<Option<DnsMgrRecordItem>, DnsProviderError> {
+    ) -> Result<Vec<DnsMgrRecordItem>, DnsProviderError> {
         let path = format!("/domains/{}/records", domain_id);
         let query = [
             ("page", "1"),
@@ -245,9 +262,12 @@ impl HipmDnsMgrProvider {
             .await?;
         let records: Vec<DnsMgrRecordItem> = extract_json_list(&data);
 
-        let matched = records.into_iter().find(|r| {
-            r.name.eq_ignore_ascii_case(sub) && r.record_type.eq_ignore_ascii_case(record_type)
-        });
+        let matched = records
+            .into_iter()
+            .filter(|r| {
+                r.name.eq_ignore_ascii_case(sub) && r.record_type.eq_ignore_ascii_case(record_type)
+            })
+            .collect();
 
         Ok(matched)
     }
@@ -275,7 +295,7 @@ impl RecordOps for HipmDnsMgrProvider {
             .map_err(|e| DnsProviderError::Other(format!("无效的 domain_id: {}", e)))?;
         let sub = domain.sub_domain_or_at();
         let existing = self
-            .get_record(domain_id, sub, &record_type.to_string())
+            .get_records(domain_id, sub, &record_type.to_string())
             .await?;
 
         Ok(existing

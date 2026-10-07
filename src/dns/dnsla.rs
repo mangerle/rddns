@@ -112,10 +112,7 @@ impl RecordOps for DnsLaProvider {
         let body_text = list_resp.text().await?;
 
         if !status.is_success() {
-            return Err(DnsProviderError::ApiError {
-                code: status.to_string(),
-                message: format!("DNS.LA 查询解析记录失败: {}", body_text),
-            });
+            return Err(DnsProviderError::http_status(status, &body_text));
         }
 
         let parsed: DnsLaListResp = serde_json::from_str(&body_text)?;
@@ -162,7 +159,12 @@ impl RecordOps for DnsLaProvider {
             .send()
             .await?;
 
+        let status = post_resp.status();
         let post_text = post_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &post_text));
+        }
+
         let act_res: DnsLaActionResp =
             serde_json::from_str(&post_text).unwrap_or(DnsLaActionResp {
                 code: -1,
@@ -207,7 +209,12 @@ impl RecordOps for DnsLaProvider {
             .send()
             .await?;
 
+        let status = put_resp.status();
         let put_text = put_resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &put_text));
+        }
+
         let act_res: DnsLaActionResp = serde_json::from_str(&put_text).unwrap_or(DnsLaActionResp {
             code: -1,
             msg: Some(put_text.clone()),
@@ -238,7 +245,12 @@ impl RecordOps for DnsLaProvider {
             .send()
             .await?;
 
+        let status = resp.status();
         let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(DnsProviderError::http_status(status, &text));
+        }
+
         let act_res: DnsLaActionResp = serde_json::from_str(&text).unwrap_or(DnsLaActionResp {
             code: -1,
             msg: Some(text.clone()),

@@ -67,6 +67,7 @@ impl RecordOps for TencentCloudProvider {
         let mut offset = 0u32;
         let limit = 100u32;
         const MAX_PAGES: u32 = 10;
+        let mut reached_end = false;
 
         for _ in 0..MAX_PAGES {
             let list_payload = json!({
@@ -88,6 +89,7 @@ impl RecordOps for TencentCloudProvider {
                     if code == "ResourceNotFound.NoDataOfRecord"
                         || code == "ResourceNotFound.NoDataOfDomain" =>
                 {
+                    reached_end = true;
                     break;
                 }
                 Err(e) => return Err(e),
@@ -97,9 +99,20 @@ impl RecordOps for TencentCloudProvider {
             all_records.extend(records);
 
             if (page_len as u32) < limit {
+                reached_end = true;
                 break;
             }
             offset = offset.saturating_add(limit);
+        }
+
+        if !reached_end {
+            return Err(DnsProviderError::api(
+                "PaginationLimitExceeded",
+                format!(
+                    "腾讯云 DNSPod 解析记录超过分页查询上限 ({} 页)，已中止同步以防重复创建记录",
+                    MAX_PAGES
+                ),
+            ));
         }
 
         let matched = all_records

@@ -413,3 +413,28 @@ fn test_remote_record_set_managed_and_has_id() {
     assert!(managed.id.is_empty());
     assert_eq!(managed.value, "5.6.7.8");
 }
+
+#[tokio::test]
+async fn test_template_skips_delete_for_set_managed_records() {
+    let ops = MockOps::with_records(vec![
+        RemoteRecord::set_managed("8.8.8.8"),
+        RemoteRecord::set_managed("9.9.9.9"),
+    ]);
+    let result = sync_record_via(
+        &ops,
+        &test_domain(),
+        DnsRecordType::A,
+        &IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+        None,
+    )
+    .await
+    .expect("应成功返回");
+
+    assert_eq!(result.status, crate::dns::trait_def::SyncStatus::Updated);
+    let log = ops.log();
+    assert_eq!(log.updated, 1);
+    assert_eq!(
+        log.deleted, 0,
+        "set_managed 整组覆盖型记录无独立 ID，不应调用 delete_record"
+    );
+}

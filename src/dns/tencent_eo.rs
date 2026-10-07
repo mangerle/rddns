@@ -196,6 +196,7 @@ impl RecordOps for TencentEoProvider {
         if Self::is_origin_group(domain) {
             let matched_group = self.get_origin_group(zone, domain).await?;
             let current_records = matched_group.records.unwrap_or_default();
+            // 以源站记录值作为 id 传递给 update_record 用于定位替换旧源站，delete_record 中对源站组模式显式豁免
             let remotes = current_records
                 .into_iter()
                 .map(|r| RemoteRecord::new(r.record.clone(), r.record))
@@ -334,8 +335,12 @@ impl RecordOps for TencentEoProvider {
         &self,
         zone: &str,
         record: &RemoteRecord,
-        _params: &RecordParams<'_>,
+        params: &RecordParams<'_>,
     ) -> Result<(), DnsProviderError> {
+        if Self::is_origin_group(params.domain) || !record.has_id() {
+            return Ok(());
+        }
+
         let delete_payload = json!({
             "ZoneId": zone,
             "RecordIds": [&record.id]
