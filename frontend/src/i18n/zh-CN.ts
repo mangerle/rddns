@@ -88,7 +88,7 @@ export default {
   },
   task: {
     listTitle: '解析任务列表',
-    newBtn: '＋ 新建',
+    newBtn: '新建',
     emptyList: '暂无解析任务，点击上方新建',
     nameLabel: '任务名称',
     namePlaceholder: '输入任务名称',

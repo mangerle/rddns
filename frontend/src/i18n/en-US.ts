@@ -88,7 +88,7 @@ export default {
   },
   task: {
     listTitle: 'Task List',
-    newBtn: '＋ New',
+    newBtn: 'New',
     emptyList: 'No DNS tasks configured. Click New above to add one.',
     nameLabel: 'Task Name',
     namePlaceholder: 'Enter task name',
