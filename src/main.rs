@@ -18,7 +18,7 @@ use rddns::util::dns_resolver::set_custom_dns_server;
 use rddns::util::http::set_skip_verify;
 use rddns::util::logging::{LogBuffer, init_logger};
 use rddns::util::service::handle_service_command;
-use rddns::util::update::upgrade_self;
+use rddns::util::update::{run_startup_version_check, upgrade_self};
 use rddns::web::server::WebServer;
 use shipup::{check_and_recover_current, confirm_update_success};
 use std::env::{current_dir, current_exe};
@@ -345,6 +345,19 @@ async fn run_core_app(
         engine.run_loop(engine_token).await;
     });
 
+    // 启动远端版本预检 (静默后台执行，结果落入 24 小时缓存)
+    // 远端检查已从「每次页面加载」收敛至「启动一次 + 用户手动点击」，
+    // 既保留顶栏徽标的更新提示能力，又彻底消除高频出站与日志刷屏。
+    let version_token = cancel_token.clone();
+    let version_check_handle = spawn(async move {
+        tokio::select! {
+            _ = version_token.cancelled() => {
+                log::debug!("收到停机信号，跳过启动版本预检");
+            }
+            () = run_startup_version_check() => {}
+        }
+    });
+
     // 初始化 Web 管理服务器
     let web_handle = if !args.no_web {
         let web_server = WebServer::new(
@@ -364,6 +377,9 @@ async fn run_core_app(
         info!("已开启 --noweb 模式，跳过 Web 服务启动");
         None
     };
+
+    // 收割启动版本预检：其为短耗时一次性任务，优先收割以免被下方引擎的阻塞等待无限期延后
+    report_task_exit("启动版本预检", version_check_handle.await).await;
 
     // 收割引擎与 Web 任务：显式识别 panic，避免核心常驻任务崩溃时静默退出
     report_task_exit("DDNS 调度引擎", engine_handle.await).await;

@@ -16,6 +16,8 @@ export default {
     connected: '{version} Connected',
     connectedFallback: 'Connected',
     checkingUpdate: 'Click to check updates',
+    checkingUpdateInProgress: 'Checking for updates...',
+    versionLoading: 'Loading version info...',
     newVersionFound: 'New Version {version} (Click to upgrade)',
     newVersionUpgradePrompt: 'New version v{version} available!\n\nRelease notes:\n{notes}\n\nDo you want to upgrade automatically now?',
     latestVersionAlert: 'You are on the latest version (v{version})!',

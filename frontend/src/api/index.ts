@@ -56,8 +56,10 @@ export const notifyApi = {
 export const systemApi = {
   // 立即触发全量解析同步
   syncAll: () => api.post<null>('/api/v1/sync'),
-  // 检查版本更新状态
+  // 读取当前生效版本信息 (仅本地与启动预检缓存，不会出站访问 GitHub)
   getVersion: () => api.get<VersionInfo>('/api/v1/version'),
+  // 强制检查远端新版本 (绕过缓存直连发布源，仅由用户手动点击触发)
+  checkVersion: () => api.post<VersionInfo>('/api/v1/version/check'),
   // 触发在线自更新
   upgrade: () => api.post<null>('/api/v1/upgrade'),
   // 枚举物理与虚拟网卡

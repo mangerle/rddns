@@ -1,7 +1,9 @@
 use super::{ApiResponse, AppState};
 use crate::ip_fetcher::net_interface::list_system_interfaces;
 use crate::util::logging::LogEntry;
-use crate::util::update::{VersionInfo, check_version, restart_process, upgrade_self};
+use crate::util::update::{
+    check_remote_version, local_version_info, query_version_cached, restart_process, upgrade_self,
+};
 use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -50,21 +52,28 @@ pub async fn get_network_interfaces_handler() -> impl IntoResponse {
     Json(ApiResponse::ok(ifaces))
 }
 
-/// 获取系统版本与更新信息 (支持优雅降级，GitHub 连接失败时不抛 500 且不刷 ERROR 日志)
+/// 获取当前生效的版本信息 (仅读取本地与启动预检缓存，绝不触发任何出站请求)
+///
+/// # 设计原理
+/// - **实现初衷**：前端在页面加载、登录成功、初始化完成时均需展示版本徽标，
+///   这些高频场景不应连带触发 GitHub 清单拉取。
+/// - **核心优势**：纯内存读取，恒定成功返回，彻底消除 shipup 内部清单拉取日志的刷屏来源。
 pub async fn get_version_handler() -> impl IntoResponse {
-    match check_version().await {
+    Json(ApiResponse::ok(query_version_cached()))
+}
+
+/// 强制检查远端版本 (仅由用户点击顶栏版本徽标触发)
+///
+/// # 设计原理
+/// - **实现初衷**：将「远端出站检查」的唯一入口收敛到用户明确表达意图的操作上。
+/// - **核心优势**：绕过 24 小时缓存直连远端，保证用户点击时总能拿到最新结果；
+///   远端不可达时降级返回本地版本，不向前端抛错。
+pub async fn check_remote_version_handler() -> impl IntoResponse {
+    match check_remote_version().await {
         Ok(info) => Json(ApiResponse::ok(info)),
         Err(e) => {
-            log::debug!("获取 GitHub 最新版本失败 (已安全降级为本地版本): {:#}", e);
-            let current_version = env!("CARGO_PKG_VERSION").to_string();
-            let fallback_info = VersionInfo {
-                current_version: current_version.clone(),
-                latest_version: current_version,
-                has_update: false,
-                release_url: String::new(),
-                release_notes: String::new(),
-            };
-            Json(ApiResponse::ok(fallback_info))
+            log::debug!("强制检查远端版本失败 (已安全降级为本地版本): {:#}", e);
+            Json(ApiResponse::ok(local_version_info()))
         }
     }
 }

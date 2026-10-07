@@ -34,6 +34,18 @@ const latestVer = computed(() =>
   normalizeVersion(versionStore.versionInfo?.latest_version),
 )
 
+// 版本徽标悬浮提示：如实反映「加载中 / 检查中 / 有新版本 / 点击检查」四种真实状态，
+// 避免在版本信息尚未就绪时谎称已检查过。
+const versionTitle = computed(() => {
+  if (versionStore.isChecking)
+    return t('common.checkingUpdateInProgress')
+  if (hasUpdate.value)
+    return t('common.newVersionFound', { version: latestVer.value })
+  if (!currentVer.value)
+    return t('common.versionLoading')
+  return t('common.checkingUpdate')
+})
+
 function toggleLang() {
   const cur = getLocale()
   setLocale(cur === 'zh-CN' ? 'en-US' : 'zh-CN')
@@ -55,11 +67,12 @@ function toggleLang() {
             <div
               class="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-mono border cursor-pointer transition hover:opacity-80"
               :class="hasUpdate ? 'bg-amber-500/10 text-amber-500 dark:text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'"
-              :title="hasUpdate ? t('common.newVersionFound', { version: latestVer }) : t('common.checkingUpdate')"
-              @click="versionStore.checkVersion(true)"
+              :title="versionTitle"
+              @click="versionStore.checkVersion()"
             >
               <span class="w-1.5 h-1.5 rounded-full" :class="hasUpdate ? 'bg-amber-500 dark:bg-amber-400 animate-ping' : 'bg-emerald-500 dark:bg-emerald-400'" />
-              <span>v{{ currentVer || '0.12.0' }}</span>
+              <span v-if="currentVer" class="tabular-nums">v{{ currentVer }}</span>
+              <span v-else class="inline-block w-9 h-3 rounded bg-slate-200 dark:bg-slate-700 animate-pulse" />
               <span v-if="hasUpdate" class="text-[10px] text-amber-600 dark:text-amber-300 font-sans flex items-center gap-1 ml-0.5">
                 <Sparkles class="w-2.5 h-2.5" />
                 <span>{{ t('update.title') }}</span>

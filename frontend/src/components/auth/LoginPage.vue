@@ -31,7 +31,7 @@ async function handleLogin() {
     await configStore.loadConfig()
     await configStore.loadNetworkInterfaces()
     logStore.initSSE()
-    versionStore.checkVersion(false)
+    versionStore.loadVersion()
   }
 }
 

@@ -50,80 +50,133 @@ fn build_updater(timeout: Duration) -> Result<Updater> {
     builder.build().context("构建自更新器实例失败")
 }
 
-/// 远端版本检查缓存生存时间（5 分钟）
+/// 远端版本结果缓存生存时间（24 小时）
 ///
 /// # 设计原理
-/// - **实现初衷**: 避免前端高频请求版本接口触发 GitHub 频控限制或引入请求等待延迟。
-/// - **核心优势**: 内存级命中返回，毫秒级响应，并在远端网络抖动时提供已缓存结果降级。
-const VERSION_CACHE_TTL: Duration = Duration::from_secs(300);
+/// - **实现初衷**：远端检查已收敛为「进程启动预检一次 + 用户手动点击触发」两种时机，
+///   故缓存有效期需覆盖整个常驻周期，避免长跑进程在无人操作时反复出站 GitHub。
+/// - **核心优势**：24 小时窗口内所有版本查询零网络开销，显著降低 GitHub 频控命中率。
+/// - **代价与局限**：常驻超过 24 小时且用户从未手动点击时，需重启或手动点击才会感知新版本。
+const VERSION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-static VERSION_CACHE: LazyLock<RwLock<Option<(Instant, VersionInfo)>>> =
-    LazyLock::new(|| RwLock::new(None));
-
-/// 检查 GitHub Releases 最新版本信息 (支持 5 分钟内存缓存与优雅降级)
+/// 全局版本缓存：(写入时刻, 版本信息)
 ///
 /// # 设计原理
-/// - **实现初衷**：通过 shipup 统一接口检查远端发布清单，获取最新版本号、发布日志与升级状态。
-/// - **核心优势**：直接拉取 Release 静态清单，配合本地 5 分钟缓存杜绝频繁出站请求；异步非阻塞探测。
+/// - **实现初衷**：远端检查的出网时机已收敛为「启动预检 + 用户主动点击」两条明确路径，
+///   不存在无人值守的高频轮询，因此无需记录「近期失败」状态。
+/// - **核心优势**：退化为最简单的成功结果缓存，语义单一；
+///   网络失败一律上抛交由调用方降级，不会被伪装成成功结果掩盖故障。
+type VersionCache = Option<(Instant, VersionInfo)>;
+
+static VERSION_CACHE: LazyLock<RwLock<VersionCache>> = LazyLock::new(|| RwLock::new(None));
+
+/// 构造仅含本地版本号的基础信息（零网络开销）
+///
+/// # 设计原理
+/// - **实现初衷**：顶栏版本徽标只需展示本地版本，不应为此触发任何出站请求。
+/// - **核心优势**：纯内存计算，恒定成功，不依赖缓存与网络。
+/// - **字段约定**：`current_version` 为纯 SemVer（不带 `v` 前缀），与 `CARGO_PKG_VERSION`
+///   字面值一致；`latest_version` 额外带 `v` 前缀以对齐 GitHub tag 形态。
+pub fn local_version_info() -> VersionInfo {
+    let current_version = env!("CARGO_PKG_VERSION");
+    VersionInfo {
+        current_version: current_version.to_string(),
+        latest_version: format!("v{current_version}"),
+        release_url: format!("https://github.com/mangerle/rddns/releases/tag/v{current_version}"),
+        has_update: false,
+        release_notes: String::new(),
+    }
+}
+
+/// 从给定缓存中提取仍在有效期内的版本信息
+///
+/// # 设计原理
+/// - **实现初衷**：将「TTL 判定」这一纯逻辑与全局静态状态解耦，使单元测试可直接传入
+///   构造的缓存值验证各分支，无需触碰进程级共享状态、也不会与其他用例并发冲突。
+/// - **核心优势**：无副作用、无锁、无全局依赖，是可独立验证的最小决策单元。
+fn pick_valid_cached(cache: &VersionCache) -> Option<VersionInfo> {
+    match cache {
+        Some((at, info)) if at.elapsed() < VERSION_CACHE_TTL => Some(info.clone()),
+        _ => None,
+    }
+}
+
+/// 读取全局缓存中仍有效的版本信息
+fn read_valid_cache() -> Option<VersionInfo> {
+    pick_valid_cached(&VERSION_CACHE.read())
+}
+
+/// 查询版本信息：优先复用缓存，绝不主动出网
+///
+/// # 设计原理
+/// - **实现初衷**：承接前端页面加载时的版本展示需求，使其与「远端检查」彻底解耦。
+/// - **核心优势**：恒定成功返回，打开页面、登录、初始化均不产生任何 GitHub 请求与日志噪音。
+pub fn query_version_cached() -> VersionInfo {
+    read_valid_cache().unwrap_or_else(local_version_info)
+}
+
+/// 强制走远端检查并刷新缓存
+///
+/// # 设计原理
+/// - **实现初衷**：仅供「进程启动预检」与「用户手动点击检查」两条明确时机调用，
+///   二者均代表用户或运维方对「获取最新版本」的明确诉求，故不设任何静默退避。
+/// - **核心优势**：远端失败时优先复用仍有效的成功缓存，避免一次网络抖动抹掉
+///   已探明的版本信息；无缓存可用时如实上抛错误，由调用方决定降级策略。
 ///
 /// # Errors
-/// 当网络通信中断或清单解析异常且无旧缓存可用时返回错误。
-pub async fn check_version() -> Result<VersionInfo> {
-    // 1. 尝试从缓存中命中有效结果
-    {
-        let cache = VERSION_CACHE.read();
-        if let Some((cached_at, ref info)) = *cache
-            && cached_at.elapsed() < VERSION_CACHE_TTL
-        {
-            return Ok(info.clone());
-        }
-    }
-
+/// 当远端不可达或清单解析异常，且本地不存在任何有效成功缓存时返回错误。
+pub async fn check_remote_version() -> Result<VersionInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let updater = build_updater(Duration::from_secs(15))?;
 
-    let check_res = updater.check_async().await;
-    match check_res {
-        Ok(Some(update)) => {
-            let latest_version = format!("v{}", update.version());
-            let release_url = format!(
-                "https://github.com/mangerle/rddns/releases/tag/{}",
-                latest_version
-            );
-            let info = VersionInfo {
-                current_version,
-                latest_version,
-                has_update: true,
-                release_url,
-                release_notes: update.notes().unwrap_or("").to_string(),
+    let info = match updater.check_async().await {
+        Ok(Some(update)) => VersionInfo {
+            release_url: format!(
+                "https://github.com/mangerle/rddns/releases/tag/v{}",
+                update.version()
+            ),
+            release_notes: update.notes().unwrap_or("").to_string(),
+            latest_version: format!("v{}", update.version()),
+            has_update: true,
+            current_version,
+        },
+        Ok(None) => local_version_info(),
+        Err(e) => {
+            // 仍有有效成功缓存时保留之，避免一次网络抖动抹掉已探明的版本信息；
+            // 无缓存则如实上抛，严禁将失败伪装为成功返回。
+            return match read_valid_cache() {
+                Some(info) => {
+                    log::debug!("远端版本检查失败，降级复用本地缓存结果: {:#}", e);
+                    Ok(info)
+                }
+                None => Err(e).context("检查远端版本信息失败"),
             };
-            *VERSION_CACHE.write() = Some((Instant::now(), info.clone()));
-            Ok(info)
         }
-        Ok(None) => {
-            let latest_version = format!("v{}", current_version);
-            let release_url = format!(
-                "https://github.com/mangerle/rddns/releases/tag/{}",
-                latest_version
+    };
+
+    *VERSION_CACHE.write() = Some((Instant::now(), info.clone()));
+    Ok(info)
+}
+
+/// 进程启动后的远端版本预检（供后台任务调用，失败仅降级不打断启动）
+///
+/// # 设计原理
+/// - **实现初衷**：让用户在打开控制台时即可从顶栏徽标看到新版本提示，
+///   而无需前端在每次页面加载时主动出站。
+/// - **核心优势**：结果写入 24 小时缓存，后续所有页面加载均为零网络开销。
+pub async fn run_startup_version_check() {
+    match check_remote_version().await {
+        Ok(info) if info.has_update => {
+            info!(
+                "启动预检发现新版本 {}，可在控制台顶栏版本徽标处查看更新并升级",
+                info.latest_version
             );
-            let info = VersionInfo {
-                current_version,
-                latest_version,
-                has_update: false,
-                release_url,
-                release_notes: String::new(),
-            };
-            *VERSION_CACHE.write() = Some((Instant::now(), info.clone()));
-            Ok(info)
+        }
+        Ok(_) => {
+            log::debug!("启动版本预检完成，当前已是最新版本");
         }
         Err(e) => {
-            // 网络异常时，若缓存中存在旧数据，降级返回旧数据
-            let cache = VERSION_CACHE.read();
-            if let Some((_, ref info)) = *cache {
-                log::debug!("获取 GitHub 版本失败，降级使用旧缓存: {:#}", e);
-                return Ok(info.clone());
-            }
-            Err(e).context("检查远端版本信息失败")
+            log::warn!("启动版本预检失败，已降级为仅展示本地版本: {:#}", e);
         }
     }
 }
@@ -261,23 +314,141 @@ mod tests {
         assert!(verify_result.is_err(), "伪造签名必须被拒绝");
     }
 
-    #[tokio::test]
-    async fn test_version_cache_flow() {
-        let cached_info = VersionInfo {
-            current_version: "v9.9.9".to_string(),
-            latest_version: "v9.9.9".to_string(),
-            has_update: false,
+    #[test]
+    fn test_version_cache_ttl_covers_whole_always_on_cycle() {
+        // 远端检查仅在启动与用户手动点击时触发，缓存必须覆盖整个常驻周期，
+        // 否则长跑进程仍会因 TTL 过期而出站 GitHub。
+        assert_eq!(VERSION_CACHE_TTL, Duration::from_secs(24 * 60 * 60));
+    }
+
+    #[test]
+    fn test_local_version_info_never_claims_update() {
+        let info = local_version_info();
+        assert!(!info.has_update, "本地版本信息不得声称存在新版本");
+        assert!(info.release_notes.is_empty());
+        // 无新版本时，两个字段按契约形态不同（current 无 v / latest 带 v）但语义同源
+        assert_eq!(
+            info.latest_version,
+            format!("v{}", info.current_version),
+            "无新版本时 latest_version 应为 current_version 的 tag 形态"
+        );
+    }
+
+    /// 锁定版本号字段的 `v` 前缀契约，防止同一字段在不同分支返回两种格式
+    ///
+    /// # 设计原理
+    /// - `current_version` 是编译期 SemVer，必须与 `CARGO_PKG_VERSION` 字面值逐字相同；
+    /// - `latest_version` 是 GitHub tag 形态，额外带 `v` 前缀以对齐 tag 命名。
+    /// 两者语义不同故形态不同，API 契约必须自洽，不能出现同字段多格式。
+    #[test]
+    fn test_version_fields_v_prefix_contract() {
+        let info = local_version_info();
+        assert_eq!(
+            info.current_version,
+            env!("CARGO_PKG_VERSION"),
+            "current_version 必须是纯 SemVer，不得携带 v 前缀"
+        );
+        assert!(
+            info.current_version
+                .starts_with(|c: char| c.is_ascii_digit()),
+            "current_version 必须以数字起始，当前为: {}",
+            info.current_version
+        );
+        assert_eq!(
+            info.latest_version,
+            format!("v{}", env!("CARGO_PKG_VERSION")),
+            "latest_version 必须对齐 GitHub tag 形态（带 v 前缀）"
+        );
+        assert!(
+            info.release_url.ends_with(&info.latest_version),
+            "release_url 必须以 latest_version 结尾，当前 url: {}，tag: {}",
+            info.release_url,
+            info.latest_version
+        );
+    }
+
+    // 以下用例均通过 `pick_valid_cached` 纯函数注入缓存值，
+    // 不读写全局 VERSION_CACHE，因此天然免疫 cargo test 多线程并发竞争。
+
+    #[test]
+    fn test_pick_valid_cached_returns_none_when_cache_empty() {
+        let cache: VersionCache = None;
+        assert!(pick_valid_cached(&cache).is_none());
+    }
+
+    #[test]
+    fn test_pick_valid_cached_hits_entry_within_ttl() {
+        let cached = VersionInfo {
+            current_version: "0.11.0".to_string(),
+            latest_version: "v0.12.0".to_string(),
+            has_update: true,
             release_url: "https://example.com".to_string(),
             release_notes: "测试备注".to_string(),
         };
-        *VERSION_CACHE.write() = Some((Instant::now(), cached_info.clone()));
+        let cache: VersionCache = Some((Instant::now(), cached.clone()));
 
-        let result = check_version().await;
-        assert!(result.is_ok());
-        let info = result.unwrap();
-        assert_eq!(info.current_version, "v9.9.9");
-        assert_eq!(info.release_notes, "测试备注");
+        let picked = pick_valid_cached(&cache).expect("TTL 内的成功条目必须命中");
+        assert!(picked.has_update);
+        assert_eq!(picked.latest_version, "v0.12.0");
+        assert_eq!(picked.release_notes, "测试备注");
+    }
 
+    #[test]
+    fn test_pick_valid_cached_rejects_expired_entry() {
+        // 构造一个刚过期（24 小时零 1 纳秒）的条目，验证 TTL 边界判定生效
+        let expired_at = Instant::now() - (VERSION_CACHE_TTL + Duration::from_nanos(1));
+        let cache: VersionCache = Some((
+            expired_at,
+            VersionInfo {
+                current_version: "0.11.0".to_string(),
+                latest_version: "v0.12.0".to_string(),
+                has_update: true,
+                release_url: "https://example.com".to_string(),
+                release_notes: "陈旧备注".to_string(),
+            },
+        ));
+
+        assert!(
+            pick_valid_cached(&cache).is_none(),
+            "超过 24 小时的条目必须被判定失效，不得继续声称存在新版本"
+        );
+    }
+
+    #[test]
+    fn test_pick_valid_cached_hits_entry_just_inside_ttl_boundary() {
+        // 边界对侧：恰好在 TTL 之内（预留 1 秒余量）必须命中，防止判定过严
+        let fresh_at = Instant::now() - (VERSION_CACHE_TTL - Duration::from_secs(1));
+        let cache: VersionCache = Some((
+            fresh_at,
+            VersionInfo {
+                current_version: "0.12.0".to_string(),
+                latest_version: "v0.12.0".to_string(),
+                has_update: false,
+                release_url: "https://example.com".to_string(),
+                release_notes: String::new(),
+            },
+        ));
+
+        assert!(
+            pick_valid_cached(&cache).is_some(),
+            "TTL 内的条目必须命中，判定条件过严会导致缓存形同虚设"
+        );
+    }
+
+    /// 覆盖 `query_version_cached` 的全局缓存读取路径
+    ///
+    /// # 并发安全性
+    /// 本用例读写进程级 `VERSION_CACHE`，是本模块唯一触碰全局状态的测试。
+    /// 断言只依赖「缓存为空时必返回本地版本」这一不变量，
+    /// 因此即便与其他用例并发交错也不会误判，不引入 flaky 风险。
+    #[test]
+    fn test_query_version_cached_falls_back_to_local_when_cache_empty() {
         *VERSION_CACHE.write() = None;
+        let info = query_version_cached();
+        assert!(
+            !info.has_update,
+            "缓存为空时必须降级为本地版本，不得声称存在新版本"
+        );
+        assert_eq!(info.current_version, env!("CARGO_PKG_VERSION"));
     }
 }

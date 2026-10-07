@@ -160,22 +160,34 @@ export const useVersionStore = defineStore('version', () => {
     }, 800)
   }
 
-  // 检查版本
-  async function checkVersion(isManual = false) {
-    if (isManual) {
-      isChecking.value = true
-      toast.info(t('common.checkingUpdate'))
-    }
+  // 静默加载版本信息 (仅读取后端本地与启动预检缓存，不会出站访问 GitHub)
+  // 用于页面加载、登录成功、初始化完成等高频场景，只为展示顶栏版本徽标。
+  async function loadVersion() {
     try {
       const res = await systemApi.getVersion()
+      if (res.success && res.data)
+        versionInfo.value = res.data
+    }
+    catch {
+      // 版本徽标属于非关键装饰信息，静默失败不打断主流程
+    }
+  }
+
+  // 手动检查版本 (强制绕过缓存直连远端发布源)
+  // 仅由用户点击顶栏版本徽标触发，会给出明确的 Toast 反馈。
+  async function checkVersion() {
+    if (isChecking.value)
+      return
+    isChecking.value = true
+    toast.info(t('common.checkingUpdate'))
+    try {
+      const res = await systemApi.checkVersion()
       if (res.success && res.data) {
         versionInfo.value = res.data
         if (res.data.has_update) {
-          if (isManual) {
-            isModalOpen.value = true
-          }
+          isModalOpen.value = true
         }
-        else if (isManual) {
+        else {
           toast.success(
             t('common.latestVersionAlert', {
               version: normalizeVersion(res.data.current_version),
@@ -185,14 +197,11 @@ export const useVersionStore = defineStore('version', () => {
       }
     }
     catch (e: unknown) {
-      if (isManual) {
-        const errMsg = e instanceof Error ? e.message : String(e)
-        toast.error(t('common.checkUpdateFailed', { error: errMsg }))
-      }
+      const errMsg = e instanceof Error ? e.message : String(e)
+      toast.error(t('common.checkUpdateFailed', { error: errMsg }))
     }
     finally {
-      if (isManual)
-        isChecking.value = false
+      isChecking.value = false
     }
   }
 
@@ -238,6 +247,7 @@ export const useVersionStore = defineStore('version', () => {
     statusTitle,
     statusSub,
     showManualReload,
+    loadVersion,
     checkVersion,
     startUpgrade,
   }

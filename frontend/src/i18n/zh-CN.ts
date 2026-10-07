@@ -16,6 +16,8 @@ export default {
     connected: '{version} 已连接',
     connectedFallback: '已连接',
     checkingUpdate: '点击检查更新',
+    checkingUpdateInProgress: '正在检查更新...',
+    versionLoading: '正在加载版本信息...',
     newVersionFound: '发现新版本 {version} (点击升级)',
     newVersionUpgradePrompt: '发现新版本 v{version}！\n\n更新说明:\n{notes}\n\n是否立即启动自动升级？',
     latestVersionAlert: '当前已是最新版本 (v{version})！',
