@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { AlertTriangle, Clock, Lock } from 'lucide-vue-next'
-import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import PasswordInput from '@/components/common/PasswordInput.vue'
 import { useConfigStore } from '@/stores/config'
 
 const configStore = useConfigStore()
 const { t } = useI18n()
-
-const newPassword = ref('')
 
 // 格式化待重启生效的配置项名称
 function formatRestartFields(fields: string[]): string {
@@ -158,7 +155,7 @@ if (!configStore.config.auth) {
         <div class="flex flex-col gap-1.5">
           <label class="text-xs font-semibold text-slate-700 dark:text-slate-300">{{ t('system.authPasswordLabel') }}</label>
           <PasswordInput
-            v-model="newPassword"
+            v-model="configStore.newPassword"
             :placeholder="t('system.authPasswordPlaceholder')"
           />
         </div>

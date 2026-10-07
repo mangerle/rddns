@@ -89,6 +89,7 @@ async function runProbeTest() {
   try {
     const res = await taskApi.testIp({
       ip_type: props.type,
+      http_interface: configStore.currentTask?.http_interface || null,
       ...props.config,
     })
     if (res.success && res.data) {

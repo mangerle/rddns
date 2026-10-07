@@ -9,6 +9,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { configApi, notifyApi, systemApi, taskApi } from '@/api'
 import { i18n } from '@/i18n'
+import { decodeBasicAuthPassword, encodeBasicAuth } from './auth'
 import { useToastStore } from './toast'
 
 export const useConfigStore = defineStore('config', () => {
@@ -19,6 +20,7 @@ export const useConfigStore = defineStore('config', () => {
   const isLoading = ref<boolean>(false)
   const isSaving = ref<boolean>(false)
   const isSyncing = ref<boolean>(false)
+  const newPassword = ref<string>('')
   const restartRequired = ref<string[]>([])
   const taskStates = ref<Record<string, TaskRuntimeState>>({})
   const notificationStates = ref<Record<string, ChannelDeliveryStatus>>({})
@@ -356,19 +358,30 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   // 保存全局配置
-  async function saveConfig(newPassword?: string) {
+  async function saveConfig(overridePassword?: string) {
     isSaving.value = true
+    const pwdToSave = overridePassword !== undefined ? overridePassword : newPassword.value
     try {
       const res = await configApi.saveConfig({
         config: config.value,
-        new_password: newPassword || null,
+        new_password: pwdToSave || null,
       })
       if (res.success) {
         toast.success(t('common.saveSuccess'))
-        if (newPassword && config.value.auth?.username) {
-          const authKey = btoa(`${config.value.auth.username}:${newPassword}`)
-          sessionStorage.setItem('rddns_auth', authKey)
+        const currentUsername = config.value.auth?.username?.trim()
+        if (currentUsername) {
+          if (pwdToSave) {
+            sessionStorage.setItem('rddns_auth', encodeBasicAuth(currentUsername, pwdToSave))
+          }
+          else {
+            const existingAuth = sessionStorage.getItem('rddns_auth')
+            const existingPass = existingAuth ? decodeBasicAuthPassword(existingAuth) : null
+            if (existingPass !== null) {
+              sessionStorage.setItem('rddns_auth', encodeBasicAuth(currentUsername, existingPass))
+            }
+          }
         }
+        newPassword.value = ''
         return true
       }
       else {
@@ -448,6 +461,7 @@ export const useConfigStore = defineStore('config', () => {
     isLoading,
     isSaving,
     isSyncing,
+    newPassword,
     restartRequired,
     config,
     notifications,

@@ -19,6 +19,10 @@ function closeModal() {
     return
   versionStore.isModalOpen = false
 }
+
+function reloadPage() {
+  window.location.reload()
+}
 </script>
 
 <template>
@@ -152,8 +156,8 @@ function closeModal() {
         <div v-if="versionStore.showManualReload" class="flex justify-center pt-2">
           <button
             type="button"
-            onclick="window.location.reload()"
             class="cursor-pointer px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs text-white font-medium transition"
+            @click="reloadPage"
           >
             {{ t('update.manualReload') }}
           </button>

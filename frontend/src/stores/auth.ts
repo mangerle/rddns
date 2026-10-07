@@ -7,7 +7,38 @@ import { ref } from 'vue'
 import { authApi } from '@/api'
 import { onUnauthorized } from '@/api/client'
 import { i18n } from '@/i18n'
+import { useLogStore } from './log'
 import { useToastStore } from './toast'
+
+// UTF-8 安全的 Basic Auth Base64 编码（防止非 ASCII 用户名或密码调用 btoa 抛出异常）
+export function encodeBasicAuth(user: string, pass: string): string {
+  const bytes = new TextEncoder().encode(`${user}:${pass}`)
+  let binary = ''
+  for (const b of bytes) {
+    binary += String.fromCharCode(b)
+  }
+  return btoa(binary)
+}
+
+// 从已保存的 Basic Auth 凭据中安全解码原密码（供仅修改用户名时更新会话使用）
+export function decodeBasicAuthPassword(encoded: string): string | null {
+  try {
+    const binary = atob(encoded)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    const decoded = new TextDecoder().decode(bytes)
+    const colonIdx = decoded.indexOf(':')
+    if (colonIdx === -1) {
+      return null
+    }
+    return decoded.slice(colonIdx + 1)
+  }
+  catch {
+    return null
+  }
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const toast = useToastStore()
@@ -22,6 +53,7 @@ export const useAuthStore = defineStore('auth', () => {
     sessionStorage.removeItem('rddns_auth')
     isAuthenticated.value = false
     currentView.value = 'login'
+    useLogStore().closeSSE()
   })
 
   // 检查账号状态（是否需要初始化、已保存的用户名）
@@ -55,7 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await authApi.init({ username: user, password: pass })
       if (res.success) {
-        const authKey = btoa(`${user}:${pass}`)
+        const authKey = encodeBasicAuth(user, pass)
         sessionStorage.setItem('rddns_auth', authKey)
         isAuthenticated.value = true
         username.value = user
@@ -80,7 +112,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await authApi.login({ username: user, password: pass })
       if (res.success) {
-        const authKey = btoa(`${user}:${pass}`)
+        const authKey = encodeBasicAuth(user, pass)
         sessionStorage.setItem('rddns_auth', authKey)
         isAuthenticated.value = true
         username.value = user
@@ -105,6 +137,7 @@ export const useAuthStore = defineStore('auth', () => {
     sessionStorage.removeItem('rddns_auth')
     isAuthenticated.value = false
     currentView.value = 'login'
+    useLogStore().closeSSE()
     toast.info(t('common.logoutSuccess'))
   }
 

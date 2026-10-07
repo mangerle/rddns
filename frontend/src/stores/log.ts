@@ -18,6 +18,7 @@ export const useLogStore = defineStore('log', () => {
   const isConnected = ref<boolean>(false)
 
   let activeEventSource: EventSource | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   const logListeners: ((entry: LogEntry) => void)[] = []
 
   function onLogReceived(cb: (entry: LogEntry) => void) {
@@ -75,10 +76,11 @@ export const useLogStore = defineStore('log', () => {
     toast.info(t('modal.logsCleared'))
   }
 
-  async function initSSE() {
-    // 建立推流连接前，先拉取服务端的历史日志快照
-    await fetchHistoryLogs()
-
+  function closeSSE() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
     if (activeEventSource) {
       try {
         activeEventSource.close()
@@ -86,6 +88,14 @@ export const useLogStore = defineStore('log', () => {
       catch {}
       activeEventSource = null
     }
+    isConnected.value = false
+  }
+
+  async function initSSE() {
+    closeSSE()
+
+    // 建立推流连接前，先拉取服务端的历史日志快照
+    await fetchHistoryLogs()
 
     let sseUrl = '/api/v1/logs/sse'
     const auth = sessionStorage.getItem('rddns_auth')
@@ -126,8 +136,13 @@ export const useLogStore = defineStore('log', () => {
         if (activeEventSource === es) {
           activeEventSource = null
         }
-        // 5秒后自动重连
-        setTimeout(initSSE, 5000)
+        // 仅在仍持有登录态时 5 秒后自动重连
+        if (sessionStorage.getItem('rddns_auth')) {
+          if (reconnectTimer) {
+            clearTimeout(reconnectTimer)
+          }
+          reconnectTimer = setTimeout(initSSE, 5000)
+        }
       }
     }
     catch (e) {
@@ -142,6 +157,7 @@ export const useLogStore = defineStore('log', () => {
     onLogReceived,
     appendLog,
     clearLogs,
+    closeSSE,
     initSSE,
     fetchHistoryLogs,
   }

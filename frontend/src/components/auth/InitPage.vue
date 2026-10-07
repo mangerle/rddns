@@ -29,7 +29,7 @@ async function handleInit() {
     toast.error(t('auth.usernameEmpty'))
     return
   }
-  if (!password.value || password.value.length < 4) {
+  if (!password.value || [...password.value].length < 8) {
     toast.error(t('auth.passwordMinLength'))
     return
   }
