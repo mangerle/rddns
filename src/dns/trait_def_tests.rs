@@ -162,6 +162,18 @@ fn test_ip_value_matches() {
 fn test_error_is_retryable() {
     assert!(DnsProviderError::Http("Connection reset".to_string()).is_retryable());
     assert!(DnsProviderError::api("503", "Service Unavailable").is_retryable());
+    assert!(
+        DnsProviderError::http_status(reqwest::StatusCode::SERVICE_UNAVAILABLE, "bad gateway")
+            .is_retryable()
+    );
+    assert!(
+        DnsProviderError::http_status(reqwest::StatusCode::TOO_MANY_REQUESTS, "slow down")
+            .is_retryable()
+    );
+    assert!(
+        !DnsProviderError::http_status(reqwest::StatusCode::UNAUTHORIZED, "unauthorized")
+            .is_retryable()
+    );
     assert!(DnsProviderError::api("TooManyRequests", "Rate limit exceeded").is_retryable());
     assert!(!DnsProviderError::MissingCredentials("missing key".to_string()).is_retryable());
     assert!(!DnsProviderError::ZoneNotFound("example.com".to_string()).is_retryable());

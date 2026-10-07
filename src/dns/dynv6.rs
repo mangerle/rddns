@@ -1,14 +1,14 @@
 use crate::core::domain::ParsedDomain;
 use crate::dns::ops::{RecordOps, RecordParams, RemoteRecord};
 use crate::dns::trait_def::{DnsProviderError, DnsRecordType};
+use crate::dns::zone_cache::TtlCache;
+use crate::util::crypto::sha256_hex;
 use async_trait::async_trait;
+use log::warn;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
 use serde_json::json;
-
-use crate::dns::zone_cache::TtlCache;
-use log::warn;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -114,7 +114,7 @@ impl RecordOps for Dynv6Provider {
     }
 
     async fn resolve_zone(&self, root_domain: &str) -> Result<String, DnsProviderError> {
-        let cache_key = format!("{}:{}", self.token, root_domain);
+        let cache_key = format!("{}:{}", sha256_hex(self.token.as_bytes()), root_domain);
         if let Some(cached_id) = DYNV6_ZONE_CACHE.get(&cache_key) {
             return Ok(cached_id);
         }

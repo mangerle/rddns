@@ -189,21 +189,24 @@ pub struct AuthInitRequest {
     pub password: String,
 }
 
-/// 首次初始化管理员账号与密码
-pub async fn init_auth_handler(
-    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    State(state): State<AppState>,
-    Json(req): Json<AuthInitRequest>,
-) -> Result<Json<ApiResponse<&'static str>>, AppError> {
-    // 1. 来源 IP 校验：首发管理员账号初始化仅允许从本地回环地址发起，防御局域网/公网未授权抢占 (L-7)
-    if !peer_addr.ip().is_loopback() {
+/// 校验首次初始化请求的网络来源与跨站防护标头
+fn validate_init_request_origin(
+    peer_addr: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
+    // 1. 来源 IP 与反向代理标头校验：首发管理员初始化仅允许本机直连回环地址发起，
+    //    若携带 X-Forwarded-For / X-Real-IP / Forwarded 等反代转发头则一律拒绝，防止公网经本地反代绕过回环限制 (L-7)
+    let has_proxy_header = headers.contains_key("x-forwarded-for")
+        || headers.contains_key("x-real-ip")
+        || headers.contains_key("forwarded");
+    if !peer_addr.ip().is_loopback() || has_proxy_header {
         warn!(
-            "[安全拦截] 阻止非本地回环 IP ({}) 初始化管理员账号",
-            peer_addr.ip()
+            "[安全拦截] 阻止非本机直连回环请求 (peer: {}, proxy_header: {}) 初始化管理员账号",
+            peer_addr.ip(),
+            has_proxy_header
         );
         return Err(AppError::forbidden(
-            "出于安全保护，首发管理员账号初始化仅允许从本机(127.0.0.1 或 ::1)访问设置，禁止从局域网或公网直接初始化！",
+            "出于安全保护，首发管理员账号初始化仅允许从本机(127.0.0.1 或 ::1)直连访问设置，禁止从局域网、公网或通过反向代理初始化！",
         ));
     }
 
@@ -236,6 +239,26 @@ pub async fn init_auth_handler(
                 "出于安全保护，禁止跨站请求发起账号初始化！",
             ));
         }
+    }
+
+    Ok(())
+}
+
+/// 首次初始化管理员账号与密码
+pub async fn init_auth_handler(
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<AuthInitRequest>,
+) -> Result<Json<ApiResponse<&'static str>>, AppError> {
+    validate_init_request_origin(peer_addr, &headers)?;
+
+    // 在执行昂贵的 bcrypt 哈希计算前快速检查是否已初始化，防止已初始化状态下被重放请求耗尽全局 bcrypt 信号量
+    if state.config_manager.get_config().auth.is_some() {
+        return Err(AppError::bad_request(format!(
+            "初始化管理员账号失败: {}",
+            ConfigError::AlreadyExists
+        )));
     }
 
     let username = req.username.trim();
@@ -365,7 +388,7 @@ mod tests {
         let headers = HeaderMap::new();
         let req = AuthInitRequest {
             username: "admin".to_string(),
-            password: "password123".to_string(),
+            password: "StrongP@ss2026".to_string(),
         };
 
         // 1. 模拟来自公网 IP (8.8.8.8) 的初始化请求，必须拒绝
@@ -382,10 +405,52 @@ mod tests {
 
         // 2. 模拟来自局域网私网 IP (192.168.1.100) 的初始化请求，必须拒绝 (L-7)
         let lan_addr = SocketAddr::from(([192, 168, 1, 100], 12345));
-        let res_lan = init_auth_handler(ConnectInfo(lan_addr), headers, State(state), Json(req))
+        let res_lan = init_auth_handler(
+            ConnectInfo(lan_addr),
+            headers.clone(),
+            State(state.clone()),
+            Json(req.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(res_lan.status(), StatusCode::FORBIDDEN);
+
+        // 3. 模拟经本地反向代理转发（peer 为 127.0.0.1 但携带 X-Forwarded-For / X-Real-IP / Forwarded）的请求，必须拒绝
+        let local_addr = SocketAddr::from(([127, 0, 0, 1], 12345));
+        for proxy_hdr in ["x-forwarded-for", "x-real-ip", "forwarded"] {
+            let mut proxy_headers = HeaderMap::new();
+            proxy_headers.insert(proxy_hdr, "203.0.113.10".parse().unwrap());
+            let res_proxy = init_auth_handler(
+                ConnectInfo(local_addr),
+                proxy_headers,
+                State(state.clone()),
+                Json(req.clone()),
+            )
             .await
             .into_response();
-        assert_eq!(res_lan.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                res_proxy.status(),
+                StatusCode::FORBIDDEN,
+                "应拒绝携带反代标头 [{}] 的初始化请求",
+                proxy_hdr
+            );
+        }
+
+        // 4. 本机直连初始化成功后，再次请求应在执行哈希前直接返回 BAD_REQUEST
+        let res_ok = init_auth_handler(
+            ConnectInfo(local_addr),
+            headers.clone(),
+            State(state.clone()),
+            Json(req.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(res_ok.status(), StatusCode::OK);
+
+        let res_dup = init_auth_handler(ConnectInfo(local_addr), headers, State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(res_dup.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

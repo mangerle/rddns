@@ -4,7 +4,8 @@ use crate::config::model::provider::ProviderConfig;
 use crate::util::command::validate_command_str;
 use crate::util::domain::parse_domain;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use url::Url;
 
 /// 应用全局配置结构
@@ -28,7 +29,7 @@ pub struct AppConfig {
     #[serde(default = "default_interval_secs")]
     pub interval_secs: u64,
 
-    /// 间隔 N 次与服务商强制校对云端真实记录，默认 10 次
+    /// 间隔 N 次与服务商强制校对云端记录，默认 10 次
     #[serde(default = "default_cache_times")]
     pub cache_times: u32,
 
@@ -210,6 +211,15 @@ impl AppConfig {
         if self.listen_port == 0 {
             errs.push("Web 服务监听端口必须在 1 到 65535 之间".to_string());
         }
+        if let Some(ref srv) = self.dns_server {
+            let trimmed = srv.trim();
+            if !trimmed.is_empty() && !is_valid_dns_server_addr(trimmed) {
+                errs.push(format!(
+                    "自定义公共 DNS 服务器地址 [{}] 格式无效，需为合法 IP 或 IP:端口",
+                    trimmed
+                ));
+            }
+        }
 
         let mut task_names = HashSet::with_capacity(self.dns_tasks.len());
         for task in &self.dns_tasks {
@@ -225,6 +235,67 @@ impl AppConfig {
         validate_notifications(&self.notifications, &mut errs);
 
         if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+
+/// 校验自定义 DNS 服务器地址是否为合法 IP 或 IP:端口 (且非未指定/多播地址)
+fn is_valid_dns_server_addr(raw: &str) -> bool {
+    if let Ok(sa) = raw.parse::<SocketAddr>() {
+        sa.port() != 0 && !sa.ip().is_unspecified() && !sa.ip().is_multicast()
+    } else if let Ok(ip) = raw.parse::<IpAddr>() {
+        !ip.is_unspecified() && !ip.is_multicast()
+    } else {
+        false
+    }
+}
+
+/// 解析并校验单个 STUN 服务器条目，返回 `(主机名或IP, 端口)`
+pub(crate) fn parse_stun_server_entry(entry: &str) -> Result<(&str, u16), String> {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() || trimmed.len() > 255 {
+        return Err(format!(
+            "STUN 服务器地址 [{}] 长度无效 (最大 255 字符)",
+            trimmed
+        ));
+    }
+    if trimmed.contains("://") || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(format!(
+            "STUN 服务器地址 [{}] 格式无效，请填写主机名或 IP[:端口]",
+            trimmed
+        ));
+    }
+    if trimmed.starts_with('[') {
+        if let Some((host_part, port_part)) = trimmed[1..].split_once("]:") {
+            let port = port_part
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .ok_or_else(|| format!("STUN 服务器 [{}] 端口无效", trimmed))?;
+            if host_part.parse::<Ipv6Addr>().is_err() {
+                return Err(format!("STUN 服务器 [{}] IPv6 地址格式无效", trimmed));
+            }
+            Ok((host_part, port))
+        } else if let Some(host_part) = trimmed[1..].strip_suffix(']') {
+            if host_part.parse::<Ipv6Addr>().is_err() {
+                return Err(format!("STUN 服务器 [{}] IPv6 地址格式无效", trimmed));
+            }
+            Ok((host_part, 3478))
+        } else {
+            Err(format!("STUN 服务器 [{}] IPv6 括号格式无效", trimmed))
+        }
+    } else if trimmed.matches(':').count() == 1 {
+        let (host_part, port_part) = trimmed.split_once(':').unwrap_or((trimmed, ""));
+        let port = port_part
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p > 0)
+            .ok_or_else(|| format!("STUN 服务器 [{}] 端口无效", trimmed))?;
+        if host_part.trim().is_empty() {
+            return Err(format!("STUN 服务器 [{}] 主机名不能为空", trimmed));
+        }
+        Ok((host_part, port))
+    } else {
+        Ok((trimmed, 3478))
     }
 }
 
@@ -246,6 +317,50 @@ fn check_static_url(url: &str, field_name: &str, errs: &mut Vec<String>) {
     }
 }
 
+/// 校验自定义 HTTP 请求（Callback / Webhook）的方法白名单、敏感请求头及请求体大小上限
+fn validate_custom_http_options(
+    context_label: &str,
+    method: &str,
+    headers: Option<&HashMap<String, String>>,
+    body: Option<&str>,
+    errs: &mut Vec<String>,
+) {
+    let method_upper = method.trim().to_ascii_uppercase();
+    const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
+    if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
+        errs.push(format!(
+            "{} HTTP 方法 [{}] 不受支持，仅允许 GET、POST、PUT、PATCH、DELETE",
+            context_label, method
+        ));
+    }
+
+    if let Some(hdrs) = headers {
+        for header_key in hdrs.keys() {
+            let key_lower = header_key.trim().to_ascii_lowercase();
+            if matches!(
+                key_lower.as_str(),
+                "host" | "content-length" | "transfer-encoding" | "connection" | "upgrade"
+            ) {
+                errs.push(format!(
+                    "{} 请求头包含高风险敏感标头 [{}]，已被安全策略禁止",
+                    context_label, header_key
+                ));
+            }
+        }
+    }
+
+    const MAX_CUSTOM_BODY_BYTES: usize = 65536;
+    if let Some(b) = body
+        && b.len() > MAX_CUSTOM_BODY_BYTES
+    {
+        errs.push(format!(
+            "{} 请求体大小 ({} 字节) 超出 64KB 安全上限",
+            context_label,
+            b.len()
+        ));
+    }
+}
+
 /// 校验通知渠道的静态参数与协议边界
 fn validate_notifications(notif: &NotificationConfig, errs: &mut Vec<String>) {
     if let Some(ref bark) = notif.bark {
@@ -253,6 +368,13 @@ fn validate_notifications(notif: &NotificationConfig, errs: &mut Vec<String>) {
     }
     if let Some(ref webhook) = notif.webhook {
         check_static_url(&webhook.url, "自定义 Webhook 地址", errs);
+        validate_custom_http_options(
+            "自定义 Webhook",
+            &webhook.method,
+            webhook.headers.as_ref(),
+            webhook.body.as_deref(),
+            errs,
+        );
     }
     if let Some(ref tg) = notif.telegram
         && let Some(ref proxy) = tg.api_proxy
@@ -279,7 +401,6 @@ fn validate_notifications(notif: &NotificationConfig, errs: &mut Vec<String>) {
 fn validate_task_item(task: &DnsTaskConfig, errs: &mut Vec<String>) {
     let name = task.name.trim();
 
-    // 1. IP 提取配置与域名合法性
     for ip_cfg in [&task.ipv4, &task.ipv6] {
         if ip_cfg.enabled {
             for domain_str in &ip_cfg.domains {
@@ -295,28 +416,44 @@ fn validate_task_item(task: &DnsTaskConfig, errs: &mut Vec<String>) {
                 }
             }
         }
-        if ip_cfg.source_type == IpSourceType::Url {
-            for url in &ip_cfg.url_endpoints {
-                let trimmed = url.trim();
-                if !trimmed.is_empty() {
-                    check_static_url(trimmed, &format!("任务 [{}] URL 端点", name), errs);
+        match ip_cfg.source_type {
+            IpSourceType::Url => {
+                for url in &ip_cfg.url_endpoints {
+                    let trimmed = url.trim();
+                    if !trimmed.is_empty() {
+                        check_static_url(trimmed, &format!("任务 [{}] URL 端点", name), errs);
+                    }
                 }
             }
-        } else if ip_cfg.source_type == IpSourceType::Command {
-            if let Some(ref cmd_str) = ip_cfg.cmd {
-                if let Err(e) = validate_command_str(cmd_str) {
-                    errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
+            IpSourceType::Command => {
+                if let Some(ref cmd_str) = ip_cfg.cmd {
+                    if let Err(e) = validate_command_str(cmd_str) {
+                        errs.push(format!("任务 [{}] 配置的命令无效: {}", name, e));
+                    }
+                } else {
+                    errs.push(format!(
+                        "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
+                        name
+                    ));
                 }
-            } else {
-                errs.push(format!(
-                    "任务 [{}] 配置为命令提取 IP，但未指定执行命令",
-                    name
-                ));
             }
+            IpSourceType::Stun => {
+                if let Some(ref stun_str) = ip_cfg.stun_server {
+                    for entry in stun_str
+                        .split([',', ';', ' '])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        if let Err(msg) = parse_stun_server_entry(entry) {
+                            errs.push(format!("任务 [{}] {}", name, msg));
+                        }
+                    }
+                }
+            }
+            IpSourceType::NetInterface => {}
         }
     }
 
-    // 2. Callback DNS 服务商安全约束与协议校验
     if let ProviderConfig::Callback {
         ref url,
         ref method,
@@ -324,49 +461,14 @@ fn validate_task_item(task: &DnsTaskConfig, errs: &mut Vec<String>) {
         ref body,
     } = task.provider
     {
+        let label = format!("任务 [{}] 的 Callback", name);
         let trimmed_url = url.trim();
         if trimmed_url.is_empty() {
-            errs.push(format!("任务 [{}] 配置的 Callback URL 不能为空", name));
+            errs.push(format!("{} URL 不能为空", label));
         } else {
-            check_static_url(trimmed_url, &format!("任务 [{}] Callback", name), errs);
+            check_static_url(trimmed_url, &label, errs);
         }
-
-        let method_upper = method.trim().to_ascii_uppercase();
-        const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
-        if !ALLOWED_METHODS.contains(&method_upper.as_str()) {
-            errs.push(format!(
-                "任务 [{}] 的 Callback HTTP 方法 [{}] 不受支持，仅允许 GET、POST、PUT、PATCH、DELETE",
-                name, method
-            ));
-        }
-
-        if let Some(hdrs) = headers {
-            for header_key in hdrs.keys() {
-                let key_lower = header_key.trim().to_ascii_lowercase();
-                if key_lower == "host"
-                    || key_lower == "content-length"
-                    || key_lower == "transfer-encoding"
-                    || key_lower == "connection"
-                    || key_lower == "upgrade"
-                {
-                    errs.push(format!(
-                        "任务 [{}] 的 Callback 请求头包含高风险敏感标头 [{}]，已被安全策略禁止",
-                        name, header_key
-                    ));
-                }
-            }
-        }
-
-        const MAX_CALLBACK_BODY_BYTES: usize = 65536;
-        if let Some(b) = body
-            && b.len() > MAX_CALLBACK_BODY_BYTES
-        {
-            errs.push(format!(
-                "任务 [{}] 的 Callback 请求体大小 ({} 字节) 超出 64KB 安全上限",
-                name,
-                b.len()
-            ));
-        }
+        validate_custom_http_options(&label, method, headers.as_ref(), body.as_deref(), errs);
     }
 }
 
@@ -383,7 +485,7 @@ pub struct UserAuthConfig {
 mod tests {
     use super::*;
     use crate::config::model::CREDENTIAL_MASK;
-    use crate::config::model::notification::DingTalkConfig;
+    use crate::config::model::notification::{DingTalkConfig, WebhookConfig};
 
     #[test]
     fn test_app_config_validation() {
@@ -399,6 +501,29 @@ mod tests {
         config.cache_times = 1;
 
         config.listen_port = 0;
+        assert!(config.validate().is_err());
+        config.listen_port = 9876;
+
+        config.dns_server = Some("223.5.5.5".to_string());
+        assert!(config.validate().is_ok());
+        config.dns_server = Some("1.1.1.1:53".to_string());
+        assert!(config.validate().is_ok());
+        config.dns_server = Some("invalid-dns-host".to_string());
+        assert!(config.validate().is_err());
+        config.dns_server = Some("0.0.0.0:53".to_string());
+        assert!(config.validate().is_err());
+        config.dns_server = None;
+
+        config.notifications.webhook = Some(WebhookConfig {
+            enabled: true,
+            url: "https://example.com/hook".to_string(),
+            method: "TRACE".to_string(),
+            headers: Some(HashMap::from([(
+                "Host".to_string(),
+                "evil.com".to_string(),
+            )])),
+            body: None,
+        });
         assert!(config.validate().is_err());
     }
 

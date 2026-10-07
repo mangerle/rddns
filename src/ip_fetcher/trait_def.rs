@@ -1,27 +1,35 @@
+use crate::util::text::format_sanitized_text;
 use async_trait::async_trait;
+use std::fmt;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
 /// IP 提取过程中可能发生的领域错误类型
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum FetchError {
-    #[error("网络请求错误: {0}")]
+    #[error("网络请求错误: {}", format_sanitized_text(.0))]
     Http(String),
-    #[error("系统 I/O 或命令执行错误: {0}")]
+    #[error("系统 I/O 或命令执行错误: {}", format_sanitized_text(.0))]
     Io(String),
     #[error("命令执行超时")]
     Timeout,
     #[error("未找到指定的网卡: {0}")]
     InterfaceNotFound(String),
-    #[error("未能从接口响应中提取到有效的 IPv4 地址 (接口返回: {0})")]
+    #[error("未能从接口响应中提取到有效的 IPv4 地址 (接口返回: {})", format_sanitized_text(.0))]
     NoValidIpv4(String),
-    #[error("未能从接口响应中提取到有效的 IPv6 地址 (接口返回: {0})")]
+    #[error("未能从接口响应中提取到有效的 IPv6 地址 (接口返回: {})", format_sanitized_text(.0))]
     NoValidIpv6(String),
-    #[error("从响应中未能提取到合法的 IP 地址: {0}")]
+    #[error("从响应中未能提取到合法的 IP 地址: {}", format_sanitized_text(.0))]
     NoValidIp(String),
-    #[error("其他提取错误: {0}")]
+    #[error("其他提取错误: {}", format_sanitized_text(.0))]
     Other(String),
+}
+
+impl fmt::Debug for FetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl From<reqwest::Error> for FetchError {

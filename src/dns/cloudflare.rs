@@ -68,16 +68,17 @@ impl CloudflareProvider {
             ));
         }
 
-        let auth_identity = if let Some(ref t) = api_token {
-            format!(
-                "token:{}",
-                crate::util::crypto::sha256_hex(t.trim().as_bytes())
-            )
+        let auth_identity = if let Some(t) = api_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            format!("token:{}", crate::util::crypto::sha256_hex(t.as_bytes()))
         } else {
             format!(
                 "key:{}:{}",
-                crate::util::crypto::sha256_hex(api_key.as_deref().unwrap_or("").as_bytes()),
-                email.as_deref().unwrap_or("")
+                crate::util::crypto::sha256_hex(api_key.as_deref().unwrap_or("").trim().as_bytes()),
+                email.as_deref().unwrap_or("").trim()
             )
         };
 

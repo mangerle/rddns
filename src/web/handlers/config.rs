@@ -139,7 +139,20 @@ pub struct SaveConfigRequest {
     pub new_password: Option<String>,
 }
 
-/// 校验任务中的外部 URL 端点与 Callback URL 的出站安全性（异步 DNS 解析防范 SSRF 穿透）(P-3/P-4/P-8)
+/// 校验自定义 STUN 服务器列表的格式与异步 SSRF 安全性
+pub(crate) async fn validate_stun_servers_ssrf(raw_stun: &str) -> Result<(), String> {
+    for entry in raw_stun
+        .split([',', ';', ' '])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let (host, port) = crate::config::model::app::parse_stun_server_entry(entry)?;
+        crate::util::net::validate_safe_host(host, Some(port)).await?;
+    }
+    Ok(())
+}
+
+/// 校验任务中的外部 URL 端点、STUN 节点与 Callback URL 的出站安全性（异步 DNS 解析防范 SSRF 穿透）(P-3/P-4/P-8)
 async fn validate_task_ssrf(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
     for task in tasks {
         let name = task.name.trim();
@@ -159,9 +172,12 @@ async fn validate_task_ssrf(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
             }
         }
 
-        // 2. 校验 IP 提取 URL 端点异步 SSRF
+        // 2. 校验 IP 提取 URL 端点与自定义 STUN 节点异步 SSRF
         for ip_cfg in [&task.ipv4, &task.ipv6] {
-            if ip_cfg.enabled && ip_cfg.source_type == IpSourceType::Url {
+            if !ip_cfg.enabled {
+                continue;
+            }
+            if ip_cfg.source_type == IpSourceType::Url {
                 for url in &ip_cfg.url_endpoints {
                     let trimmed = url.trim();
                     if !trimmed.is_empty() {
@@ -175,6 +191,12 @@ async fn validate_task_ssrf(tasks: &[DnsTaskConfig]) -> Result<(), AppError> {
                             })?;
                     }
                 }
+            } else if ip_cfg.source_type == IpSourceType::Stun
+                && let Some(ref stun_str) = ip_cfg.stun_server
+            {
+                validate_stun_servers_ssrf(stun_str).await.map_err(|e| {
+                    AppError::bad_request(format!("任务 [{}] 中的 STUN 服务器非法: {}", name, e))
+                })?;
             }
         }
     }

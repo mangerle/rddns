@@ -137,6 +137,12 @@ pub async fn test_ip_handler(Json(payload): Json<TestIpRequest>) -> impl IntoRes
                 return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(err_msg)));
             }
         }
+    } else if config.source_type == IpSourceType::Stun
+        && let Some(ref stun_str) = config.stun_server
+        && let Err(err_msg) =
+            crate::web::handlers::config::validate_stun_servers_ssrf(stun_str).await
+    {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(err_msg)));
     }
 
     let Some(fetcher) = create_ip_fetcher(&config, iface) else {
@@ -451,6 +457,27 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 "应拦截 SSRF 目标地址: {}",
                 target
+            );
+        }
+
+        for stun_target in ["127.0.0.1:3478", "localhost:3478", "192.168.1.1:3478"] {
+            reset_test_rate_limiters();
+            let req = TestIpRequest {
+                ip_type: Some("ipv4".to_string()),
+                http_interface: None,
+                config: IpFetchConfig {
+                    enabled: true,
+                    source_type: IpSourceType::Stun,
+                    stun_server: Some(stun_target.to_string()),
+                    ..Default::default()
+                },
+            };
+            let res = test_ip_handler(Json(req)).await.into_response();
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "应拦截 STUN SSRF 目标地址: {}",
+                stun_target
             );
         }
     }

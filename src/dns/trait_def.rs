@@ -358,7 +358,7 @@ impl DnsProviderError {
     pub fn http_status(status: reqwest::StatusCode, body: &str) -> Self {
         Self::ApiError {
             code: status.to_string(),
-            message: truncate_body(body).to_string(),
+            message: format!("HTTP 错误: {}", truncate_body(body)),
         }
     }
 
@@ -388,8 +388,14 @@ impl DnsProviderError {
         match self {
             Self::Http(_) => true,
             Self::ApiError { code, message } => {
-                // 1. HTTP 状态码数字快速范围匹配
-                if let Ok(status) = code.trim().parse::<u16>()
+                // 1. HTTP 状态码数字快速范围匹配（兼容 "503"、"503 Service Unavailable"、"HTTP 503" 等格式）
+                let numeric_token = code
+                    .trim()
+                    .trim_start_matches("HTTP")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                if let Ok(status) = numeric_token.parse::<u16>()
                     && (status == 429 || (500..=504).contains(&status))
                 {
                     return true;

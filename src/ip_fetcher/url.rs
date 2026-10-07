@@ -98,26 +98,31 @@ impl UrlIpFetcher {
 
         let mut last_err = None;
         for endpoint in &self.endpoints {
+            let safe_endpoint = crate::util::text::sanitize_sensitive_params(endpoint);
             match client.get(endpoint).send().await {
                 Ok(resp) => match Self::read_limited_text(resp).await {
                     Ok(body) => match extractor(&body) {
                         Ok(ip) => {
-                            debug!("从接口 {} 成功获取到 {}: {}", endpoint, ip_name, ip);
+                            debug!("从接口 {} 成功获取到 {}: {}", safe_endpoint, ip_name, ip);
                             return Ok(Some(ip));
                         }
                         Err(e) => {
-                            debug!("接口 {} 返回内容提取 {} 失败: {:?}", endpoint, ip_name, e);
+                            debug!(
+                                "接口 {} 返回内容提取 {} 失败: {:?}",
+                                safe_endpoint, ip_name, e
+                            );
                             last_err = Some(e);
                         }
                     },
                     Err(e) => {
-                        debug!("读取接口 {} 响应体失败: {:?}", endpoint, e);
+                        debug!("读取接口 {} 响应体失败: {:?}", safe_endpoint, e);
                         last_err = Some(e);
                     }
                 },
                 Err(e) => {
-                    debug!("请求接口 {} 失败: {}", endpoint, e);
-                    last_err = Some(FetchError::from(e));
+                    let fetch_err = FetchError::from(e);
+                    debug!("请求接口 {} 失败: {}", safe_endpoint, fetch_err);
+                    last_err = Some(fetch_err);
                 }
             }
         }

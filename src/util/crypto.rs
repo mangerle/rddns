@@ -155,7 +155,7 @@ pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
     if password.is_empty() {
         return Err("密码不能为空");
     }
-    if password.len() < 8 {
+    if password.chars().count() < 8 {
         return Err("密码长度不能少于 8 个字符");
     }
     if password.len() > 72 {
@@ -167,8 +167,10 @@ pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
             return Err("所选密码属于极高频常见弱口令，请设置更复杂的安全密码");
         }
     }
-    let first = password.as_bytes()[0];
-    if password.as_bytes().iter().all(|&b| b == first) {
+    let mut chars = password.chars();
+    if let Some(first) = chars.next()
+        && chars.all(|c| c == first)
+    {
         return Err("密码不能由单一重复字符组成");
     }
     Ok(())
@@ -401,12 +403,15 @@ mod tests {
     fn test_validate_password_strength() {
         assert!(validate_password_strength("").is_err());
         assert!(validate_password_strength("1234567").is_err());
+        // 多字节 UTF-8 字符虽然字节数 >= 8，但字符数 < 8，必须拦截
+        assert!(validate_password_strength("一二三").is_err());
         // 弱口令黑名单拦截
         assert!(validate_password_strength("12345678").is_err());
         assert!(validate_password_strength("password").is_err());
         assert!(validate_password_strength("Admin123").is_err());
-        // 单一字符重复拦截
+        // 单一字符重复拦截（覆盖 ASCII 与多字节 UTF-8 字符）
         assert!(validate_password_strength("aaaaaaaa").is_err());
+        assert!(validate_password_strength("啊啊啊啊啊啊啊啊").is_err());
         assert!(validate_password_strength("a".repeat(72).as_str()).is_err());
 
         // 合法复杂度口令允许通过
