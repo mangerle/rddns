@@ -60,16 +60,9 @@ impl Notifier for TelegramNotifier {
             "parse_mode": "HTML"
         });
 
-        let resp = self.client.post(&url).json(&payload).send().await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-
-        if !status.is_success() {
-            return Err(NotifyError::Provider(format!(
-                "Telegram 返回错误 [{}]: {}",
-                status, body
-            )));
-        }
+        let body =
+            crate::notifier::trait_def::send_json_post(&self.client, &url, &payload, "Telegram")
+                .await?;
 
         #[derive(serde::Deserialize)]
         struct TgResponse {

@@ -8,8 +8,12 @@
 use anyhow::Context;
 use anyhow::Result;
 use log::info;
+#[cfg(windows)]
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(windows)]
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(windows)]
@@ -24,14 +28,18 @@ static IS_RUNNING_AS_SERVICE: AtomicBool = AtomicBool::new(false);
 /// 全局服务取消令牌，供外部（如在线自更新）触发服务平滑停机
 static SERVICE_CANCEL_TOKEN: RwLock<Option<CancellationToken>> = RwLock::new(None);
 
+/// 延迟停机后台任务句柄，确保派生任务生命周期受控且不沦为孤儿任务
+#[cfg(windows)]
+static SHUTDOWN_TASK_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
 /// 查询当前是否处于 Windows 服务模式
 pub fn is_running_as_service() -> bool {
-    IS_RUNNING_AS_SERVICE.load(Ordering::Relaxed)
+    IS_RUNNING_AS_SERVICE.load(Ordering::Acquire)
 }
 
 /// 标记当前是否处于 Windows 服务模式
 pub fn set_running_as_service(val: bool) {
-    IS_RUNNING_AS_SERVICE.store(val, Ordering::Relaxed);
+    IS_RUNNING_AS_SERVICE.store(val, Ordering::Release);
 }
 
 /// 注册全局服务停机取消令牌
@@ -85,11 +93,14 @@ pub fn restart_windows_service_after_update() -> Result<()> {
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
         cmd.spawn().context("派生 Windows 服务后台重启指令失败")?;
 
-        // 异步派生延迟停机任务，为前端 SSE 与 Web 响应留出 1.2 秒的完整刷盘与网络传输窗口 (P3-15)
-        let _shutdown_task = tokio::spawn(async {
+        // 异步派生延迟停机任务并纳管其 JoinHandle，为前端 SSE 与 Web 响应留出 1.2 秒的完整刷盘与网络传输窗口 (P3-15)
+        let handle = tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
             trigger_service_shutdown();
         });
+        if let Some(prev) = SHUTDOWN_TASK_HANDLE.lock().replace(handle) {
+            prev.abort();
+        }
         Ok(())
     }
     #[cfg(not(windows))]

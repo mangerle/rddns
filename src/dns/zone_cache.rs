@@ -12,17 +12,11 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 /// 带 TTL 与容量上限的并发安全缓存池
-///
-/// # 类型设计
-/// 采用 `LazyLock` 内部条目表而非裸 `RwLock<HashMap>`，使缓存池本身可作为
-/// `static` 声明（provider 无需额外持有缓存字段，保持可 `Clone` 语义，
-/// 也无需在 `create_dns_provider` 的 25 个分支中逐一注入）。
 pub struct TtlCache<K: Eq + Hash + Clone, V: Clone> {
-    entries: LazyLock<RwLock<HashMap<K, (Instant, V)>>>,
+    entries: RwLock<HashMap<K, (Instant, V)>>,
     ttl: Duration,
     capacity: usize,
 }
@@ -35,28 +29,40 @@ impl<K: Eq + Hash + Clone, V: Clone> TtlCache<K, V> {
     /// - `capacity`: 容量硬上限，达到后按插入顺序淘汰最旧条目
     pub fn new(ttl: Duration, capacity: usize) -> Self {
         Self {
-            entries: LazyLock::new(|| RwLock::new(HashMap::new())),
+            entries: RwLock::new(HashMap::with_capacity(capacity)),
             ttl,
             capacity,
         }
     }
 
     /// 读取缓存值，未命中或已过期时返回 `None`
+    ///
+    /// # 设计原理
+    /// 绝大多数查询均处于 TTL 有效期内：优先通过共享读锁并发读取，
+    /// 仅当命中已过期条目时才升级获取独占写锁执行惰性淘汰，消除读多写少场景下的写锁争用。
     pub fn get(&self, key: &K) -> Option<V> {
         let now = Instant::now();
-        let mut guard = self.entries.write();
+        let is_expired = {
+            let guard = self.entries.read();
+            match guard.get(key) {
+                Some((created_at, value)) if now.duration_since(*created_at) < self.ttl => {
+                    return Some(value.clone());
+                }
+                Some(_) => true,
+                None => false,
+            }
+        };
 
-        match guard.get(key) {
-            Some((created_at, value)) if now.duration_since(*created_at) < self.ttl => {
-                Some(value.clone())
-            }
-            // 惰性清理：命中过期条目时顺手移除，避免无效条目长期占用容量
-            Some(_) => {
+        if is_expired {
+            let mut guard = self.entries.write();
+            if guard
+                .get(key)
+                .is_some_and(|(created_at, _)| now.duration_since(*created_at) >= self.ttl)
+            {
                 guard.remove(key);
-                None
             }
-            None => None,
         }
+        None
     }
 
     /// 写入缓存值

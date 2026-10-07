@@ -176,7 +176,7 @@ pub struct NotificationEvent {
 impl NotificationEvent {
     /// 生成格式化的摘要详情文本
     pub fn format_details_text(&self) -> String {
-        let mut lines = Vec::new();
+        let mut lines = Vec::with_capacity(self.results.len());
         for r in &self.results {
             lines.push(format!(
                 "- [{}] {} ({}) -> 状态: {}, {}",
@@ -188,7 +188,7 @@ impl NotificationEvent {
 
     /// 获取涉及的所有域名列表（逗号分隔，保持首次出现顺序且全局无重复）
     pub fn domains_comma_separated(&self) -> String {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::with_capacity(self.results.len());
         let domains: Vec<String> = self
             .results
             .iter()
@@ -261,7 +261,7 @@ impl NotificationEvent {
     /// 若直接拿原始错误文本做全值等值比较，会导致抑制机制完全失效。
     /// 本指纹提取域名、记录类型与规范化后的错误摘要，消除动态易变因子。
     pub fn error_fingerprint(&self) -> String {
-        let mut lines = Vec::new();
+        let mut lines = Vec::with_capacity(self.results.len());
         for r in &self.results {
             if r.status != crate::dns::trait_def::SyncStatus::Created
                 && r.status != crate::dns::trait_def::SyncStatus::Updated
@@ -305,14 +305,32 @@ pub trait Notifier: Send + Sync {
     async fn send(&self, event: &NotificationEvent) -> Result<(), NotifyError>;
 }
 
-/// 发送通用 HTTP 请求并统一处理响应状态与提取响应文本
+/// 通知渠道 HTTP 响应体最大读取字节上限 (64KB，防止恶意服务端流耗尽内存)
+const MAX_NOTIFY_RESPONSE_BYTES: usize = 65536;
+
+/// 流式分块读取通知响应体，超出上限时立即中断并返回错误
+async fn read_notify_body_limited(mut resp: reqwest::Response) -> Result<String, NotifyError> {
+    let mut buffer = Vec::with_capacity(512);
+    while let Some(chunk) = resp.chunk().await? {
+        if buffer.len().saturating_add(chunk.len()) > MAX_NOTIFY_RESPONSE_BYTES {
+            return Err(NotifyError::Http(format!(
+                "通知服务响应体体积超过安全上限 (已接收 > {} 字节)",
+                MAX_NOTIFY_RESPONSE_BYTES
+            )));
+        }
+        buffer.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+/// 发送通用 HTTP 请求并统一处理响应状态与流式提取响应文本
 pub async fn execute_notify_request(
     req: reqwest::RequestBuilder,
     channel_name: &str,
 ) -> Result<String, NotifyError> {
     let resp = req.send().await?;
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_notify_body_limited(resp).await?;
 
     if status.is_success() {
         Ok(body)

@@ -68,11 +68,11 @@ impl UrlIpFetcher {
         }
 
         const MAX_RESPONSE_BYTES: usize = 65536;
-        let mut buffer = Vec::new();
+        let mut buffer = Vec::with_capacity(256);
 
         // 流式读取分块并在达到上限时立即中断，防止恶意大文件耗尽系统内存
         while let Some(chunk) = resp.chunk().await.map_err(FetchError::from)? {
-            if buffer.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            if buffer.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
                 return Err(FetchError::Other(format!(
                     "响应体体积超过安全限制 (已接收 > {} 字节)",
                     MAX_RESPONSE_BYTES

@@ -116,9 +116,12 @@ impl StateManager {
         self.delivery_statuses.clone()
     }
 
-    /// 获取指定任务的状态克隆快照，若不存在则初始化为默认值
+    /// 获取指定任务的状态克隆快照，若不存在则返回默认值（只读查询，不向状态表插入空记录）
     pub fn get_task_state(&self, task_name: &str) -> TaskRuntimeState {
-        self.tasks.entry(task_name.to_string()).or_default().clone()
+        self.tasks
+            .get(task_name)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default()
     }
 
     /// 通过闭包安全原子修改指定任务的状态
@@ -177,6 +180,8 @@ mod tests {
         assert_eq!(state.consecutive_failures, 0);
         assert_eq!(state.check_counter, 0);
         assert!(state.last_error.is_none());
+        // 只读查询不应向 DashMap 写入空条目
+        assert_eq!(mgr.tasks.len(), 0);
 
         mgr.update_task_state("task1", |s| {
             s.consecutive_failures = 2;
@@ -196,7 +201,7 @@ mod tests {
         assert!(!mgr.has_recent_failures(1));
 
         // 测试清理已废弃任务状态
-        mgr.get_task_state("obsolete_task");
+        mgr.update_task_state("obsolete_task", |_| {});
         assert_eq!(mgr.tasks.len(), 2);
         mgr.retain_active_tasks(&["task1".to_string()]);
         assert_eq!(mgr.tasks.len(), 1);

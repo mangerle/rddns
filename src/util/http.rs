@@ -22,7 +22,7 @@ static SKIP_VERIFY: AtomicBool = AtomicBool::new(false);
 /// - **实现初衷**：在内网自签名证书环境或特定代理网络调试时，允许用户配置 `--skipVerify` 绕过证书校验。
 /// - **核心优势**：自动清空全局客户端缓存以立即生效。
 pub fn set_skip_verify(skip: bool) {
-    SKIP_VERIFY.store(skip, Ordering::SeqCst);
+    SKIP_VERIFY.store(skip, Ordering::Release);
     clear_http_client_cache();
     if skip {
         warn!("已开启 --skipVerify 跳过 TLS 证书验证模式，请注意网络通信安全");
@@ -31,7 +31,7 @@ pub fn set_skip_verify(skip: bool) {
 
 /// 获取全局是否跳过 TLS 证书验证
 pub fn is_skip_verify() -> bool {
-    SKIP_VERIFY.load(Ordering::SeqCst)
+    SKIP_VERIFY.load(Ordering::Acquire)
 }
 
 /// 尝试使用配置的自定义上游 DNS 服务器解析主机名
@@ -95,9 +95,17 @@ impl Resolve for AppDnsResolver {
                 return Ok(addrs);
             }
 
-            // 回退到系统原生异步 DNS 解析
+            // 回退到系统原生异步 DNS 解析（强制 3 秒超时，防止底层系统解析器挂起）
             let host_with_port = format!("{}:0", host);
-            let mut resolved = lookup_host(&host_with_port).await?;
+            let mut resolved =
+                tokio::time::timeout(Duration::from_secs(3), lookup_host(&host_with_port))
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "系统原生 DNS 解析超时 (3s)",
+                        )
+                    })??;
             let mut list = Vec::new();
             for addr in resolved.by_ref() {
                 list.push(addr);

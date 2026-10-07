@@ -5,7 +5,7 @@ use tokio::join;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
-use crate::util::http::create_http_client;
+use crate::util::http::get_task_http_client;
 
 /// 常用高可用 DNS 探测端点 (涵盖 IPv4 与 IPv6 双栈)
 const PROBE_DNS_TARGETS: &[&str] = &[
@@ -110,12 +110,7 @@ async fn probe_socket_target(target: &str) -> bool {
 /// - **不变式保证**: `https_ready` 为真时 `any_reachable` 必为真；本函数为纯探测，
 ///   不做任何业务状态变更，无副作用。
 async fn check_internet_once() -> ProbeOutcome {
-    let Ok(client) = create_http_client(PROBE_TIMEOUT) else {
-        return ProbeOutcome {
-            https_ready: false,
-            any_reachable: false,
-        };
-    };
+    let client = get_task_http_client(None, PROBE_TIMEOUT);
 
     // 1. 主判据：并发探测 HTTPS 端点，严格校验域名解析 + TLS 握手 + 443 出站
     let (h1, h2, h3) = join!(

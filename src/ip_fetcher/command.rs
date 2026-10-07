@@ -36,6 +36,37 @@ impl CommandIpFetcher {
         }
     }
 
+    /// 根据校验通过的命令串构建子进程启动器
+    ///
+    /// # 设计原理
+    /// 直接将命令拆分为可执行文件与参数数组拉起目标进程，避免经由 `sh -c` 或 `cmd /C`
+    /// 二级 Shell 派生导致超时 `kill()` 仅杀死外层 Shell 而遗留孤儿孙进程。
+    /// 仅在 Windows 平台且命令为 `echo`（`cmd.exe` 内建命令，系统无独立可执行文件）时使用 `cmd /C`。
+    fn build_process_command(cmd_str: &str) -> Result<Command, FetchError> {
+        let mut tokens = cmd_str.split_whitespace();
+        let Some(prog) = tokens.next() else {
+            return Err(FetchError::Other("命令内容不能为空".to_string()));
+        };
+        let args: Vec<&str> = tokens.collect();
+
+        let mut command = if cfg!(target_os = "windows") && prog.eq_ignore_ascii_case("echo") {
+            let mut c = Command::new("cmd");
+            c.args(["/C", cmd_str]);
+            c
+        } else {
+            let mut c = Command::new(prog);
+            c.args(&args);
+            c
+        };
+        command.kill_on_drop(true);
+        // 置空标准输入，避免子进程继承父进程 stdin 导致交互式读取挂起
+        command.stdin(Stdio::null());
+        command.stdout(Stdio::piped());
+        // 丢弃标准错误，避免因无读取方导致操作系统管道缓冲区写满（Windows 仅 4KB）引发子进程死锁与超时
+        command.stderr(Stdio::null());
+        Ok(command)
+    }
+
     /// 执行外部命令并获取标准输出文本 (P-5: 流式限量 64KB 防爆内存)
     ///
     /// # Errors
@@ -48,22 +79,7 @@ impl CommandIpFetcher {
             return Err(FetchError::Other(e.to_string()));
         }
 
-        let mut command = if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            c.args(["/C", &self.cmd]);
-            c
-        } else {
-            let mut c = Command::new("sh");
-            c.args(["-c", &self.cmd]);
-            c
-        };
-        command.kill_on_drop(true);
-        // 置空标准输入，避免子进程继承父进程 stdin 导致交互式读取挂起
-        command.stdin(Stdio::null());
-        command.stdout(Stdio::piped());
-        // 丢弃标准错误，避免因无读取方导致操作系统管道缓冲区写满（Windows 仅 4KB）引发子进程死锁与超时
-        command.stderr(Stdio::null());
-
+        let mut command = Self::build_process_command(&self.cmd)?;
         let mut child = command.spawn().map_err(FetchError::from)?;
         let mut stdout = child
             .stdout
@@ -107,10 +123,12 @@ impl CommandIpFetcher {
             }
             Ok(Err(io_err)) => {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 Err(FetchError::from(io_err))
             }
             Err(_) => {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 Err(FetchError::Timeout)
             }
         }

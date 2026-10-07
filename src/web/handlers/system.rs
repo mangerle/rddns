@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::spawn;
 
 use axum::http::StatusCode;
+use parking_lot::Mutex;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::task::JoinHandle;
 
 /// 手动触发立即全量同步 (P-6: 采用 try_send 防挂起与限流反压)
 pub async fn manual_sync_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -81,6 +83,9 @@ pub async fn check_remote_version_handler() -> impl IntoResponse {
 /// 全局更新状态锁 (防止并发触发重复下载与文件覆盖)
 static IS_UPGRADING: AtomicBool = AtomicBool::new(false);
 
+/// 全局自更新后台任务句柄，确保派生任务生命周期受控且不产生脱缰孤儿任务
+static UPGRADE_TASK_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
 /// 自更新状态锁的 RAII 守卫
 ///
 /// # 设计原理
@@ -110,6 +115,22 @@ impl Drop for UpgradeLockGuard {
     }
 }
 
+/// 执行后台在线自动更新并在成功后触发平滑热重启
+async fn run_background_upgrade(guard: UpgradeLockGuard) {
+    let _guard = guard;
+    match upgrade_self().await {
+        Ok(()) => {
+            info!("自动更新完成，正在平滑重启服务以加载新版本...");
+            if let Err(e) = restart_process() {
+                error!("重启服务失败，请手动重启: {:#}", e);
+            }
+        }
+        Err(e) => {
+            error!("在线自动更新失败: {:#}", e);
+        }
+    }
+}
+
 /// 触发在线自动更新并平滑热重启 (带并发防重锁与 RAII 确定性释放)
 pub async fn trigger_upgrade_handler() -> impl IntoResponse {
     let guard = match UpgradeLockGuard::try_acquire() {
@@ -121,29 +142,11 @@ pub async fn trigger_upgrade_handler() -> impl IntoResponse {
         }
     };
 
-    // 更新流程耗时可达数十秒，不能阻塞 HTTP 响应，故交由后台异步任务执行。
+    // 更新流程耗时可达数十秒，不能阻塞 HTTP 响应，故交由后台异步任务执行并统一纳管 JoinHandle。
     // RAII 守卫被移入后台任务作用域中，即使任务内部发生 panic 或提早退出，
     // 在任务结束析构时均必定触发 Drop 释放全局锁，彻底杜绝死锁隐患。 (P3-15)
-    let _upgrade_handle = spawn(async move {
-        let _guard = guard;
-        let update_task = spawn(async {
-            match upgrade_self().await {
-                Ok(()) => {
-                    info!("自动更新完成，正在平滑重启服务以加载新版本...");
-                    if let Err(e) = restart_process() {
-                        error!("重启服务失败，请手动重启: {:#}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("在线自动更新失败: {:#}", e);
-                }
-            }
-        });
-
-        if let Err(join_err) = update_task.await {
-            error!("自更新后台任务异常终止: {}", join_err);
-        }
-    });
+    let handle = spawn(run_background_upgrade(guard));
+    *UPGRADE_TASK_HANDLE.lock() = Some(handle);
 
     Json(ApiResponse::ok(
         "已在后台启动自动更新，文件下载替换完成后将自动平滑重启服务",
@@ -160,18 +163,18 @@ mod tests {
     #[tokio::test]
     async fn test_trigger_upgrade_concurrency_lock() {
         let _guard = TEST_MUTEX.lock().await;
-        IS_UPGRADING.store(true, Ordering::SeqCst);
+        IS_UPGRADING.store(true, Ordering::Release);
         let resp = trigger_upgrade_handler().await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         // 清理状态
-        IS_UPGRADING.store(false, Ordering::SeqCst);
+        IS_UPGRADING.store(false, Ordering::Release);
     }
 
     #[tokio::test]
     async fn test_upgrade_lock_guard_raii_release() {
         let _guard = TEST_MUTEX.lock().await;
         // 确保初始状态已复位
-        IS_UPGRADING.store(false, Ordering::SeqCst);
+        IS_UPGRADING.store(false, Ordering::Release);
 
         // 初始状态下应能成功获取锁
         let first_guard = UpgradeLockGuard::try_acquire();
@@ -190,6 +193,6 @@ mod tests {
 
         // 清理状态
         drop(third_guard);
-        IS_UPGRADING.store(false, Ordering::SeqCst);
+        IS_UPGRADING.store(false, Ordering::Release);
     }
 }
